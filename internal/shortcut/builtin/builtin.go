@@ -30,6 +30,7 @@ import (
 	_ "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/shortcut/calendar"
 	_ "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/shortcut/chat"
 	_ "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/shortcut/contact"
+	_ "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/shortcut/deap"
 	_ "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/shortcut/devapp"
 	_ "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/shortcut/ding"
 	_ "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/shortcut/doc"

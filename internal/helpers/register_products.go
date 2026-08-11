@@ -31,6 +31,7 @@ func init() {
 		{"chat", newChatCommand},
 		{"contact", newContactCommand},
 		{"devdoc", newDevdocCommand},
+		{"deap", newDeapCommand},
 		{"ding", newDingCommand},
 		{"doc", newDocCommand},
 		{"drive", newDriveCommand},
