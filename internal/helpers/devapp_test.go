@@ -121,11 +121,14 @@ func TestDevCommandTree(t *testing.T) {
 	if dev.Name() != "dev" {
 		t.Fatalf("Name() = %q, want dev", dev.Name())
 	}
+	if !strings.Contains(dev.Long, "deap-agent") {
+		t.Fatalf("Long = %q, want deap-agent capability", dev.Long)
+	}
 	if len(dev.Aliases) != 0 {
 		t.Fatalf("Aliases = %v, want none (clean switch from devapp)", dev.Aliases)
 	}
-	// 三支柱：app / connect / doc
-	for _, name := range []string{"app", "connect", "doc"} {
+	// 开发者能力：app / connect / deap-agent / doc
+	for _, name := range []string{"app", "connect", "deap-agent", "doc"} {
 		if _, _, err := dev.Find([]string{name}); err != nil {
 			t.Fatalf("missing subtree %q: %v", name, err)
 		}

@@ -1,0 +1,109 @@
+// Copyright 2026 Alibaba Group
+// Licensed under the Apache License, Version 2.0 (the "License");
+
+package app
+
+import "testing"
+
+func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
+	wants := map[string]struct {
+		cliPath      string
+		tool         string
+		effect       string
+		risk         string
+		confirmation string
+		parameters   map[string]string
+	}{
+		"dev.create_digital_employee": {
+			"dev deap-agent create", "create_digital_employee", "write", "medium", "not_required",
+			map[string]string{
+				"name": "name", "description": "description", "org-code": "orgCode", "org-name": "orgName",
+				"icon": "icon", "profile-json": "digitalTagEmployeeProfile",
+			},
+		},
+		"dev.get_digital_employee_detail": {
+			"dev deap-agent detail", "get_digital_employee_detail", "read", "low", "not_required",
+			map[string]string{"assistant-id": "assistantId"},
+		},
+		"dev.list_digital_employees": {
+			"dev deap-agent list", "list_digital_employees", "read", "low", "not_required",
+			map[string]string{"keyword": "keyword", "page": "page", "page-size": "pageSize"},
+		},
+		"dev.update_digital_employee_draft": {
+			"dev deap-agent save-draft", "update_digital_employee_draft", "write", "high", "user_required",
+			map[string]string{
+				"agent-uuid": "agentUuid", "name": "name", "description": "description", "org-code": "orgCode",
+				"org-name": "orgName", "icon": "icon", "prompt": "prompt", "profile-json": "digitalTagEmployeeProfile",
+			},
+		},
+		"dev.publish_digital_employee": {
+			"dev deap-agent publish", "publish_digital_employee", "write", "high", "user_required",
+			map[string]string{"agent-uuid": "agentUuid", "allow-join-group": "allowJoinGroup"},
+		},
+		"dev.delete_digital_employee": {
+			"dev deap-agent delete", "delete_digital_employee", "destructive", "high", "user_required",
+			map[string]string{"agent-uuid": "agentUuid"},
+		},
+		"dev.query_de_run_status": {
+			"dev deap-agent run-status", "query_de_run_status", "read", "low", "not_required",
+			map[string]string{"assistant-id": "assistantId", "task-id": "taskId"},
+		},
+		"dev.query_de_run_executions": {
+			"dev deap-agent run-executions", "query_de_run_executions", "read", "low", "not_required",
+			map[string]string{"message-ids-json": "messageIds"},
+		},
+		"dev.resolve_de_run_id": {
+			"dev deap-agent resolve-run-id", "resolve_de_run_id", "read", "low", "not_required",
+			map[string]string{"source-id": "sourceId"},
+		},
+		"dev.query_de_trace": {
+			"dev deap-agent trace", "query_de_trace", "read", "high", "not_required",
+			map[string]string{"trace-id": "traceId"},
+		},
+	}
+	canonicals := make([]string, 0, len(wants))
+	for canonical := range wants {
+		canonicals = append(canonicals, canonical)
+	}
+	payload := schemaContractPayloadForBoundCanonicals(t, NewRootCommand(), canonicals...)
+	for canonical, want := range wants {
+		tool := payload.Tools[canonical]
+		if got := schemaContractString(tool["primary_cli_path"]); got != want.cliPath {
+			t.Errorf("%s primary_cli_path = %q, want %q", canonical, got, want.cliPath)
+		}
+		for field, expected := range map[string]string{
+			"effect": want.effect, "risk": want.risk,
+			"confirmation": want.confirmation, "availability": "available",
+		} {
+			if got := schemaContractString(tool[field]); got != expected {
+				t.Errorf("%s %s = %q, want %q", canonical, field, got, expected)
+			}
+		}
+		ref := schemaInterfaceObject(tool["interface_ref"])
+		if got := schemaContractString(ref["product_id"]); got != "deap-dev" {
+			t.Errorf("%s interface product = %q, want deap-dev", canonical, got)
+		}
+		if got := schemaContractString(ref["rpc_name"]); got != want.tool {
+			t.Errorf("%s interface rpc = %q, want %q", canonical, got, want.tool)
+		}
+		parameters := schemaContractMap(tool["parameters"])
+		if len(parameters) != len(want.parameters) {
+			t.Errorf("%s parameter count = %d, want %d: %#v", canonical, len(parameters), len(want.parameters), parameters)
+		}
+		for flagName, property := range want.parameters {
+			parameter := parameters[flagName]
+			if parameter == nil {
+				t.Errorf("%s missing parameter %s", canonical, flagName)
+				continue
+			}
+			if got := schemaContractString(parameter["property"]); got != property {
+				t.Errorf("%s parameter %s property = %q, want %q", canonical, flagName, got, property)
+			}
+		}
+		for _, forbidden := range []string{"org-id", "user-id", "agent-type"} {
+			if _, ok := parameters[forbidden]; ok {
+				t.Errorf("%s exposes forbidden parameter %s", canonical, forbidden)
+			}
+		}
+	}
+}
