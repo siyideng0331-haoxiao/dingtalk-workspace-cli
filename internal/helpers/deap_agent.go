@@ -36,7 +36,9 @@ var deapAgentDryRun = &contract.DryRunSpec{
 
 // deapAgentSourceTypes 是 chat-2 message_source 表登记的来源类型白名单，与
 // MessageSourceType 枚举逐字一致；服务端对未知类型直接报参数错，不做兜底解析。
-var deapAgentSourceTypes = []string{"im_message", "trigger_rule", "scenario_instance"}
+// im_message 的 sourceId 是钉钉开放态消息 ID（openMessageId），单聊/群@/群感知三条
+// 链路含义一致；trigger_rule 的 sourceId 是群感知规则 ID。
+var deapAgentSourceTypes = []string{"im_message", "trigger_rule"}
 
 func newDeapAgentCommand() *cobra.Command {
 	cmd := &cobra.Command{
