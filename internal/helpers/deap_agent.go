@@ -44,7 +44,7 @@ func newDeapAgentCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "deap-agent",
 		Short:             "管理和观测 DEAP 数字员工",
-		Long:              "DEAP 数字员工低频开发者命令组。固定调用 MCP product/server deap-dev；identity.corpId/userId 由可信登录态注入且不对 CLI 暴露。端点需通过 DINGTALK_DEAP_DEV_MCP_URL 显式配置。",
+		Long:              "DEAP 数字员工低频开发者命令组。固定调用 MCP product/server deap-dev；identity.corpId/userId 由可信登录态注入且不对 CLI 暴露。端点跟随当前 MCP 环境自动选择规范网关；DINGTALK_DEAP_DEV_MCP_URL 仅用于本地调试覆盖。",
 		Args:              cobra.NoArgs,
 		TraverseChildren:  true,
 		DisableAutoGenTag: true,

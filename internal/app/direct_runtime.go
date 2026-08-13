@@ -46,6 +46,8 @@ const (
 	defaultPATServerID    = "abc3c880fb90f04b52d1426aaf093766e5fc9ec38411688cbb74df42a584d374"
 	devappProductID       = "devapp"
 	devappServerPath      = "/server/op-app"
+	deapDevProductID      = "deap-dev"
+	deapDevServerPath     = "/server/68e7e41374caa1336dc642bc3dd220de6f1e7077356dc0d4fc128f62d52d7d9b"
 )
 
 // devappMCPEndpoint resolves the open-platform app-management MCP endpoint
@@ -53,6 +55,12 @@ const (
 // (production by default, pre when ~/.dws/mcp_url points at the pre gateway).
 func devappMCPEndpoint() string {
 	return defaultPATGatewayBaseURL() + devappServerPath
+}
+
+// deapDevMCPEndpoint resolves the DEAP developer MCP endpoint from the same
+// configured gateway base URL used by other built-in direct-runtime products.
+func deapDevMCPEndpoint() string {
+	return defaultPATGatewayBaseURL() + deapDevServerPath
 }
 
 func defaultPATServerDescriptor() mcptypes.ServerDescriptor {
@@ -207,11 +215,14 @@ func directRuntimeEndpoint(productID, toolName string) (string, bool) {
 		}
 	}
 
-	// Hardcoded built-in: devapp is pinned to the open-platform app-management
-	// MCP server in source (NOT service discovery), per product decision.
+	// Hardcoded built-ins are pinned to their product-owned MCP server paths in
+	// source (NOT service discovery) while following the active MCP environment.
 	for _, candidate := range []string{strings.TrimSpace(productID), normalized} {
-		if candidate == devappProductID {
+		switch candidate {
+		case devappProductID:
 			return devappMCPEndpoint(), true
+		case deapDevProductID:
+			return deapDevMCPEndpoint(), true
 		}
 	}
 
@@ -300,15 +311,17 @@ func endpointFromEditionServers(productID string, fn func() []edition.ServerInfo
 
 // DirectRuntimeProductIDs returns product IDs that should stay visible for
 // direct runtime execution. Dynamic products come from MCP discovery/plugin
-// registration; built-in helper products such as devapp resolve their endpoint
-// through DINGTALK_<PRODUCT>_MCP_URL instead of requiring discovery.
+// registration; built-in helper products such as devapp and deap-dev resolve
+// their endpoint from the active MCP environment instead of requiring
+// discovery. DINGTALK_<PRODUCT>_MCP_URL remains an explicit debug override.
 func DirectRuntimeProductIDs() map[string]bool {
 	dynamicMu.RLock()
 	defer dynamicMu.RUnlock()
 
-	ids := make(map[string]bool, len(dynamicProducts)+2)
+	ids := make(map[string]bool, len(dynamicProducts)+3)
 	ids[defaultPATProductID] = true
 	ids[devappProductID] = true
+	ids[deapDevProductID] = true
 	for key := range dynamicProducts {
 		ids[key] = true
 	}

@@ -80,6 +80,21 @@ func TestDevDeapAgentCommandTreeDeclaresTenDirectLeaves(t *testing.T) {
 	}
 }
 
+func TestDevDeapAgentHelpDescribesBuiltInEndpointResolution(t *testing.T) {
+	newDeapAgentTestTree(t, false)
+	dev := devHandler{}.Command(&captureRunner{})
+	group, remaining, err := dev.Find([]string{"deap-agent"})
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("find dev deap-agent: group=%v remaining=%v err=%v", group, remaining, err)
+	}
+	if !strings.Contains(group.Long, "跟随当前 MCP 环境") {
+		t.Fatal("deap-agent help must describe standard MCP environment resolution")
+	}
+	if strings.Contains(group.Long, "DINGTALK_DEAP_DEV_MCP_URL 显式配置") {
+		t.Fatal("deap-agent help must not require a product-specific endpoint override")
+	}
+}
+
 func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 	caller, _ := newDeapAgentTestTree(t, false)
 	cases := []struct {
