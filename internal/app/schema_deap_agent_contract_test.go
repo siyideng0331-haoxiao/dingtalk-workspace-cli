@@ -54,7 +54,7 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 		},
 		"dev.send_de_message": {
 			"dev deap-agent send-message", "send_de_message", "write", "high", "user_required",
-			map[string]string{"assistant-id": "assistantId", "content": "content", "open-conversation-id": "openConversationId", "content-type": "contentType"},
+			map[string]string{"assistant-id": "assistantId", "query": "query", "open-conversation-id": "openConversationId", "content-type": "contentType"},
 		},
 		"dev.query_de_run_status": {
 			"dev deap-agent run-status", "query_de_run_status", "read", "low", "not_required",
@@ -62,7 +62,7 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 		},
 		"dev.query_de_trace": {
 			"dev deap-agent trace", "query_de_trace", "read", "high", "not_required",
-			map[string]string{"trace-id": "traceId"},
+			map[string]string{"run-id": "runId", "source-id": "sourceId", "source-type": "sourceType", "assistant-id": "assistantId"},
 		},
 	}
 	canonicals := make([]string, 0, len(wants))

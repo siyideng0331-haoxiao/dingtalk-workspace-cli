@@ -45,7 +45,7 @@ func newDeapAgentTestTree(t *testing.T, dryRun bool) (*deapAgentCaller, *bytes.B
 	return caller, out
 }
 
-func TestDevDeapAgentCommandTreeDeclaresTenDirectLeaves(t *testing.T) {
+func TestDevDeapAgentCommandTreeDeclaresNineDirectLeaves(t *testing.T) {
 	newDeapAgentTestTree(t, false)
 	dev := devHandler{}.Command(&captureRunner{})
 	group, remaining, err := dev.Find([]string{"deap-agent"})
@@ -159,23 +159,28 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 		},
 		{
 			leaf: "send-message", tool: "send_de_message", confirmed: true,
-			flags: map[string]string{"assistant-id": "agent-1", "content": "你好"},
-			wantArgs: map[string]any{"assistantId": "agent-1", "content": "你好"},
+			flags: map[string]string{"assistant-id": "agent-1", "query": "你好"},
+			wantArgs: map[string]any{"assistantId": "agent-1", "query": "你好"},
 		},
 		{
 			leaf: "run-status", tool: "query_de_run_status",
-			flags: map[string]string{"run-id": "run-1"},
-			wantArgs: map[string]any{"runId": "run-1"},
+			flags: map[string]string{"assistant-id": "agent-1", "run-id": "run-1"},
+			wantArgs: map[string]any{"assistantId": "agent-1", "runId": "run-1"},
 		},
 		{
 			leaf: "run-status", tool: "query_de_run_status",
-			flags: map[string]string{"source-id": "open-message-1", "source-type": "im_message"},
-			wantArgs: map[string]any{"sourceId": "open-message-1", "sourceType": "im_message"},
+			flags: map[string]string{"assistant-id": "agent-1", "source-id": "open-message-1", "source-type": "im_message"},
+			wantArgs: map[string]any{"assistantId": "agent-1", "sourceId": "open-message-1", "sourceType": "im_message"},
 		},
 		{
 			leaf: "trace", tool: "query_de_trace",
-			flags: map[string]string{"trace-id": "trace-1"},
-			wantArgs: map[string]any{"traceId": "trace-1"},
+			flags: map[string]string{"assistant-id": "agent-1", "run-id": "run-1"},
+			wantArgs: map[string]any{"assistantId": "agent-1", "runId": "run-1"},
+		},
+		{
+			leaf: "trace", tool: "query_de_trace",
+			flags: map[string]string{"assistant-id": "agent-1", "source-id": "open-message-1", "source-type": "im_message"},
+			wantArgs: map[string]any{"assistantId": "agent-1", "sourceId": "open-message-1", "sourceType": "im_message"},
 		},
 	}
 	for _, tc := range cases {
@@ -224,10 +229,15 @@ func TestDevDeapAgentConstraintsFailBeforeMCP(t *testing.T) {
 		flags   map[string]string
 		wantErr string
 	}{
-		{leaf: "run-status", flags: map[string]string{}, wantErr: "run-id"},
-		{leaf: "run-status", flags: map[string]string{"run-id": "run-1", "source-id": "src-1", "source-type": "im_message"}, wantErr: "run-id"},
-		{leaf: "run-status", flags: map[string]string{"source-id": "src-1"}, wantErr: "--source-type"},
-		{leaf: "run-status", flags: map[string]string{"run-id": "run-1", "source-type": "im_message"}, wantErr: "--source-type 只能随"},
+		{leaf: "run-status", flags: map[string]string{"run-id": "run-1"}, wantErr: "assistant-id"},
+		{leaf: "run-status", flags: map[string]string{"assistant-id": "agent-1"}, wantErr: "run-id"},
+		{leaf: "run-status", flags: map[string]string{"assistant-id": "agent-1", "run-id": "run-1", "source-id": "src-1", "source-type": "im_message"}, wantErr: "run-id"},
+		{leaf: "run-status", flags: map[string]string{"assistant-id": "agent-1", "source-id": "src-1"}, wantErr: "--source-type"},
+		{leaf: "run-status", flags: map[string]string{"assistant-id": "agent-1", "run-id": "run-1", "source-type": "im_message"}, wantErr: "--source-type 只能随"},
+		{leaf: "trace", flags: map[string]string{"run-id": "run-1"}, wantErr: "assistant-id"},
+		{leaf: "trace", flags: map[string]string{"assistant-id": "agent-1"}, wantErr: "run-id"},
+		{leaf: "trace", flags: map[string]string{"assistant-id": "agent-1", "run-id": "run-1", "source-id": "src-1", "source-type": "im_message"}, wantErr: "run-id"},
+		{leaf: "trace", flags: map[string]string{"assistant-id": "agent-1", "source-id": "src-1"}, wantErr: "--source-type"},
 		{leaf: "list", flags: map[string]string{"page": "0"}, wantErr: "--page 不能小于 1"},
 		{leaf: "list", flags: map[string]string{"page-size": "0"}, wantErr: "--page-size 不能小于 1"},
 		{leaf: "create", flags: map[string]string{
@@ -291,6 +301,20 @@ func TestDevDeapAgentRemovesRetiredFlagsAndKeepsIdentityHidden(t *testing.T) {
 	if flag := list.Flags().Lookup("sort-by"); flag != nil {
 		t.Fatal("retired --sort-by is exposed")
 	}
+	send, _, err := dev.Find([]string{"deap-agent", "send-message"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flag := send.Flags().Lookup("content"); flag != nil {
+		t.Fatal("retired --content is exposed; current MCP input is --query")
+	}
+	trace, _, err := dev.Find([]string{"deap-agent", "trace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flag := trace.Flags().Lookup("trace-id"); flag != nil {
+		t.Fatal("retired --trace-id is exposed; current MCP input uses the run locator")
+	}
 	save, _, err := dev.Find([]string{"deap-agent", "save-draft"})
 	if err != nil {
 		t.Fatal(err)
@@ -333,6 +357,48 @@ func TestDevDeapAgentRemovesRetiredFlagsAndKeepsIdentityHidden(t *testing.T) {
 	for _, forbidden := range []string{"identity", "corpId", "orgId", "userId", "agentType"} {
 		if _, ok := call.args[forbidden]; ok {
 			t.Fatalf("trusted identity field %s leaked into MCP arguments", forbidden)
+		}
+	}
+}
+
+func TestDevDeapAgentHelpMatchesCurrentMCPInputs(t *testing.T) {
+	newDeapAgentTestTree(t, false)
+	dev := devHandler{}.Command(&captureRunner{})
+
+	send, _, err := dev.Find([]string{"deap-agent", "send-message"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flag := send.Flags().Lookup("query"); flag == nil {
+		t.Fatal("send-message must expose the required MCP query input")
+	}
+	if !strings.Contains(send.Long, "query") || !strings.Contains(send.Long, "不可撤回") {
+		t.Fatalf("send-message help does not match the current MCP tool: %q", send.Long)
+	}
+
+	publish, _, err := dev.Find([]string{"deap-agent", "publish"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flag := publish.Flags().Lookup("allow-join-group"); flag == nil || flag.DefValue != "false" {
+		t.Fatalf("allow-join-group default = %v, current MCP declares an optional boolean without a default", flag)
+	}
+
+	for _, name := range []string{"run-status", "trace"} {
+		command, _, findErr := dev.Find([]string{"deap-agent", name})
+		if findErr != nil {
+			t.Fatal(findErr)
+		}
+		if flag := command.Flags().Lookup("assistant-id"); flag == nil {
+			t.Fatalf("%s is missing MCP input --assistant-id", name)
+		}
+		for _, flagName := range []string{"run-id", "source-id", "source-type"} {
+			if flag := command.Flags().Lookup(flagName); flag == nil {
+				t.Fatalf("%s is missing MCP input --%s", name, flagName)
+			}
+		}
+		if !strings.Contains(command.Long, "--run-id") || !strings.Contains(command.Long, "--source-id") {
+			t.Fatalf("%s help does not explain the current MCP run locator: %q", name, command.Long)
 		}
 	}
 }
