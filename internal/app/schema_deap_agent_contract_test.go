@@ -17,7 +17,7 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 		"dev.create_digital_employee": {
 			"dev deap-agent create", "create_digital_employee", "write", "medium", "not_required",
 			map[string]string{
-				"name": "name", "description": "description", "org-code": "orgCode", "org-name": "orgName",
+				"name": "name", "description": "description", "dept-id": "deptId", "dept-name": "deptName",
 				"icon": "icon", "profile-json": "digitalTagEmployeeProfile",
 				"employee-no": "digitalTagEmployeeProfile.employeeNo",
 				"position-name": "digitalTagEmployeeProfile.positionName",
@@ -36,8 +36,8 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 		"dev.update_digital_employee_draft": {
 			"dev deap-agent save-draft", "update_digital_employee_draft", "write", "high", "user_required",
 			map[string]string{
-				"agent-uuid": "agentUuid", "name": "name", "description": "description", "org-code": "orgCode",
-				"org-name": "orgName", "icon": "icon", "prompt": "prompt", "profile-json": "digitalTagEmployeeProfile",
+				"agent-uuid": "agentUuid", "name": "name", "description": "description", "dept-id": "deptId",
+				"dept-name": "deptName", "icon": "icon", "prompt": "prompt", "profile-json": "digitalTagEmployeeProfile",
 				"employee-no": "digitalTagEmployeeProfile.employeeNo",
 				"position-name": "digitalTagEmployeeProfile.positionName",
 				"supervisor-uid": "digitalTagEmployeeProfile.directSupervisorUid",
@@ -52,17 +52,13 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 			"dev deap-agent delete", "delete_digital_employee", "destructive", "high", "user_required",
 			map[string]string{"agent-uuid": "agentUuid"},
 		},
+		"dev.send_de_message": {
+			"dev deap-agent send-message", "send_de_message", "write", "high", "user_required",
+			map[string]string{"assistant-id": "assistantId", "content": "content", "open-conversation-id": "openConversationId", "content-type": "contentType"},
+		},
 		"dev.query_de_run_status": {
 			"dev deap-agent run-status", "query_de_run_status", "read", "low", "not_required",
-			map[string]string{"assistant-id": "assistantId", "task-id": "taskId"},
-		},
-		"dev.query_de_run_executions": {
-			"dev deap-agent run-executions", "query_de_run_executions", "read", "low", "not_required",
-			map[string]string{"message-ids-json": "messageIds"},
-		},
-		"dev.resolve_de_run_id": {
-			"dev deap-agent resolve-run-id", "resolve_de_run_id", "read", "low", "not_required",
-			map[string]string{"source-id": "sourceId"},
+			map[string]string{"run-id": "runId", "source-id": "sourceId", "source-type": "sourceType", "assistant-id": "assistantId"},
 		},
 		"dev.query_de_trace": {
 			"dev deap-agent trace", "query_de_trace", "read", "high", "not_required",

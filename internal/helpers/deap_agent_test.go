@@ -54,7 +54,7 @@ func TestDevDeapAgentCommandTreeDeclaresTenDirectLeaves(t *testing.T) {
 	}
 	wantLeaves := []string{
 		"create", "detail", "list", "save-draft", "publish",
-		"delete", "run-status", "run-executions", "resolve-run-id", "trace",
+		"delete", "send-message", "run-status", "trace",
 	}
 	if got := len(group.Commands()); got != len(wantLeaves) {
 		t.Fatalf("deap-agent direct child count = %d, want %d", got, len(wantLeaves))
@@ -93,7 +93,7 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 			leaf: "create", tool: "create_digital_employee",
 			flags: map[string]string{
 				"name": "值班助手", "description": "处理值班问题",
-				"org-code": "dept-1", "org-name": "值班组",
+				"dept-id": "dept-1", "dept-name": "值班组",
 				"profile-json":   `{"employeeNo":"JSON-001","positionName":"值班员"}`,
 				"employee-no":    "E001",
 				"supervisor-uid": "supervisor-1",
@@ -101,7 +101,7 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 			},
 			wantArgs: map[string]any{
 				"name": "值班助手", "description": "处理值班问题",
-				"orgCode": "dept-1", "orgName": "值班组",
+				"deptId": "dept-1", "deptName": "值班组",
 				"digitalTagEmployeeProfile": map[string]any{
 					"employeeNo": "E001", "positionName": "值班员",
 					"directSupervisorUid": "supervisor-1", "responseMode": "mention_only",
@@ -143,18 +143,18 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 			wantArgs: map[string]any{"agentUuid": "agent-1"},
 		},
 		{
+			leaf: "send-message", tool: "send_de_message", confirmed: true,
+			flags: map[string]string{"assistant-id": "agent-1", "content": "你好"},
+			wantArgs: map[string]any{"assistantId": "agent-1", "content": "你好"},
+		},
+		{
 			leaf: "run-status", tool: "query_de_run_status",
-			flags: map[string]string{"assistant-id": "assistant-1", "task-id": "task-1"},
-			wantArgs: map[string]any{"assistantId": "assistant-1", "taskId": "task-1"},
+			flags: map[string]string{"run-id": "run-1"},
+			wantArgs: map[string]any{"runId": "run-1"},
 		},
 		{
-			leaf: "run-executions", tool: "query_de_run_executions",
-			flags: map[string]string{"message-ids-json": `["message-1","message-2"]`},
-			wantArgs: map[string]any{"messageIds": []any{"message-1", "message-2"}},
-		},
-		{
-			leaf: "resolve-run-id", tool: "resolve_de_run_id",
-			flags: map[string]string{"source-id": "open-message-1"},
+			leaf: "run-status", tool: "query_de_run_status",
+			flags: map[string]string{"source-id": "open-message-1", "source-type": "im_message"},
 			wantArgs: map[string]any{"sourceId": "open-message-1", "sourceType": "im_message"},
 		},
 		{
@@ -209,19 +209,18 @@ func TestDevDeapAgentConstraintsFailBeforeMCP(t *testing.T) {
 		flags   map[string]string
 		wantErr string
 	}{
-		{leaf: "run-status", flags: map[string]string{"assistant-id": "assistant-1"}, wantErr: "task-id"},
-		{leaf: "run-status", flags: map[string]string{"task-id": "task-1"}, wantErr: "assistant-id"},
+		{leaf: "run-status", flags: map[string]string{}, wantErr: "run-id"},
+		{leaf: "run-status", flags: map[string]string{"run-id": "run-1", "source-id": "src-1", "source-type": "im_message"}, wantErr: "run-id"},
+		{leaf: "run-status", flags: map[string]string{"source-id": "src-1"}, wantErr: "--source-type"},
+		{leaf: "run-status", flags: map[string]string{"run-id": "run-1", "source-type": "im_message"}, wantErr: "--source-type 只能随"},
 		{leaf: "list", flags: map[string]string{"page": "0"}, wantErr: "--page 不能小于 1"},
 		{leaf: "list", flags: map[string]string{"page-size": "0"}, wantErr: "--page-size 不能小于 1"},
-		{leaf: "run-executions", flags: map[string]string{"message-ids-json": `[]`}, wantErr: "至少包含一个"},
-		{leaf: "run-executions", flags: map[string]string{"message-ids-json": `["message-1",""]`}, wantErr: "非空字符串"},
-		{leaf: "run-executions", flags: map[string]string{"message-ids-json": `["message-1",2]`}, wantErr: "非空字符串"},
 		{leaf: "create", flags: map[string]string{
-			"name": "值班助手", "description": "处理值班问题", "org-code": "dept-1", "org-name": "值班组",
+			"name": "值班助手", "description": "处理值班问题", "dept-id": "dept-1", "dept-name": "值班组",
 			"profile-json": `{"tag":"forbidden"}`,
 		}, wantErr: "不接受字段"},
 		{leaf: "create", flags: map[string]string{
-			"name": "值班助手", "description": "处理值班问题", "org-code": "dept-1", "org-name": "值班组",
+			"name": "值班助手", "description": "处理值班问题", "dept-id": "dept-1", "dept-name": "值班组",
 			"response-mode": "always_reply",
 		}, wantErr: "--response-mode"},
 		{leaf: "save-draft", flags: map[string]string{
@@ -293,7 +292,7 @@ func TestDevDeapAgentRemovesRetiredFlagsAndKeepsIdentityHidden(t *testing.T) {
 
 	for name, value := range map[string]string{
 		"name": "值班助手", "description": "处理值班问题",
-		"org-code": "dept-1", "org-name": "值班组",
+		"dept-id": "dept-1", "dept-name": "值班组",
 	} {
 		if setErr := create.Flags().Set(name, value); setErr != nil {
 			t.Fatal(setErr)
@@ -311,7 +310,7 @@ func TestDevDeapAgentRemovesRetiredFlagsAndKeepsIdentityHidden(t *testing.T) {
 	}
 	want := map[string]any{
 		"name": "值班助手", "description": "处理值班问题",
-		"orgCode": "dept-1", "orgName": "值班组",
+		"deptId": "dept-1", "deptName": "值班组",
 	}
 	if !reflect.DeepEqual(call.args, want) {
 		t.Fatalf("create args = %#v, want %#v", call.args, want)

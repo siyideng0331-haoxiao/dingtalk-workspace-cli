@@ -18,22 +18,25 @@ import (
 const (
 	deapAgentServerID = "deap-dev"
 
-	deapAgentCreateTool     = "create_digital_employee"
-	deapAgentDetailTool     = "get_digital_employee_detail"
-	deapAgentListTool       = "list_digital_employees"
-	deapAgentSaveDraftTool  = "update_digital_employee_draft"
-	deapAgentPublishTool    = "publish_digital_employee"
-	deapAgentDeleteTool     = "delete_digital_employee"
-	deapAgentRunStatusTool  = "query_de_run_status"
-	deapAgentExecutionsTool = "query_de_run_executions"
-	deapAgentResolveRunTool = "resolve_de_run_id"
-	deapAgentTraceTool      = "query_de_trace"
+	deapAgentCreateTool      = "create_digital_employee"
+	deapAgentDetailTool      = "get_digital_employee_detail"
+	deapAgentListTool        = "list_digital_employees"
+	deapAgentSaveDraftTool   = "update_digital_employee_draft"
+	deapAgentPublishTool     = "publish_digital_employee"
+	deapAgentDeleteTool      = "delete_digital_employee"
+	deapAgentSendMessageTool = "send_de_message"
+	deapAgentRunStatusTool   = "query_de_run_status"
+	deapAgentTraceTool       = "query_de_trace"
 )
 
 var deapAgentDryRun = &contract.DryRunSpec{
 	PreviewKind: contract.DryRunPreviewInvocation,
 	RemoteReads: false,
 }
+
+// deapAgentSourceTypes 是 chat-2 message_source 表登记的来源类型白名单，与
+// MessageSourceType 枚举逐字一致；服务端对未知类型直接报参数错，不做兜底解析。
+var deapAgentSourceTypes = []string{"im_message", "trigger_rule", "scenario_instance"}
 
 func newDeapAgentCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -53,9 +56,8 @@ func newDeapAgentCommand() *cobra.Command {
 		newDeapAgentSaveDraftCommand(),
 		newDeapAgentPublishCommand(),
 		newDeapAgentDeleteCommand(),
+		newDeapAgentSendMessageCommand(),
 		newDeapAgentRunStatusCommand(),
-		newDeapAgentRunExecutionsCommand(),
-		newDeapAgentResolveRunIDCommand(),
 		newDeapAgentTraceCommand(),
 	)
 	return cmd
@@ -65,15 +67,15 @@ func newDeapAgentCreateCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use:   "create",
 		Short: "创建草稿态数字员工",
-		Long:  "创建草稿态数字员工并返回 assistantId；不会自动发布。名称、简介和归属组织必填，identity 由 MCP 可信注入。档案字段可用独立 flag 或 profile-json 提供；同时提供时独立 flag 覆盖 JSON 同名字段。创建后需补齐头像、岗位、响应模式和人设提示词，再保存草稿并发布。",
+		Long:  "创建草稿态数字员工并返回 assistantId；不会自动发布。名称和简介必填，归属部门可选，identity 由 MCP 可信注入。档案字段可用独立 flag 或 profile-json 提供；同时提供时独立 flag 覆盖 JSON 同名字段。创建后需补齐头像、岗位、响应模式和人设提示词，再保存草稿并发布。",
 		Tool:  deapAgentCreateTool,
 		Server: deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
 			{Name: "name", Usage: "数字员工名称（最多 30 个 Unicode 码点）", Bind: "name", Required: true, Trim: true},
 			{Name: "description", Usage: "数字员工简介（最多 300 个 Unicode 码点）", Bind: "description", Required: true, Trim: true},
-			{Name: "org-code", Usage: "归属部门编码", Bind: "orgCode", Required: true, Trim: true},
-			{Name: "org-name", Usage: "归属部门名称（服务端会按 ACL 重解析）", Bind: "orgName", Required: true, Trim: true},
+			{Name: "dept-id", Usage: "归属部门编码", Bind: "deptId", Trim: true, OmitEmpty: true},
+			{Name: "dept-name", Usage: "归属部门名称", Bind: "deptName", Trim: true, OmitEmpty: true},
 			{Name: "icon", Usage: "头像地址或 OSS objectPath", Bind: "icon", Trim: true, OmitEmpty: true},
 			{Name: "profile-json", Usage: "digitalTagEmployeeProfile JSON 对象；独立档案 flag 会覆盖同名字段", Bind: "digitalTagEmployeeProfile", Trim: true, OmitEmpty: true, Format: "json", Transform: deapAgentProfileJSON, SchemaDescription: "数字员工档案 JSON；仅接收 employeeNo、positionName、directSupervisorUid、responseMode；独立档案参数优先"},
 			{Name: "employee-no", Usage: "数字员工工号（最多 64 个 Unicode 码点）", Bind: "digitalTagEmployeeProfile.employeeNo", Trim: true, OmitEmpty: true},
@@ -112,7 +114,7 @@ func newDeapAgentCreateCommand() *cobra.Command {
 				AgentSummary: "创建新的草稿态 DEAP 数字员工",
 				UseWhen: []string{"需要从零创建数字员工并获得 assistantId 时"},
 				AvoidWhen: []string{"已有 agentUuid 只需修改草稿时使用 save-draft", "创建普通开放平台应用时使用 dev app create"},
-				Examples: []string{`dws dev deap-agent create --name "值班助手" --description "处理值班问题" --org-code dept-1 --org-name "值班组" --position-name "值班员" --response-mode mention_only --dry-run --format json`},
+				Examples: []string{`dws dev deap-agent create --name "值班助手" --description "处理值班问题" --dept-id dept-1 --dept-name "值班组" --position-name "值班员" --response-mode mention_only --dry-run --format json`},
 			},
 			Parameters: []contract.ParamDecl{
 				{Name: "profile-json", Property: "digitalTagEmployeeProfile", InterfaceType: "object"},
@@ -221,8 +223,8 @@ func newDeapAgentSaveDraftCommand() *cobra.Command {
 			{Name: "name", Usage: "数字员工名称（最多 30 个 Unicode 码点）", Bind: "name", Trim: true, OmitEmpty: true},
 			{Name: "description", Usage: "数字员工简介（最多 300 个 Unicode 码点）", Bind: "description", Trim: true, OmitEmpty: true},
 			{Name: "icon", Usage: "头像 OSS objectPath；不要持久化详情中的临时 iconUrl", Bind: "icon", Trim: true, OmitEmpty: true},
-			{Name: "org-code", Usage: "归属部门编码", Bind: "orgCode", Trim: true, OmitEmpty: true},
-			{Name: "org-name", Usage: "归属部门名称", Bind: "orgName", Trim: true, OmitEmpty: true},
+			{Name: "dept-id", Usage: "归属部门编码", Bind: "deptId", Trim: true, OmitEmpty: true},
+			{Name: "dept-name", Usage: "归属部门名称", Bind: "deptName", Trim: true, OmitEmpty: true},
 			{Name: "prompt", Usage: "人设/System Prompt（最多 5000 个 Unicode 码点）", Bind: "prompt", Trim: true, OmitEmpty: true},
 			{Name: "profile-json", Usage: "digitalTagEmployeeProfile JSON 对象；独立档案 flag 会覆盖同名字段", Bind: "digitalTagEmployeeProfile", Trim: true, OmitEmpty: true, Format: "json", Transform: deapAgentProfileJSON},
 			{Name: "employee-no", Usage: "数字员工工号（最多 64 个 Unicode 码点）", Bind: "digitalTagEmployeeProfile.employeeNo", Trim: true, OmitEmpty: true},
@@ -348,22 +350,71 @@ func newDeapAgentDeleteCommand() *cobra.Command {
 	})
 }
 
+// newDeapAgentSendMessageCommand 发消息后直接拿到 runId，是“主动发起一次执行并观测它”的入口。
+// 与群感知等被动链路不同：被动链路拿不到发起句柄，只能靠 source-id 反查。
+func newDeapAgentSendMessageCommand() *cobra.Command {
+	return NewLeafCommand(LeafSpec{
+		Use:   "send-message",
+		Short: "以数字员工身份发消息并返回 runId",
+		Long:  "以指定数字员工身份发一条消息，返回本次执行的 runId（= EagleEye traceId）、messageId 与 sessionId，runId 可直接传给 run-status 与 trace。传 --open-conversation-id 走群发，不传走单聊。注意这是写操作：消息会真实投递到钉钉，且不可撕回，请先 --dry-run 确认参数。",
+		Tool:  deapAgentSendMessageTool,
+		Server: deapAgentServerID,
+		PostMount: deapAgentNoArgs,
+		Flags: []LeafFlag{
+			{Name: "assistant-id", Usage: "数字员工 ID", Bind: "assistantId", Required: true, Trim: true},
+			{Name: "content", Usage: "消息正文", Bind: "content", Required: true, Trim: true},
+			{Name: "open-conversation-id", Usage: "群会话开放态 ID；传了走群发，不传走单聊", Bind: "openConversationId", Trim: true, OmitEmpty: true},
+			{Name: "content-type", Usage: "消息类型；缺省 TEXT", Bind: "contentType", Trim: true, OmitEmpty: true},
+		},
+		Safety: contract.SafetySpec{
+			Effect: "write", Risk: "high",
+			Confirmation: "user_required", Idempotency: "non_idempotent",
+		},
+		Contract: LeafContract{
+			Identity: contract.ToolIdentitySpec{
+				ProductID: "dev", Name: "send_de_message",
+				CanonicalPath: "dev.send_de_message",
+				CLIPath: "dev deap-agent send-message", PrimaryCLIPath: "dev deap-agent send-message",
+				Group: "deap-agent",
+			},
+			Description: "以数字员工身份发消息，返回本次执行的 runId。",
+			DryRun: deapAgentDryRun,
+			Interface: deapAgentMCPInterface(deapAgentSendMessageTool),
+			Selection: contract.SelectionSpec{
+				AgentSummary: "以数字员工身份发消息并拿到可观测的 runId",
+				UseWhen: []string{"需要主动触发一次数字员工执行并随后观测其状态或链路时"},
+				AvoidWhen: []string{"只想查已发生的执行时使用 run-status", "发普通钉钉消息（非数字员工身份）使用 chat 命令组"},
+				Examples: []string{`dws dev deap-agent send-message --assistant-id <agentUuid> --content "你好" --dry-run --format json`},
+			},
+		},
+	})
+}
+
+// newDeapAgentRunStatusCommand 双定位：手上有 runId 就直接用，只有来源侧原始 ID
+// （如钉钉开放态消息 ID、群感知规则 ID）时走 source-id 反查。两者只能二选一：
+// 服务端在两个都传时会静默忽略 sourceId，在 CLI 层直接拦住比让调用方猜哪个生效更好。
 func newDeapAgentRunStatusCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use:   "run-status",
-		Short: "查询单聊数字员工运行状态",
-		Long:  "按 assistantId 和服务端生成的 taskId 查询单聊执行状态。只适用于通过 DEAP 单聊执行入口发起并登记 taskId 的运行；群内运行请使用 run-executions。",
+		Short: "查数字员工执行状态",
+		Long:  "查一次数字员工执行的结果，单聊、群聊、群感知、定时任务全场域通用。两种定位方式二选一：--run-id 直接定位；或 --source-id 配 --source-type 按来源反查。返回 result（1 成功 / -1 失败 / 0 运行中 / 2 中止）与 runId。注意：trigger_rule 与 scenario_instance 的来源 ID 对应多次执行，只会返回最新一次；要定位历史某一次必须用 runId。",
 		Tool:  deapAgentRunStatusTool,
 		Server: deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
-			{Name: "assistant-id", Usage: "智能体/数字员工 ID", Bind: "assistantId", Required: true, Trim: true},
-			{Name: "task-id", Usage: "单聊发起接口返回、由服务端登记的任务 ID", Bind: "taskId", Required: true, Trim: true},
+			{Name: "run-id", Usage: "30 位 EagleEye runId（发起接口返回或日志里的 traceId）", Bind: "runId", Trim: true, OmitEmpty: true},
+			{Name: "source-id", Usage: "来源侧原始 ID；im_message 传钉钉开放态 openMessageId（不是 DWS openTaskId），trigger_rule 传群感知规则 ID", Bind: "sourceId", Trim: true, OmitEmpty: true},
+			{Name: "source-type", Usage: "来源类型；随 --source-id 一起传", Bind: "sourceType", Trim: true, OmitEmpty: true, Enum: deapAgentSourceTypes},
+			{Name: "assistant-id", Usage: "数字员工 ID；可选", Bind: "assistantId", Trim: true, OmitEmpty: true},
+		},
+		Constraints: []LeafConstraint{
+			{Kind: LeafExactlyOne, Flags: []string{"run-id", "source-id"}},
 		},
 		Safety: contract.SafetySpec{
 			Effect: "read", Risk: "low",
 			Confirmation: "not_required", Idempotency: "idempotent",
 		},
+		Validate: deapAgentRequireSourceTypeWithSourceID,
 		Contract: LeafContract{
 			Identity: contract.ToolIdentitySpec{
 				ProductID: "dev", Name: "query_de_run_status",
@@ -371,88 +422,17 @@ func newDeapAgentRunStatusCommand() *cobra.Command {
 				CLIPath: "dev deap-agent run-status", PrimaryCLIPath: "dev deap-agent run-status",
 				Group: "deap-agent",
 			},
-			Description: "按 assistantId 和 taskId 查询 DEAP 单聊运行状态。",
+			Description: "按 runId 或 sourceId+sourceType 查数字员工执行状态，全场域通用。",
 			DryRun: deapAgentDryRun,
 			Interface: deapAgentMCPInterface(deapAgentRunStatusTool),
 			Selection: contract.SelectionSpec{
-				AgentSummary: "按 assistantId 和 taskId 查询数字员工单聊运行状态",
-				UseWhen: []string{"已有单聊发起接口返回的 taskId 与对应 assistantId，需要判断运行状态时"},
-				AvoidWhen: []string{"群消息运行使用 run-executions", "需要查看完整 Langfuse 链路时使用 trace"},
-				Examples: []string{"dws dev deap-agent run-status --assistant-id <assistantId> --task-id <taskId> --format json"},
-			},
-		},
-	})
-}
-
-func newDeapAgentRunExecutionsCommand() *cobra.Command {
-	return NewLeafCommand(LeafSpec{
-		Use:   "run-executions",
-		Short: "批量查询群消息数字员工执行结果",
-		Long:  "按 chat-2 用户消息 ID 批量查询数字员工在群消息感知、群聊或定时任务场域中的执行结果。必须传用户消息 ID，不要传助手消息 ID；查不到的 ID 不会出现在返回 Map 中。",
-		Tool:  deapAgentExecutionsTool,
-		Server: deapAgentServerID,
-		PostMount: deapAgentNoArgs,
-		Flags: []LeafFlag{
-			{Name: "message-ids-json", Usage: "chat-2 用户消息 ID 的 JSON 数组", Bind: "messageIds", Required: true, Trim: true, Format: "json", Transform: deapAgentMessageIDsJSON, SchemaDescription: "发起执行的 chat-2 用户消息 ID 列表"},
-		},
-		Safety: contract.SafetySpec{
-			Effect: "read", Risk: "low",
-			Confirmation: "not_required", Idempotency: "idempotent",
-		},
-		Contract: LeafContract{
-			Identity: contract.ToolIdentitySpec{
-				ProductID: "dev", Name: "query_de_run_executions",
-				CanonicalPath: "dev.query_de_run_executions",
-				CLIPath: "dev deap-agent run-executions", PrimaryCLIPath: "dev deap-agent run-executions",
-				Group: "deap-agent",
-			},
-			Description: "按 chat-2 用户消息 ID 批量查询 DEAP 执行结果。",
-			DryRun: deapAgentDryRun,
-			Interface: deapAgentMCPInterface(deapAgentExecutionsTool),
-			Selection: contract.SelectionSpec{
-				AgentSummary: "按用户消息 ID 批量查询群聊等场域的数字员工执行结果",
-				UseWhen: []string{"持有一个或多个 chat-2 用户消息 ID，需要查询群消息感知、群聊或定时任务执行结果时"},
-				AvoidWhen: []string{"不要传助手消息 ID", "单聊 taskId 状态查询使用 run-status"},
-				Examples: []string{`dws dev deap-agent run-executions --message-ids-json '["<openMessageId>"]' --format json`},
-			},
-			Parameters: []contract.ParamDecl{
-				{Name: "message-ids-json", Property: "messageIds", InterfaceType: "array"},
-			},
-		},
-	})
-}
-
-func newDeapAgentResolveRunIDCommand() *cobra.Command {
-	return NewLeafCommand(LeafSpec{
-		Use:   "resolve-run-id",
-		Short: "按开放态消息 ID 反查 runId",
-		Long:  "按钉钉开放态消息 ID（openMessageId）反查本次执行的 runId 和 Langfuse traceId。DWS openTaskId 不是 openMessageId，必须先通过发送状态查询换成 openMessageId。sourceType 固定为 im_message。",
-		Tool:  deapAgentResolveRunTool,
-		Server: deapAgentServerID,
-		PostMount: deapAgentNoArgs,
-		Flags: []LeafFlag{
-			{Name: "source-id", Usage: "钉钉 IM 投递后的 openMessageId；不是 DWS openTaskId", Bind: "sourceId", Required: true, Trim: true},
-		},
-		Safety: contract.SafetySpec{
-			Effect: "read", Risk: "low",
-			Confirmation: "not_required", Idempotency: "idempotent",
-		},
-		ConstParams: map[string]any{"sourceType": "im_message"},
-		Contract: LeafContract{
-			Identity: contract.ToolIdentitySpec{
-				ProductID: "dev", Name: "resolve_de_run_id",
-				CanonicalPath: "dev.resolve_de_run_id",
-				CLIPath: "dev deap-agent resolve-run-id", PrimaryCLIPath: "dev deap-agent resolve-run-id",
-				Group: "deap-agent",
-			},
-			Description: "按 openMessageId 反查 DEAP runId 和 Langfuse traceId。",
-			DryRun: deapAgentDryRun,
-			Interface: deapAgentMCPInterface(deapAgentResolveRunTool),
-			Selection: contract.SelectionSpec{
-				AgentSummary: "按 openMessageId 反查 DEAP runId 与 Langfuse traceId",
-				UseWhen: []string{"持有钉钉开放态 openMessageId，需要定位对应 DEAP runId 或 traceId 时"},
-				AvoidWhen: []string{"手上只有 DWS openTaskId 时先查询发送状态获取 openMessageId", "不要把 openTaskId 冒充 openMessageId"},
-				Examples: []string{"dws dev deap-agent resolve-run-id --source-id <openMessageId> --format json"},
+				AgentSummary: "按 runId 或来源 ID 查数字员工单次执行状态",
+				UseWhen: []string{"持有 runId，或持有钉钉开放态消息 ID / 群感知规则 ID，需要判断执行结果时"},
+				AvoidWhen: []string{"需要完整模型链路时使用 trace", "手上只有 DWS openTaskId 时先查发送状态换成 openMessageId"},
+				Examples: []string{
+					"dws dev deap-agent run-status --run-id <runId> --format json",
+					"dws dev deap-agent run-status --source-id <openMessageId> --source-type im_message --format json",
+				},
 			},
 		},
 	})
@@ -486,7 +466,7 @@ func newDeapAgentTraceCommand() *cobra.Command {
 			Selection: contract.SelectionSpec{
 				AgentSummary: "在服务端授权后查询数字员工完整 Langfuse 链路",
 				UseWhen: []string{"已有 EagleEye runId 或 Langfuse traceId，需要排查完整模型链路时"},
-				AvoidWhen: []string{"只需单聊状态时使用 run-status", "只有 openMessageId 时先使用 resolve-run-id"},
+				AvoidWhen: []string{"只需执行状态时使用 run-status", "只有来源侧原始 ID时可先用 run-status 拿到 runId"},
 				Examples: []string{"dws dev deap-agent trace --trace-id <traceId> --format json"},
 			},
 		},
@@ -565,22 +545,21 @@ func deapAgentJSONArray(raw string) (any, error) {
 	return array, nil
 }
 
-func deapAgentMessageIDsJSON(raw string) (any, error) {
-	value, err := deapAgentJSONArray(raw)
-	if err != nil {
-		return nil, err
+// deapAgentRequireSourceTypeWithSourceID 校验 source-id 与 source-type 必须成对出现。
+// runId / sourceId 二选一由 Constraints 保证；但 sourceId 单传时服务端无法判定来源
+// 类型（不同场域的来源 ID 形态可能相同），因此两者必须同时给。
+func deapAgentRequireSourceTypeWithSourceID(cmd *cobra.Command, _ []string) error {
+	sourceID, _ := cmd.Flags().GetString("source-id")
+	sourceType, _ := cmd.Flags().GetString("source-type")
+	hasSourceID := strings.TrimSpace(sourceID) != ""
+	hasSourceType := strings.TrimSpace(sourceType) != ""
+	if hasSourceID && !hasSourceType {
+		return apperrors.NewValidation("使用 --source-id 时必须同时传 --source-type")
 	}
-	messageIDs := value.([]any)
-	if len(messageIDs) == 0 {
-		return nil, apperrors.NewValidation("message-ids-json 至少包含一个用户消息 ID")
+	if hasSourceType && !hasSourceID {
+		return apperrors.NewValidation("--source-type 只能随 --source-id 一起传；按 runId 查请用 --run-id")
 	}
-	for index, item := range messageIDs {
-		messageID, ok := item.(string)
-		if !ok || strings.TrimSpace(messageID) == "" {
-			return nil, apperrors.NewValidation(fmt.Sprintf("message-ids-json[%d] 必须是非空字符串", index))
-		}
-	}
-	return messageIDs, nil
+	return nil
 }
 
 func deapAgentProfileJSON(raw string) (any, error) {
