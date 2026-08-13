@@ -65,7 +65,7 @@ func newDeapAgentCreateCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use:   "create",
 		Short: "创建草稿态数字员工",
-		Long:  "创建草稿态数字员工并返回 assistantId；不会自动发布。名称、简介和归属组织必填，identity 由 MCP 可信注入。创建后需补齐头像、岗位、响应模式和人设提示词，再保存草稿并发布。",
+		Long:  "创建草稿态数字员工并返回 assistantId；不会自动发布。名称、简介和归属组织必填，identity 由 MCP 可信注入。档案字段可用独立 flag 或 profile-json 提供；同时提供时独立 flag 覆盖 JSON 同名字段。创建后需补齐头像、岗位、响应模式和人设提示词，再保存草稿并发布。",
 		Tool:  deapAgentCreateTool,
 		Server: deapAgentServerID,
 		PostMount: deapAgentNoArgs,
@@ -75,7 +75,11 @@ func newDeapAgentCreateCommand() *cobra.Command {
 			{Name: "org-code", Usage: "归属部门编码", Bind: "orgCode", Required: true, Trim: true},
 			{Name: "org-name", Usage: "归属部门名称（服务端会按 ACL 重解析）", Bind: "orgName", Required: true, Trim: true},
 			{Name: "icon", Usage: "头像地址或 OSS objectPath", Bind: "icon", Trim: true, OmitEmpty: true},
-			{Name: "profile-json", Usage: "digitalTagEmployeeProfile JSON 对象", Bind: "digitalTagEmployeeProfile", Trim: true, OmitEmpty: true, Format: "json", Transform: deapAgentProfileJSON, SchemaDescription: "数字员工档案 JSON；仅接收 employeeNo、positionName、directSupervisorUid、responseMode"},
+			{Name: "profile-json", Usage: "digitalTagEmployeeProfile JSON 对象；独立档案 flag 会覆盖同名字段", Bind: "digitalTagEmployeeProfile", Trim: true, OmitEmpty: true, Format: "json", Transform: deapAgentProfileJSON, SchemaDescription: "数字员工档案 JSON；仅接收 employeeNo、positionName、directSupervisorUid、responseMode；独立档案参数优先"},
+			{Name: "employee-no", Usage: "数字员工工号（最多 64 个 Unicode 码点）", Bind: "digitalTagEmployeeProfile.employeeNo", Trim: true, OmitEmpty: true},
+			{Name: "position-name", Usage: "岗位名称（最多 128 个 Unicode 码点，发布前必填）", Bind: "digitalTagEmployeeProfile.positionName", Trim: true, OmitEmpty: true},
+			{Name: "supervisor-uid", Usage: "直属上级钉钉 uid", Bind: "digitalTagEmployeeProfile.directSupervisorUid", Trim: true, OmitEmpty: true},
+			{Name: "response-mode", Usage: "响应模式：mention_only 或 targeted_proactive（发布前必填）", Bind: "digitalTagEmployeeProfile.responseMode", Trim: true, OmitEmpty: true, Enum: []string{"mention_only", "targeted_proactive"}},
 		},
 		Safety: contract.SafetySpec{
 			Effect: "write", Risk: "medium",
@@ -85,8 +89,15 @@ func newDeapAgentCreateCommand() *cobra.Command {
 			if err := deapAgentMaxRunes(cmd, "name", 30); err != nil {
 				return err
 			}
-			return deapAgentMaxRunes(cmd, "description", 300)
+			if err := deapAgentMaxRunes(cmd, "description", 300); err != nil {
+				return err
+			}
+			if err := deapAgentMaxRunes(cmd, "employee-no", 64); err != nil {
+				return err
+			}
+			return deapAgentMaxRunes(cmd, "position-name", 128)
 		},
+		Call: deapAgentCallWithProfile,
 		Contract: LeafContract{
 			Identity: contract.ToolIdentitySpec{
 				ProductID: "dev", Name: "create_digital_employee",
@@ -101,10 +112,14 @@ func newDeapAgentCreateCommand() *cobra.Command {
 				AgentSummary: "创建新的草稿态 DEAP 数字员工",
 				UseWhen: []string{"需要从零创建数字员工并获得 assistantId 时"},
 				AvoidWhen: []string{"已有 agentUuid 只需修改草稿时使用 save-draft", "创建普通开放平台应用时使用 dev app create"},
-				Examples: []string{`dws dev deap-agent create --name "值班助手" --description "处理值班问题" --org-code dept-1 --org-name "值班组" --dry-run --format json`},
+				Examples: []string{`dws dev deap-agent create --name "值班助手" --description "处理值班问题" --org-code dept-1 --org-name "值班组" --position-name "值班员" --response-mode mention_only --dry-run --format json`},
 			},
 			Parameters: []contract.ParamDecl{
 				{Name: "profile-json", Property: "digitalTagEmployeeProfile", InterfaceType: "object"},
+				{Name: "employee-no", Property: "digitalTagEmployeeProfile.employeeNo"},
+				{Name: "position-name", Property: "digitalTagEmployeeProfile.positionName"},
+				{Name: "supervisor-uid", Property: "digitalTagEmployeeProfile.directSupervisorUid"},
+				{Name: "response-mode", Property: "digitalTagEmployeeProfile.responseMode"},
 			},
 		},
 	})
@@ -197,7 +212,7 @@ func newDeapAgentSaveDraftCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use:   "save-draft",
 		Short: "全量覆写数字员工草稿",
-		Long:  "高风险全量覆写：save-draft 会整体替换 draft JSON，未传字段会被清空。增量修改必须先执行 detail，保留全部需要的字段后再整体回写；请先 --dry-run 检查参数，再经用户确认加 --yes。",
+		Long:  "高风险全量覆写：save-draft 会整体替换 draft JSON，未传字段会被清空。档案字段可用独立 flag 或 profile-json 提供；同时提供时独立 flag 覆盖 JSON 同名字段。增量修改必须先执行 detail，保留全部需要的字段后再整体回写；请先 --dry-run 检查参数，再经用户确认加 --yes。",
 		Tool:  deapAgentSaveDraftTool,
 		Server: deapAgentServerID,
 		PostMount: deapAgentNoArgs,
@@ -209,7 +224,11 @@ func newDeapAgentSaveDraftCommand() *cobra.Command {
 			{Name: "org-code", Usage: "归属部门编码", Bind: "orgCode", Trim: true, OmitEmpty: true},
 			{Name: "org-name", Usage: "归属部门名称", Bind: "orgName", Trim: true, OmitEmpty: true},
 			{Name: "prompt", Usage: "人设/System Prompt（最多 5000 个 Unicode 码点）", Bind: "prompt", Trim: true, OmitEmpty: true},
-			{Name: "profile-json", Usage: "digitalTagEmployeeProfile JSON 对象", Bind: "digitalTagEmployeeProfile", Trim: true, OmitEmpty: true, Format: "json", Transform: deapAgentProfileJSON},
+			{Name: "profile-json", Usage: "digitalTagEmployeeProfile JSON 对象；独立档案 flag 会覆盖同名字段", Bind: "digitalTagEmployeeProfile", Trim: true, OmitEmpty: true, Format: "json", Transform: deapAgentProfileJSON},
+			{Name: "employee-no", Usage: "数字员工工号（最多 64 个 Unicode 码点）", Bind: "digitalTagEmployeeProfile.employeeNo", Trim: true, OmitEmpty: true},
+			{Name: "position-name", Usage: "岗位名称（最多 128 个 Unicode 码点，发布前必填）", Bind: "digitalTagEmployeeProfile.positionName", Trim: true, OmitEmpty: true},
+			{Name: "supervisor-uid", Usage: "直属上级钉钉 uid", Bind: "digitalTagEmployeeProfile.directSupervisorUid", Trim: true, OmitEmpty: true},
+			{Name: "response-mode", Usage: "响应模式：mention_only 或 targeted_proactive（发布前必填）", Bind: "digitalTagEmployeeProfile.responseMode", Trim: true, OmitEmpty: true, Enum: []string{"mention_only", "targeted_proactive"}},
 		},
 		Safety: contract.SafetySpec{
 			Effect: "write", Risk: "high",
@@ -222,8 +241,15 @@ func newDeapAgentSaveDraftCommand() *cobra.Command {
 			if err := deapAgentMaxRunes(cmd, "description", 300); err != nil {
 				return err
 			}
-			return deapAgentMaxRunes(cmd, "prompt", 5000)
+			if err := deapAgentMaxRunes(cmd, "prompt", 5000); err != nil {
+				return err
+			}
+			if err := deapAgentMaxRunes(cmd, "employee-no", 64); err != nil {
+				return err
+			}
+			return deapAgentMaxRunes(cmd, "position-name", 128)
 		},
+		Call: deapAgentCallWithProfile,
 		Contract: LeafContract{
 			Identity: contract.ToolIdentitySpec{
 				ProductID: "dev", Name: "update_digital_employee_draft",
@@ -242,6 +268,10 @@ func newDeapAgentSaveDraftCommand() *cobra.Command {
 			},
 			Parameters: []contract.ParamDecl{
 				{Name: "profile-json", Property: "digitalTagEmployeeProfile", InterfaceType: "object"},
+				{Name: "employee-no", Property: "digitalTagEmployeeProfile.employeeNo"},
+				{Name: "position-name", Property: "digitalTagEmployeeProfile.positionName"},
+				{Name: "supervisor-uid", Property: "digitalTagEmployeeProfile.directSupervisorUid"},
+				{Name: "response-mode", Property: "digitalTagEmployeeProfile.responseMode"},
 			},
 		},
 	})
@@ -461,6 +491,34 @@ func newDeapAgentTraceCommand() *cobra.Command {
 			},
 		},
 	})
+}
+
+func deapAgentCallWithProfile(_ *cobra.Command, tool string, args map[string]any) error {
+	profileValue, profileProvided := args["digitalTagEmployeeProfile"]
+	profile := map[string]any{}
+	if existing, ok := profileValue.(map[string]any); ok {
+		for key, value := range existing {
+			profile[key] = value
+		}
+	}
+	for _, field := range []struct {
+		argument string
+		property string
+	}{
+		{"digitalTagEmployeeProfile.employeeNo", "employeeNo"},
+		{"digitalTagEmployeeProfile.positionName", "positionName"},
+		{"digitalTagEmployeeProfile.directSupervisorUid", "directSupervisorUid"},
+		{"digitalTagEmployeeProfile.responseMode", "responseMode"},
+	} {
+		if value, ok := args[field.argument]; ok {
+			profile[field.property] = value
+			delete(args, field.argument)
+		}
+	}
+	if profileProvided || len(profile) > 0 {
+		args["digitalTagEmployeeProfile"] = profile
+	}
+	return callMCPToolOnServer(deapAgentServerID, tool, args)
 }
 
 func deapAgentMCPInterface(tool string) *contract.InterfaceSpec {

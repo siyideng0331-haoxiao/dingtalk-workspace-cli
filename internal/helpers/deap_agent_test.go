@@ -94,13 +94,17 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 			flags: map[string]string{
 				"name": "值班助手", "description": "处理值班问题",
 				"org-code": "dept-1", "org-name": "值班组",
-				"profile-json": `{"positionName":"值班员","responseMode":"mention_only"}`,
+				"profile-json":   `{"employeeNo":"JSON-001","positionName":"值班员"}`,
+				"employee-no":    "E001",
+				"supervisor-uid": "supervisor-1",
+				"response-mode":  "mention_only",
 			},
 			wantArgs: map[string]any{
 				"name": "值班助手", "description": "处理值班问题",
 				"orgCode": "dept-1", "orgName": "值班组",
 				"digitalTagEmployeeProfile": map[string]any{
-					"positionName": "值班员", "responseMode": "mention_only",
+					"employeeNo": "E001", "positionName": "值班员",
+					"directSupervisorUid": "supervisor-1", "responseMode": "mention_only",
 				},
 			},
 		},
@@ -118,7 +122,8 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 			leaf: "save-draft", tool: "update_digital_employee_draft", confirmed: true,
 			flags: map[string]string{
 				"agent-uuid": "agent-1", "name": "新名称", "prompt": "你是值班助手",
-				"profile-json": `{"employeeNo":"E001","positionName":"值班员","responseMode":"targeted_proactive"}`,
+				"profile-json":  `{"employeeNo":"E001","positionName":"旧岗位","responseMode":"mention_only"}`,
+				"position-name": "值班员", "response-mode": "targeted_proactive",
 			},
 			wantArgs: map[string]any{
 				"agentUuid": "agent-1", "name": "新名称", "prompt": "你是值班助手",
@@ -215,6 +220,16 @@ func TestDevDeapAgentConstraintsFailBeforeMCP(t *testing.T) {
 			"name": "值班助手", "description": "处理值班问题", "org-code": "dept-1", "org-name": "值班组",
 			"profile-json": `{"tag":"forbidden"}`,
 		}, wantErr: "不接受字段"},
+		{leaf: "create", flags: map[string]string{
+			"name": "值班助手", "description": "处理值班问题", "org-code": "dept-1", "org-name": "值班组",
+			"response-mode": "always_reply",
+		}, wantErr: "--response-mode"},
+		{leaf: "save-draft", flags: map[string]string{
+			"agent-uuid": "agent-1", "employee-no": strings.Repeat("E", 65),
+		}, wantErr: "最多允许 64"},
+		{leaf: "save-draft", flags: map[string]string{
+			"agent-uuid": "agent-1", "position-name": strings.Repeat("岗", 129),
+		}, wantErr: "最多允许 128"},
 		{leaf: "save-draft", flags: map[string]string{
 			"agent-uuid": "agent-1", "prompt": strings.Repeat("提", 5001),
 		}, wantErr: "最多允许 5000"},

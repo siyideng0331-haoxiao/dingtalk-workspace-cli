@@ -19,6 +19,10 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 			map[string]string{
 				"name": "name", "description": "description", "org-code": "orgCode", "org-name": "orgName",
 				"icon": "icon", "profile-json": "digitalTagEmployeeProfile",
+				"employee-no": "digitalTagEmployeeProfile.employeeNo",
+				"position-name": "digitalTagEmployeeProfile.positionName",
+				"supervisor-uid": "digitalTagEmployeeProfile.directSupervisorUid",
+				"response-mode": "digitalTagEmployeeProfile.responseMode",
 			},
 		},
 		"dev.get_digital_employee_detail": {
@@ -34,6 +38,10 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 			map[string]string{
 				"agent-uuid": "agentUuid", "name": "name", "description": "description", "org-code": "orgCode",
 				"org-name": "orgName", "icon": "icon", "prompt": "prompt", "profile-json": "digitalTagEmployeeProfile",
+				"employee-no": "digitalTagEmployeeProfile.employeeNo",
+				"position-name": "digitalTagEmployeeProfile.positionName",
+				"supervisor-uid": "digitalTagEmployeeProfile.directSupervisorUid",
+				"response-mode": "digitalTagEmployeeProfile.responseMode",
 			},
 		},
 		"dev.publish_digital_employee": {
