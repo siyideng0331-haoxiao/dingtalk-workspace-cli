@@ -7,8 +7,6 @@ DEAP 平台数字员工的管理与观测，命令前缀 `dws deap`。按形态�
 | 管理态：创建 / 详情 / 列表 / 草稿覆写 / 发布 / 删除 | `dws deap manage` | 含高影响写与不可逆删除，需用户确认 | [`manage.md`](./manage.md) |
 | 观测态：执行状态 / 执行 trace | `dws deap observe` | 全部只读；trace 含完整对话内容 | [`observe.md`](./observe.md) |
 
-> **不要与 `dws dev` 混淆**：那是开放平台应用（agentId / clientId / 机器人配置 / 版本发布），与 DEAP 是两个不同产品。DEAP 曾短暂挂在 `dws dev deap-agent` 下，现已独立到顶级 `dws deap`。
-
 ## 意图路由
 
 | 用户说 | 命令 |

@@ -46,7 +46,7 @@ metadata:
 - 各产品之间跨产品协作若指向本包内的其它产品，已在对应 `references/<product>.md` 里写成"见本包 references/X.md"，无需切换 skill；若指向 top10 独立产品（如 `chat`/`aisearch`/`doc`），仍按 `dingtalk-<product>` 切换 skill。
 - `scripts/` 下 yida / finance / `aiapp_create_and_poll.py` 等见 [unsupported-scripts.md](references/unsupported-scripts.md)；默认不要当正式能力调用。
 - 开放平台应用的命令组细文档在 [references/dev/](references/dev/)；命中后先读 [devapp.md](references/devapp.md)，再按需加载对应子文件。
-- DEAP 数字员工的细文档在 [references/deap/](references/deap/)；命中后先读 [deap-index.md](references/deap/deap-index.md)，再按形态加载 [manage.md](references/deap/manage.md)（生命周期）或 [observe.md](references/deap/observe.md)（执行观测）。它用自己的顶级前缀 `dws deap`，**与开放平台应用（`dws dev`）是两个不同产品**，不要因名字都带“开发”而互相路由错。
+- DEAP 数字员工的细文档在 [references/deap/](references/deap/)；命中后先读 [deap-index.md](references/deap/deap-index.md)，再按形态加载 [manage.md](references/deap/manage.md)（生命周期）或 [observe.md](references/deap/observe.md)（执行观测）。
 - 查询、同意、拒绝、转交或撤销审批走 [oa.md](references/oa.md)；要求未来审批任务或实例发生变化时实时通知，切换独立的 [`dingtalk-event`](../dingtalk-event/SKILL.md)。开放平台应用事件配置仍属于 DevApp，按 [dev/event.md](references/dev/event.md) 执行，不要与个人实时事件混淆。
 - 原生 `.md` 与在线富文本 `adoc`、通用文件存储的边界见 [markdown.md](references/markdown.md)；跨组织 / profile 规则见 [profile.md](references/profile.md)。
 - PAT 行为授权不是开放平台应用权限；后者见 [devapp.md](references/devapp.md)。

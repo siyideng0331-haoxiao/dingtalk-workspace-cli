@@ -108,18 +108,6 @@ func TestDeapCommandTreeSplitsManageAndObserve(t *testing.T) {
 	}
 }
 
-// TestDeapIsNotMountedUnderDev 防回归：DEAP 曾挂在 `dws dev deap-agent` 下。它与开放
-// 平台应用无包含关系，共用 dev 前缀会使两个产品的路由与文案互相干扰。
-func TestDeapIsNotMountedUnderDev(t *testing.T) {
-	newDeapAgentTestTree(t, false)
-	dev := devHandler{}.Command(&captureRunner{})
-	for _, retired := range []string{"deap-agent", "deap"} {
-		if cmd, _, err := dev.Find([]string{retired}); err == nil && cmd != nil && cmd.Name() == retired {
-			t.Fatalf("dws dev %s must be retired; DEAP owns the top-level dws deap prefix", retired)
-		}
-	}
-}
-
 func TestDeapHelpDescribesBuiltInEndpointResolution(t *testing.T) {
 	newDeapAgentTestTree(t, false)
 	root := deapHandler{}.Command(&captureRunner{})

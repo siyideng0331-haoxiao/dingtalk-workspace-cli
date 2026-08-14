@@ -19,8 +19,7 @@ import (
 const (
 	deapAgentServerID = "deap-dev"
 
-	// deapProductID 是 DEAP 自己的产品标识。DEAP 是独立平台而不是开放平台应用的一部分，
-	// 因此不再沿用 dev；契约要求 CanonicalPath 严格等于 <ProductID>.<Name>。
+	// deapProductID 是 DEAP 的产品标识；契约要求 CanonicalPath 严格等于 <ProductID>.<Name>。
 	deapProductID = "deap"
 
 	deapAgentCreateTool    = "create_digital_employee"
@@ -55,9 +54,8 @@ func init() {
 //	deap manage    数字员工生命周期（创建 / 详情 / 列表 / 草稿 / 发布 / 删除）
 //	deap observe   执行观测（执行状态 / 执行 trace）
 //
-// 为何从 `dws dev` 下提到顶级：DEAP 是独立平台，与开放平台应用（agentId / clientId /
-// 机器人配置）无包含关系；共用 dev 前缀会让两边的语义与路由互相干扰。后续 DEAP
-// 其它能力作为新子组平级挂在本组下，而不是新开顶级命令。
+// 两个子组的安全属性不同：管理态含不可逆写，观测态全是只读。后续 DEAP 其它能力
+// 作为新子组平级挂在本组下，而不是新开顶级命令。
 type deapHandler struct{}
 
 func (deapHandler) Name() string {
