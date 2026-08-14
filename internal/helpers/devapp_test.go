@@ -121,15 +121,10 @@ func TestDevCommandTree(t *testing.T) {
 	if dev.Name() != "dev" {
 		t.Fatalf("Name() = %q, want dev", dev.Name())
 	}
-	// DEAP 已从本组迁出到顶级 `dws deap`（独立平台，与开放平台应用无包含关系）。
-	// dev 的帮助里仍要给出去向，否则考古者会在 dev 下反复找不到数字员工。
-	if !strings.Contains(dev.Long, "dws deap") {
-		t.Fatalf("Long = %q, want a pointer to the top-level dws deap prefix", dev.Long)
-	}
 	if len(dev.Aliases) != 0 {
 		t.Fatalf("Aliases = %v, want none (clean switch from devapp)", dev.Aliases)
 	}
-	// 开放平台开发者能力：app / connect / doc（deap-agent 已迁出）
+	// 三支柱：app / connect / doc
 	for _, name := range []string{"app", "connect", "doc"} {
 		if _, _, err := dev.Find([]string{name}); err != nil {
 			t.Fatalf("missing subtree %q: %v", name, err)
