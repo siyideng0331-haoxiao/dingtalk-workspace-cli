@@ -14,50 +14,50 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 		confirmation string
 		parameters   map[string]string
 	}{
-		"dev.create_digital_employee": {
-			"dev deap-agent create", "create_digital_employee", "write", "medium", "not_required",
+		"deap.create_digital_employee": {
+			"deap manage create", "create_digital_employee", "write", "medium", "not_required",
 			map[string]string{
 				"name": "name", "description": "description", "dept-id": "deptId", "dept-name": "deptName",
 				"icon": "icon", "profile-json": "digitalTagEmployeeProfile",
-				"employee-no": "digitalTagEmployeeProfile.employeeNo",
-				"position-name": "digitalTagEmployeeProfile.positionName",
+				"employee-no":    "digitalTagEmployeeProfile.employeeNo",
+				"position-name":  "digitalTagEmployeeProfile.positionName",
 				"supervisor-uid": "digitalTagEmployeeProfile.directSupervisorUid",
-				"response-mode": "digitalTagEmployeeProfile.responseMode",
+				"response-mode":  "digitalTagEmployeeProfile.responseMode",
 			},
 		},
-		"dev.get_digital_employee_detail": {
-			"dev deap-agent detail", "get_digital_employee_detail", "read", "low", "not_required",
+		"deap.get_digital_employee_detail": {
+			"deap manage detail", "get_digital_employee_detail", "read", "low", "not_required",
 			map[string]string{"assistant-id": "assistantId"},
 		},
-		"dev.list_digital_employees": {
-			"dev deap-agent list", "list_digital_employees", "read", "low", "not_required",
+		"deap.list_digital_employees": {
+			"deap manage list", "list_digital_employees", "read", "low", "not_required",
 			map[string]string{"keyword": "keyword", "page": "page", "page-size": "pageSize"},
 		},
-		"dev.update_digital_employee_draft": {
-			"dev deap-agent save-draft", "update_digital_employee_draft", "write", "high", "user_required",
+		"deap.update_digital_employee_draft": {
+			"deap manage save-draft", "update_digital_employee_draft", "write", "high", "user_required",
 			map[string]string{
 				"agent-uuid": "agentUuid", "name": "name", "description": "description", "dept-id": "deptId",
 				"dept-name": "deptName", "icon": "icon", "prompt": "prompt", "profile-json": "digitalTagEmployeeProfile",
-				"employee-no": "digitalTagEmployeeProfile.employeeNo",
-				"position-name": "digitalTagEmployeeProfile.positionName",
+				"employee-no":    "digitalTagEmployeeProfile.employeeNo",
+				"position-name":  "digitalTagEmployeeProfile.positionName",
 				"supervisor-uid": "digitalTagEmployeeProfile.directSupervisorUid",
-				"response-mode": "digitalTagEmployeeProfile.responseMode",
+				"response-mode":  "digitalTagEmployeeProfile.responseMode",
 			},
 		},
-		"dev.publish_digital_employee": {
-			"dev deap-agent publish", "publish_digital_employee", "write", "high", "user_required",
+		"deap.publish_digital_employee": {
+			"deap manage publish", "publish_digital_employee", "write", "high", "user_required",
 			map[string]string{"agent-uuid": "agentUuid", "allow-join-group": "allowJoinGroup"},
 		},
-		"dev.delete_digital_employee": {
-			"dev deap-agent delete", "delete_digital_employee", "destructive", "high", "user_required",
+		"deap.delete_digital_employee": {
+			"deap manage delete", "delete_digital_employee", "destructive", "high", "user_required",
 			map[string]string{"agent-uuid": "agentUuid"},
 		},
-		"dev.query_de_run_status": {
-			"dev deap-agent run-status", "query_de_run_status", "read", "low", "not_required",
+		"deap.query_de_run_status": {
+			"deap observe run-status", "query_de_run_status", "read", "low", "not_required",
 			map[string]string{"source-id": "sourceId", "source-type": "sourceType", "assistant-id": "assistantId"},
 		},
-		"dev.query_de_trace": {
-			"dev deap-agent trace", "query_de_trace", "read", "high", "not_required",
+		"deap.query_de_trace": {
+			"deap observe trace", "query_de_trace", "read", "high", "not_required",
 			map[string]string{"source-id": "sourceId", "source-type": "sourceType", "assistant-id": "assistantId"},
 		},
 	}

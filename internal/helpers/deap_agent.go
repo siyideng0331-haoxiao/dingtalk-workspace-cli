@@ -11,6 +11,7 @@ import (
 
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/corecmd/contract"
 	apperrors "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/errors"
+	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/executor"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/pkg/cmdutil"
 	"github.com/spf13/cobra"
 )
@@ -18,11 +19,15 @@ import (
 const (
 	deapAgentServerID = "deap-dev"
 
-	deapAgentCreateTool      = "create_digital_employee"
-	deapAgentDetailTool      = "get_digital_employee_detail"
-	deapAgentListTool        = "list_digital_employees"
-	deapAgentSaveDraftTool   = "update_digital_employee_draft"
-	deapAgentPublishTool     = "publish_digital_employee"
+	// deapProductID 是 DEAP 自己的产品标识。DEAP 是独立平台而不是开放平台应用的一部分，
+	// 因此不再沿用 dev；契约要求 CanonicalPath 严格等于 <ProductID>.<Name>。
+	deapProductID = "deap"
+
+	deapAgentCreateTool    = "create_digital_employee"
+	deapAgentDetailTool    = "get_digital_employee_detail"
+	deapAgentListTool      = "list_digital_employees"
+	deapAgentSaveDraftTool = "update_digital_employee_draft"
+	deapAgentPublishTool   = "publish_digital_employee"
 	deapAgentDeleteTool    = "delete_digital_employee"
 	deapAgentRunStatusTool = "query_de_run_status"
 	deapAgentTraceTool     = "query_de_trace"
@@ -39,11 +44,63 @@ var deapAgentDryRun = &contract.DryRunSpec{
 // 链路含义一致；trigger_rule 的 sourceId 是群感知规则 ID。
 var deapAgentSourceTypes = []string{"im_message", "trigger_rule"}
 
-func newDeapAgentCommand() *cobra.Command {
+func init() {
+	RegisterPublic(func() Handler {
+		return deapHandler{}
+	})
+}
+
+// deapHandler 挂载顶级命令 `dws deap`，按“管理态 / 观测态”分两个子组：
+//
+//	deap manage    数字员工生命周期（创建 / 详情 / 列表 / 草稿 / 发布 / 删除）
+//	deap observe   执行观测（执行状态 / 执行 trace）
+//
+// 为何从 `dws dev` 下提到顶级：DEAP 是独立平台，与开放平台应用（agentId / clientId /
+// 机器人配置）无包含关系；共用 dev 前缀会让两边的语义与路由互相干扰。后续 DEAP
+// 其它能力作为新子组平级挂在本组下，而不是新开顶级命令。
+type deapHandler struct{}
+
+func (deapHandler) Name() string {
+	return "deap"
+}
+
+func (deapHandler) Command(executor.Runner) *cobra.Command {
+	contract.RegisterProductDecl(contract.ProductDecl{
+		ID: deapProductID,
+		Selection: contract.ProductSelectionDecl{
+			AgentSummary: "管理与观测 DEAP 平台的数字员工",
+			UseWhen: []string{
+				"创建、修改、发布或删除 DEAP 数字员工",
+				"查数字员工某次执行的状态或完整模型链路",
+			},
+			AvoidWhen: []string{
+				"开放平台应用、机器人配置与版本发布用 dev；普通企业消息收发用 chat",
+			},
+		},
+	})
+	root := &cobra.Command{
+		Use:               "deap",
+		Short:             "DEAP 平台",
+		Long:              "DEAP 平台命令组，按形态分两个子组：管理态（manage）负责数字员工生命周期，观测态（observe）负责执行状态与 trace 查询。固定调用 MCP product/server deap-dev；identity.corpId/userId 由可信登录态注入且不对 CLI 暴露。端点跟随当前 MCP 环境自动选择规范网关；DINGTALK_DEAP_DEV_MCP_URL 仅用于本地调试覆盖。",
+		Args:              cobra.NoArgs,
+		TraverseChildren:  true,
+		DisableAutoGenTag: true,
+		RunE:              groupRunE,
+	}
+	cmdutil.MarkGroup(root)
+	root.AddCommand(
+		newDeapManageCommand(),
+		newDeapObserveCommand(),
+	)
+	return root
+}
+
+// newDeapManageCommand 管理态：全部是对数字员工配置本体的读写，含不可逆操作。
+func newDeapManageCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "deap-agent",
-		Short:             "管理和观测 DEAP 数字员工",
-		Long:              "DEAP 数字员工低频开发者命令组。固定调用 MCP product/server deap-dev；identity.corpId/userId 由可信登录态注入且不对 CLI 暴露。端点跟随当前 MCP 环境自动选择规范网关；DINGTALK_DEAP_DEV_MCP_URL 仅用于本地调试覆盖。",
+		Use:               "manage",
+		Short:             "数字员工生命周期管理",
+		Long:              "DEAP 数字员工的生命周期管理：创建草稿、查询详情与列表、全量覆写草稿、发布与删除。save-draft / publish / delete 均为高影响写操作，先 --dry-run 确认再加 --yes。",
 		Args:              cobra.NoArgs,
 		TraverseChildren:  true,
 		DisableAutoGenTag: true,
@@ -57,6 +114,23 @@ func newDeapAgentCommand() *cobra.Command {
 		newDeapAgentSaveDraftCommand(),
 		newDeapAgentPublishCommand(),
 		newDeapAgentDeleteCommand(),
+	)
+	return cmd
+}
+
+// newDeapObserveCommand 观测态：全部是只读，且均只按来源定位（不接 runId）。
+func newDeapObserveCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:               "observe",
+		Short:             "数字员工执行观测",
+		Long:              "DEAP 数字员工的执行观测：按来源反查执行状态（run-status）与完整模型链路（trace）。两个命令均只按 --source-id + --source-type 定位，不接 runId（调用方拿不到，runId 是出参）。",
+		Args:              cobra.NoArgs,
+		TraverseChildren:  true,
+		DisableAutoGenTag: true,
+		RunE:              groupRunE,
+	}
+	cmdutil.MarkGroup(cmd)
+	cmd.AddCommand(
 		newDeapAgentRunStatusCommand(),
 		newDeapAgentTraceCommand(),
 	)
@@ -65,11 +139,11 @@ func newDeapAgentCommand() *cobra.Command {
 
 func newDeapAgentCreateCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
-		Use:   "create",
-		Short: "创建草稿态数字员工",
-		Long:  "创建草稿态 DEAP 数字员工并返回生成的 assistantId。创建不会自动发布；创建成功后应补齐头像、岗位、响应模式和人设提示词，再调用发布工具。name 和 description 必填，identity 由 MCP 可信注入；员工档案可用独立 flag 或 profile-json 提供，同时提供时独立 flag 覆盖 JSON 同名字段。",
-		Tool:  deapAgentCreateTool,
-		Server: deapAgentServerID,
+		Use:       "create",
+		Short:     "创建草稿态数字员工",
+		Long:      "创建草稿态 DEAP 数字员工并返回生成的 assistantId。创建不会自动发布；创建成功后应补齐头像、岗位、响应模式和人设提示词，再调用发布工具。name 和 description 必填，identity 由 MCP 可信注入；员工档案可用独立 flag 或 profile-json 提供，同时提供时独立 flag 覆盖 JSON 同名字段。",
+		Tool:      deapAgentCreateTool,
+		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
 			{Name: "name", Usage: "数字员工名称，同组织内唯一（最多 30 个 Unicode 码点）", Bind: "name", Required: true, Trim: true},
@@ -102,19 +176,19 @@ func newDeapAgentCreateCommand() *cobra.Command {
 		Call: deapAgentCallWithProfile,
 		Contract: LeafContract{
 			Identity: contract.ToolIdentitySpec{
-				ProductID: "dev", Name: "create_digital_employee",
-				CanonicalPath: "dev.create_digital_employee",
-				CLIPath: "dev deap-agent create", PrimaryCLIPath: "dev deap-agent create",
-				Group: "deap-agent",
+				ProductID: deapProductID, Name: "create_digital_employee",
+				CanonicalPath: "deap.create_digital_employee",
+				CLIPath:       "deap manage create", PrimaryCLIPath: "deap manage create",
+				Group: "manage",
 			},
 			Description: "创建草稿态 DEAP 数字员工并返回生成的 assistantId。创建不会自动发布；创建成功后应补齐头像、岗位、响应模式和人设提示词，再调用发布工具。",
-			DryRun: deapAgentDryRun,
-			Interface: deapAgentMCPInterface(deapAgentCreateTool),
+			DryRun:      deapAgentDryRun,
+			Interface:   deapAgentMCPInterface(deapAgentCreateTool),
 			Selection: contract.SelectionSpec{
 				AgentSummary: "创建新的草稿态 DEAP 数字员工",
-				UseWhen: []string{"需要从零创建数字员工并获得 assistantId 时"},
-				AvoidWhen: []string{"已有 agentUuid 只需修改草稿时使用 save-draft", "创建普通开放平台应用时使用 dev app create"},
-				Examples: []string{`dws dev deap-agent create --name "值班助手" --description "处理值班问题" --dept-id dept-1 --dept-name "值班组" --position-name "值班员" --response-mode mention_only --dry-run --format json`},
+				UseWhen:      []string{"需要从零创建数字员工并获得 assistantId 时"},
+				AvoidWhen:    []string{"已有 agentUuid 只需修改草稿时使用 save-draft", "创建普通开放平台应用时使用 dev app create"},
+				Examples:     []string{`dws deap manage create --name "值班助手" --description "处理值班问题" --dept-id dept-1 --dept-name "值班组" --position-name "值班员" --response-mode mention_only --dry-run --format json`},
 			},
 			Parameters: []contract.ParamDecl{
 				{Name: "profile-json", Property: "digitalTagEmployeeProfile", InterfaceType: "object"},
@@ -129,11 +203,11 @@ func newDeapAgentCreateCommand() *cobra.Command {
 
 func newDeapAgentDetailCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
-		Use:   "detail",
-		Short: "查询数字员工管理态详情",
-		Long:  "查询指定 DEAP 数字员工的管理态元信息。仅有该数字员工管理权限的调用人可读；ID 不存在或不是数字员工时返回 NOT_FOUND。保存草稿前应先调用本工具读取当前配置。iconUrl 可能是带签名的临时地址，长期保存应使用 icon。",
-		Tool:  deapAgentDetailTool,
-		Server: deapAgentServerID,
+		Use:       "detail",
+		Short:     "查询数字员工管理态详情",
+		Long:      "查询指定 DEAP 数字员工的管理态元信息。仅有该数字员工管理权限的调用人可读；ID 不存在或不是数字员工时返回 NOT_FOUND。保存草稿前应先调用本工具读取当前配置。iconUrl 可能是带签名的临时地址，长期保存应使用 icon。",
+		Tool:      deapAgentDetailTool,
+		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
 			{Name: "assistant-id", Usage: "数字员工 ID", Bind: "assistantId", Required: true, Trim: true},
@@ -144,19 +218,19 @@ func newDeapAgentDetailCommand() *cobra.Command {
 		},
 		Contract: LeafContract{
 			Identity: contract.ToolIdentitySpec{
-				ProductID: "dev", Name: "get_digital_employee_detail",
-				CanonicalPath: "dev.get_digital_employee_detail",
-				CLIPath: "dev deap-agent detail", PrimaryCLIPath: "dev deap-agent detail",
-				Group: "deap-agent",
+				ProductID: deapProductID, Name: "get_digital_employee_detail",
+				CanonicalPath: "deap.get_digital_employee_detail",
+				CLIPath:       "deap manage detail", PrimaryCLIPath: "deap manage detail",
+				Group: "manage",
 			},
 			Description: "查询指定 DEAP 数字员工的管理态元信息。仅有该数字员工管理权限的调用人可读；ID 不存在或不是数字员工时返回 NOT_FOUND。保存草稿前应先调用本工具读取当前配置。",
-			DryRun: deapAgentDryRun,
-			Interface: deapAgentMCPInterface(deapAgentDetailTool),
+			DryRun:      deapAgentDryRun,
+			Interface:   deapAgentMCPInterface(deapAgentDetailTool),
 			Selection: contract.SelectionSpec{
 				AgentSummary: "按 assistantId 查询数字员工管理态详情",
-				UseWhen: []string{"需要读取数字员工完整配置、发布前检查或保存草稿前回读时"},
-				AvoidWhen: []string{"需要分页查找多个数字员工时使用 list", "只查一次运行状态时使用 run-status"},
-				Examples: []string{"dws dev deap-agent detail --assistant-id <assistantId> --format json"},
+				UseWhen:      []string{"需要读取数字员工完整配置、发布前检查或保存草稿前回读时"},
+				AvoidWhen:    []string{"需要分页查找多个数字员工时使用 list", "只查一次运行状态时使用 run-status"},
+				Examples:     []string{"dws deap manage detail --assistant-id <assistantId> --format json"},
 			},
 		},
 	})
@@ -164,11 +238,11 @@ func newDeapAgentDetailCommand() *cobra.Command {
 
 func newDeapAgentListCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
-		Use:   "list",
-		Short: "分页查询数字员工",
-		Long:  "分页查询当前身份有权查看的数字员工。管理员可看本组织全部，非管理员只返回本人参与的数字员工；支持按名称、岗位或工号模糊搜索。page 和 page-size 必须大于等于 1。",
-		Tool:  deapAgentListTool,
-		Server: deapAgentServerID,
+		Use:       "list",
+		Short:     "分页查询数字员工",
+		Long:      "分页查询当前身份有权查看的数字员工。管理员可看本组织全部，非管理员只返回本人参与的数字员工；支持按名称、岗位或工号模糊搜索。page 和 page-size 必须大于等于 1。",
+		Tool:      deapAgentListTool,
+		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
 			{Name: "keyword", Usage: "按名称、岗位或工号模糊匹配", Bind: "keyword", Trim: true, OmitEmpty: true},
@@ -192,19 +266,19 @@ func newDeapAgentListCommand() *cobra.Command {
 		},
 		Contract: LeafContract{
 			Identity: contract.ToolIdentitySpec{
-				ProductID: "dev", Name: "list_digital_employees",
-				CanonicalPath: "dev.list_digital_employees",
-				CLIPath: "dev deap-agent list", PrimaryCLIPath: "dev deap-agent list",
-				Group: "deap-agent",
+				ProductID: deapProductID, Name: "list_digital_employees",
+				CanonicalPath: "deap.list_digital_employees",
+				CLIPath:       "deap manage list", PrimaryCLIPath: "deap manage list",
+				Group: "manage",
 			},
 			Description: "分页查询当前身份有权查看的 DEAP 数字员工。管理员可查看本组织全部，非管理员只返回自己参与的数字员工；支持按名称、岗位或工号模糊搜索。",
-			DryRun: deapAgentDryRun,
-			Interface: deapAgentMCPInterface(deapAgentListTool),
+			DryRun:      deapAgentDryRun,
+			Interface:   deapAgentMCPInterface(deapAgentListTool),
 			Selection: contract.SelectionSpec{
 				AgentSummary: "分页查找当前用户可管理或参与的数字员工",
-				UseWhen: []string{"需要按名称、岗位或工号查找数字员工，或尚不知道 agentUuid 时"},
-				AvoidWhen: []string{"已知 agentUuid 需要完整配置时使用 detail", "需要查询运行记录时使用 run-status"},
-				Examples: []string{`dws dev deap-agent list --keyword "值班" --page 1 --page-size 20 --format json`},
+				UseWhen:      []string{"需要按名称、岗位或工号查找数字员工，或尚不知道 agentUuid 时"},
+				AvoidWhen:    []string{"已知 agentUuid 需要完整配置时使用 detail", "需要查询运行记录时使用 run-status"},
+				Examples:     []string{`dws deap manage list --keyword "值班" --page 1 --page-size 20 --format json`},
 			},
 		},
 	})
@@ -212,11 +286,11 @@ func newDeapAgentListCommand() *cobra.Command {
 
 func newDeapAgentSaveDraftCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
-		Use:   "save-draft",
-		Short: "全量覆写数字员工草稿",
-		Long:  "全量覆写指定数字员工的草稿但不发布。未传字段会被清空；增量修改前必须先查询 detail、保留全部仍需配置的字段，再整体提交。档案字段可用独立 flag 或 profile-json 提供，同时提供时独立 flag 覆盖 JSON 同名字段。请先 --dry-run 检查参数，再经用户确认加 --yes。",
-		Tool:  deapAgentSaveDraftTool,
-		Server: deapAgentServerID,
+		Use:       "save-draft",
+		Short:     "全量覆写数字员工草稿",
+		Long:      "全量覆写指定数字员工的草稿但不发布。未传字段会被清空；增量修改前必须先查询 detail、保留全部仍需配置的字段，再整体提交。档案字段可用独立 flag 或 profile-json 提供，同时提供时独立 flag 覆盖 JSON 同名字段。请先 --dry-run 检查参数，再经用户确认加 --yes。",
+		Tool:      deapAgentSaveDraftTool,
+		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
 			{Name: "agent-uuid", Usage: "数字员工 ID", Bind: "agentUuid", Required: true, Trim: true},
@@ -254,19 +328,19 @@ func newDeapAgentSaveDraftCommand() *cobra.Command {
 		Call: deapAgentCallWithProfile,
 		Contract: LeafContract{
 			Identity: contract.ToolIdentitySpec{
-				ProductID: "dev", Name: "update_digital_employee_draft",
-				CanonicalPath: "dev.update_digital_employee_draft",
-				CLIPath: "dev deap-agent save-draft", PrimaryCLIPath: "dev deap-agent save-draft",
-				Group: "deap-agent",
+				ProductID: deapProductID, Name: "update_digital_employee_draft",
+				CanonicalPath: "deap.update_digital_employee_draft",
+				CLIPath:       "deap manage save-draft", PrimaryCLIPath: "deap manage save-draft",
+				Group: "manage",
 			},
 			Description: "全量覆写指定数字员工的草稿但不发布。未传字段会被清空；增量修改前必须先查询详情、保留全部仍需配置的字段，再整体提交。",
-			DryRun: deapAgentDryRun,
-			Interface: deapAgentMCPInterface(deapAgentSaveDraftTool),
+			DryRun:      deapAgentDryRun,
+			Interface:   deapAgentMCPInterface(deapAgentSaveDraftTool),
 			Selection: contract.SelectionSpec{
 				AgentSummary: "全量覆写数字员工草稿配置",
-				UseWhen: []string{"已先读取完整详情、明确保留字段，并需要保存尚未发布的数字员工草稿时"},
-				AvoidWhen: []string{"只改单字段但尚未 detail 回读全量时不要执行", "准备直接上线时仍需另行执行 publish"},
-				Examples: []string{`dws dev deap-agent save-draft --agent-uuid <agentUuid> --name "值班助手" --description "处理值班问题" --dry-run --format json`},
+				UseWhen:      []string{"已先读取完整详情、明确保留字段，并需要保存尚未发布的数字员工草稿时"},
+				AvoidWhen:    []string{"只改单字段但尚未 detail 回读全量时不要执行", "准备直接上线时仍需另行执行 publish"},
+				Examples:     []string{`dws deap manage save-draft --agent-uuid <agentUuid> --name "值班助手" --description "处理值班问题" --dry-run --format json`},
 			},
 			Parameters: []contract.ParamDecl{
 				{Name: "profile-json", Property: "digitalTagEmployeeProfile", InterfaceType: "object"},
@@ -281,11 +355,11 @@ func newDeapAgentSaveDraftCommand() *cobra.Command {
 
 func newDeapAgentPublishCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
-		Use:   "publish",
-		Short: "发布数字员工",
-		Long:  "发布指定数字员工当前已保存的草稿。发布不携带配置；名称、头像、描述、组织、岗位、响应模式或人设缺失时返回 INVALID_PARAM。这是高影响操作，真实执行前必须确认。",
-		Tool:  deapAgentPublishTool,
-		Server: deapAgentServerID,
+		Use:       "publish",
+		Short:     "发布数字员工",
+		Long:      "发布指定数字员工当前已保存的草稿。发布不携带配置；名称、头像、描述、组织、岗位、响应模式或人设缺失时返回 INVALID_PARAM。这是高影响操作，真实执行前必须确认。",
+		Tool:      deapAgentPublishTool,
+		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
 			{Name: "agent-uuid", Usage: "数字员工 ID", Bind: "agentUuid", Required: true, Trim: true},
@@ -297,19 +371,19 @@ func newDeapAgentPublishCommand() *cobra.Command {
 		},
 		Contract: LeafContract{
 			Identity: contract.ToolIdentitySpec{
-				ProductID: "dev", Name: "publish_digital_employee",
-				CanonicalPath: "dev.publish_digital_employee",
-				CLIPath: "dev deap-agent publish", PrimaryCLIPath: "dev deap-agent publish",
-				Group: "deap-agent",
+				ProductID: deapProductID, Name: "publish_digital_employee",
+				CanonicalPath: "deap.publish_digital_employee",
+				CLIPath:       "deap manage publish", PrimaryCLIPath: "deap manage publish",
+				Group: "manage",
 			},
 			Description: "发布指定数字员工当前已保存的草稿。发布不携带配置；名称、头像、描述、组织、岗位、响应模式或人设缺失时返回 INVALID_PARAM。",
-			DryRun: deapAgentDryRun,
-			Interface: deapAgentMCPInterface(deapAgentPublishTool),
+			DryRun:      deapAgentDryRun,
+			Interface:   deapAgentMCPInterface(deapAgentPublishTool),
 			Selection: contract.SelectionSpec{
 				AgentSummary: "校验并发布数字员工，使草稿配置进入线上生效流程",
-				UseWhen: []string{"草稿配置已完成并经用户明确确认，需要发布到钉钉时"},
-				AvoidWhen: []string{"只需保存未发布草稿时使用 save-draft", "发布必填配置不完整时先 detail 检查并补齐"},
-				Examples: []string{"dws dev deap-agent publish --agent-uuid <agentUuid> --dry-run --format json"},
+				UseWhen:      []string{"草稿配置已完成并经用户明确确认，需要发布到钉钉时"},
+				AvoidWhen:    []string{"只需保存未发布草稿时使用 save-draft", "发布必填配置不完整时先 detail 检查并补齐"},
+				Examples:     []string{"dws deap manage publish --agent-uuid <agentUuid> --dry-run --format json"},
 			},
 		},
 	})
@@ -317,11 +391,11 @@ func newDeapAgentPublishCommand() *cobra.Command {
 
 func newDeapAgentDeleteCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
-		Use:   "delete",
-		Short: "删除数字员工",
-		Long:  "删除指定 DEAP 数字员工。该操作不可逆且可能包含跨系统副作用；失败时不要盲目重试，应先查询确认数字员工是否仍存在。真实执行前必须确认。",
-		Tool:  deapAgentDeleteTool,
-		Server: deapAgentServerID,
+		Use:       "delete",
+		Short:     "删除数字员工",
+		Long:      "删除指定 DEAP 数字员工。该操作不可逆且可能包含跨系统副作用；失败时不要盲目重试，应先查询确认数字员工是否仍存在。真实执行前必须确认。",
+		Tool:      deapAgentDeleteTool,
+		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
 			{Name: "agent-uuid", Usage: "数字员工 ID", Bind: "agentUuid", Required: true, Trim: true},
@@ -332,19 +406,19 @@ func newDeapAgentDeleteCommand() *cobra.Command {
 		},
 		Contract: LeafContract{
 			Identity: contract.ToolIdentitySpec{
-				ProductID: "dev", Name: "delete_digital_employee",
-				CanonicalPath: "dev.delete_digital_employee",
-				CLIPath: "dev deap-agent delete", PrimaryCLIPath: "dev deap-agent delete",
-				Group: "deap-agent",
+				ProductID: deapProductID, Name: "delete_digital_employee",
+				CanonicalPath: "deap.delete_digital_employee",
+				CLIPath:       "deap manage delete", PrimaryCLIPath: "deap manage delete",
+				Group: "manage",
 			},
 			Description: "删除指定 DEAP 数字员工。该操作不可逆且可能包含跨系统副作用；失败时不要盲目重试，应先查询确认数字员工是否仍存在。",
-			DryRun: deapAgentDryRun,
-			Interface: deapAgentMCPInterface(deapAgentDeleteTool),
+			DryRun:      deapAgentDryRun,
+			Interface:   deapAgentMCPInterface(deapAgentDeleteTool),
 			Selection: contract.SelectionSpec{
 				AgentSummary: "永久删除指定数字员工",
-				UseWhen: []string{"用户明确要求删除数字员工，并已确认 agentUuid 与不可逆影响时"},
-				AvoidWhen: []string{"只需停止发布或暂时修改配置时不要删除", "未确认目标与影响范围时不要执行"},
-				Examples: []string{"dws dev deap-agent delete --agent-uuid <agentUuid> --dry-run --format json"},
+				UseWhen:      []string{"用户明确要求删除数字员工，并已确认 agentUuid 与不可逆影响时"},
+				AvoidWhen:    []string{"只需停止发布或暂时修改配置时不要删除", "未确认目标与影响范围时不要执行"},
+				Examples:     []string{"dws deap manage delete --agent-uuid <agentUuid> --dry-run --format json"},
 			},
 		},
 	})
@@ -355,11 +429,11 @@ func newDeapAgentDeleteCommand() *cobra.Command {
 // runId 作为出参返回，供人工去 SLS / Langfuse 控制台比对。
 func newDeapAgentRunStatusCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
-		Use:   "run-status",
-		Short: "查询数字员工执行状态",
-		Long:  "查询指定数字员工的执行状态。--assistant-id、--source-id、--source-type 均必填，按来源反查本次执行。返回 result（1 成功 / -1 失败 / 0 运行中 / 2 中止）、runId 与 messageId。trigger_rule 的来源 ID 可能对应多次执行，只返回最新一次。",
-		Tool:  deapAgentRunStatusTool,
-		Server: deapAgentServerID,
+		Use:       "run-status",
+		Short:     "查询数字员工执行状态",
+		Long:      "查询指定数字员工的执行状态。--assistant-id、--source-id、--source-type 均必填，按来源反查本次执行。返回 result（1 成功 / -1 失败 / 0 运行中 / 2 中止）、runId 与 messageId。trigger_rule 的来源 ID 可能对应多次执行，只返回最新一次。",
+		Tool:      deapAgentRunStatusTool,
+		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
 			{Name: "assistant-id", Usage: "数字员工唯一标识", Bind: "assistantId", Required: true, Trim: true},
@@ -372,24 +446,24 @@ func newDeapAgentRunStatusCommand() *cobra.Command {
 		},
 		Contract: LeafContract{
 			Identity: contract.ToolIdentitySpec{
-				ProductID: "dev", Name: "query_de_run_status",
-				CanonicalPath: "dev.query_de_run_status",
-				CLIPath: "dev deap-agent run-status", PrimaryCLIPath: "dev deap-agent run-status",
-				Group: "deap-agent",
+				ProductID: deapProductID, Name: "query_de_run_status",
+				CanonicalPath: "deap.query_de_run_status",
+				CLIPath:       "deap observe run-status", PrimaryCLIPath: "deap observe run-status",
+				Group: "observe",
 			},
 			Description: "数字员工执行状态查询。assistantId、sourceId、sourceType 均必填，按来源反查本次执行。",
-			DryRun: deapAgentDryRun,
-			Interface: deapAgentMCPInterface(deapAgentRunStatusTool),
+			DryRun:      deapAgentDryRun,
+			Interface:   deapAgentMCPInterface(deapAgentRunStatusTool),
 			Selection: contract.SelectionSpec{
 				AgentSummary: "按来源 ID 查数字员工单次执行状态",
-				UseWhen: []string{"持有钉钉开放态消息 ID 或群感知规则 ID，需要判断执行结果时"},
+				UseWhen:      []string{"持有钉钉开放态消息 ID 或群感知规则 ID，需要判断执行结果时"},
 				AvoidWhen: []string{
 					"需要完整模型链路时使用 trace",
 					"手上只有 DWS openTaskId 时先查发送状态换成 openMessageId",
 				},
 				Examples: []string{
-					"dws dev deap-agent run-status --assistant-id <assistantId> --source-id <openMessageId> --source-type im_message --format json",
-					"dws dev deap-agent run-status --assistant-id <assistantId> --source-id <perceptionRuleId> --source-type trigger_rule --format json",
+					"dws deap observe run-status --assistant-id <assistantId> --source-id <openMessageId> --source-type im_message --format json",
+					"dws deap observe run-status --assistant-id <assistantId> --source-id <perceptionRuleId> --source-type trigger_rule --format json",
 				},
 			},
 		},
@@ -400,11 +474,11 @@ func newDeapAgentRunStatusCommand() *cobra.Command {
 // 再过两级权限，最后取 Langfuse 原文。不接 runId：调用方拿不到。
 func newDeapAgentTraceCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
-		Use:   "trace",
-		Short: "查询数字员工执行 Trace",
-		Long:  "查询指定数字员工的执行 Trace。--assistant-id、--source-id、--source-type 均必填（与 run-status 一致）。返回内容可能包含完整对话和模型输入输出；服务端会先执行管理者/触发人两级授权，无权时返回 NO_PERMISSION。",
-		Tool:  deapAgentTraceTool,
-		Server: deapAgentServerID,
+		Use:       "trace",
+		Short:     "查询数字员工执行 Trace",
+		Long:      "查询指定数字员工的执行 Trace。--assistant-id、--source-id、--source-type 均必填（与 run-status 一致）。返回内容可能包含完整对话和模型输入输出；服务端会先执行管理者/触发人两级授权，无权时返回 NO_PERMISSION。",
+		Tool:      deapAgentTraceTool,
+		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
 			{Name: "assistant-id", Usage: "数字员工唯一标识", Bind: "assistantId", Required: true, Trim: true},
@@ -417,22 +491,22 @@ func newDeapAgentTraceCommand() *cobra.Command {
 		},
 		Contract: LeafContract{
 			Identity: contract.ToolIdentitySpec{
-				ProductID: "dev", Name: "query_de_trace",
-				CanonicalPath: "dev.query_de_trace",
-				CLIPath: "dev deap-agent trace", PrimaryCLIPath: "dev deap-agent trace",
-				Group: "deap-agent",
+				ProductID: deapProductID, Name: "query_de_trace",
+				CanonicalPath: "deap.query_de_trace",
+				CLIPath:       "deap observe trace", PrimaryCLIPath: "deap observe trace",
+				Group: "observe",
 			},
 			Description: "数字员工执行 Trace 查询。assistantId、sourceId、sourceType 均必填，服务端先执行管理者/触发人两级授权。",
-			DryRun: deapAgentDryRun,
-			Interface: deapAgentMCPInterface(deapAgentTraceTool),
+			DryRun:      deapAgentDryRun,
+			Interface:   deapAgentMCPInterface(deapAgentTraceTool),
 			Selection: contract.SelectionSpec{
 				AgentSummary: "在服务端授权后查询数字员工完整执行 Trace",
-				UseWhen: []string{"需要排查某次执行的完整模型链路（提示词、工具调用、模型输入输出）时"},
+				UseWhen:      []string{"需要排查某次执行的完整模型链路（提示词、工具调用、模型输入输出）时"},
 				AvoidWhen: []string{
 					"只需执行成败结果时使用 run-status（本命令返回完整对话内容，敏感度更高）",
 				},
 				Examples: []string{
-					"dws dev deap-agent trace --assistant-id <assistantId> --source-id <openMessageId> --source-type im_message --format json",
+					"dws deap observe trace --assistant-id <assistantId> --source-id <openMessageId> --source-type im_message --format json",
 				},
 			},
 		},

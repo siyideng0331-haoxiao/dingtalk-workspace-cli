@@ -13,6 +13,7 @@ import (
 
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/corecmd/contractfinal"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/pkg/edition"
+	"github.com/spf13/cobra"
 )
 
 type deapAgentCall struct {
@@ -45,53 +46,88 @@ func newDeapAgentTestTree(t *testing.T, dryRun bool) (*deapAgentCaller, *bytes.B
 	return caller, out
 }
 
-func TestDevDeapAgentCommandTreeDeclaresNineDirectLeaves(t *testing.T) {
+// deapFindLeaf 在 `deap manage` / `deap observe` 两个子组里找叶子。
+//
+// 为何不让用例自己写子组名：绝大多数用例关心的是“这个叶子的行为”而不是“它挂在哪个
+// 子组”；把子组名写进每个用例会让以后调整归类（如新增子组、或把某命令从管理态
+// 移到观测态）逐处改。归类本身由 TreeSplitsManageAndObserve 单独钉住。
+func deapFindLeaf(t *testing.T, root *cobra.Command, leaf string) *cobra.Command {
+	t.Helper()
+	for _, group := range []string{"manage", "observe"} {
+		cmd, remaining, err := root.Find([]string{group, leaf})
+		if err == nil && len(remaining) == 0 && cmd.Name() == leaf {
+			return cmd
+		}
+	}
+	t.Fatalf("deap leaf %q not found under manage/observe", leaf)
+	return nil
+}
+
+// TestDeapCommandTreeSplitsManageAndObserve 钉住顶级 `dws deap` 的两子组归类。
+//
+// 为何钉归类而不只钉叶子集合：管理态含不可逆写操作，观测态全是只读；两者混放会
+// 让调用方（含 Agent）失去“这一类命令安全属性相同”这个判断依据。
+func TestDeapCommandTreeSplitsManageAndObserve(t *testing.T) {
 	newDeapAgentTestTree(t, false)
-	dev := devHandler{}.Command(&captureRunner{})
-	group, remaining, err := dev.Find([]string{"deap-agent"})
-	if err != nil || len(remaining) != 0 {
-		t.Fatalf("find dev deap-agent: group=%v remaining=%v err=%v", group, remaining, err)
+	root := deapHandler{}.Command(&captureRunner{})
+
+	wantGroups := map[string][]string{
+		"manage":  {"create", "detail", "list", "save-draft", "publish", "delete"},
+		"observe": {"run-status", "trace"},
 	}
-	wantLeaves := []string{
-		"create", "detail", "list", "save-draft", "publish",
-		"delete", "run-status", "trace",
+	if got := len(root.Commands()); got != len(wantGroups) {
+		t.Fatalf("deap direct child count = %d, want %d (only manage/observe)", got, len(wantGroups))
 	}
-	if got := len(group.Commands()); got != len(wantLeaves) {
-		t.Fatalf("deap-agent direct child count = %d, want %d", got, len(wantLeaves))
-	}
-	for _, name := range wantLeaves {
-		leaf, rest, findErr := group.Find([]string{name})
-		if findErr != nil || len(rest) != 0 || leaf == group {
-			t.Fatalf("find direct leaf %q: leaf=%v rest=%v err=%v", name, leaf, rest, findErr)
+	for groupName, wantLeaves := range wantGroups {
+		group, remaining, err := root.Find([]string{groupName})
+		if err != nil || len(remaining) != 0 {
+			t.Fatalf("find deap %s: group=%v remaining=%v err=%v", groupName, group, remaining, err)
 		}
-		if leaf.HasSubCommands() {
-			t.Errorf("dev deap-agent %s has an intermediate subtree", name)
+		if got := len(group.Commands()); got != len(wantLeaves) {
+			t.Fatalf("deap %s leaf count = %d, want %d", groupName, got, len(wantLeaves))
 		}
-		if !leaf.Runnable() {
-			t.Errorf("dev deap-agent %s is not runnable", name)
-		}
-		if leaf.Args == nil || leaf.Args(leaf, []string{"unexpected"}) == nil {
-			t.Errorf("dev deap-agent %s must reject positional arguments", name)
-		}
-		final, ok := contractfinal.RuntimeContractFinal(leaf)
-		if !ok || final.Identity == nil || final.Interface == nil || final.Safety == nil {
-			t.Errorf("dev deap-agent %s has incomplete ContractFinal: %+v ok=%v", name, final, ok)
+		for _, name := range wantLeaves {
+			leaf, rest, findErr := group.Find([]string{name})
+			if findErr != nil || len(rest) != 0 || leaf == group {
+				t.Fatalf("find deap %s %q: leaf=%v rest=%v err=%v", groupName, name, leaf, rest, findErr)
+			}
+			if leaf.HasSubCommands() {
+				t.Errorf("deap %s %s has an intermediate subtree", groupName, name)
+			}
+			if !leaf.Runnable() {
+				t.Errorf("deap %s %s is not runnable", groupName, name)
+			}
+			if leaf.Args == nil || leaf.Args(leaf, []string{"unexpected"}) == nil {
+				t.Errorf("deap %s %s must reject positional arguments", groupName, name)
+			}
+			final, ok := contractfinal.RuntimeContractFinal(leaf)
+			if !ok || final.Identity == nil || final.Interface == nil || final.Safety == nil {
+				t.Errorf("deap %s %s has incomplete ContractFinal: %+v ok=%v", groupName, name, final, ok)
+			}
 		}
 	}
 }
 
-func TestDevDeapAgentHelpDescribesBuiltInEndpointResolution(t *testing.T) {
+// TestDeapIsNotMountedUnderDev 防回归：DEAP 曾挂在 `dws dev deap-agent` 下。它与开放
+// 平台应用无包含关系，共用 dev 前缀会使两个产品的路由与文案互相干扰。
+func TestDeapIsNotMountedUnderDev(t *testing.T) {
 	newDeapAgentTestTree(t, false)
 	dev := devHandler{}.Command(&captureRunner{})
-	group, remaining, err := dev.Find([]string{"deap-agent"})
-	if err != nil || len(remaining) != 0 {
-		t.Fatalf("find dev deap-agent: group=%v remaining=%v err=%v", group, remaining, err)
+	for _, retired := range []string{"deap-agent", "deap"} {
+		if cmd, _, err := dev.Find([]string{retired}); err == nil && cmd != nil && cmd.Name() == retired {
+			t.Fatalf("dws dev %s must be retired; DEAP owns the top-level dws deap prefix", retired)
+		}
 	}
-	if !strings.Contains(group.Long, "跟随当前 MCP 环境") {
-		t.Fatal("deap-agent help must describe standard MCP environment resolution")
+}
+
+func TestDeapHelpDescribesBuiltInEndpointResolution(t *testing.T) {
+	newDeapAgentTestTree(t, false)
+	root := deapHandler{}.Command(&captureRunner{})
+	if !strings.Contains(root.Long, "跟随当前 MCP 环境") {
+		t.Fatal("deap help must describe standard MCP environment resolution")
 	}
-	if strings.Contains(group.Long, "DINGTALK_DEAP_DEV_MCP_URL 显式配置") {
-		t.Fatal("deap-agent help must not require a product-specific endpoint override")
+	if strings.Contains(root.Long, "DINGTALK_DEAP_DEV_MCP_URL 显式配置") {
+		t.Fatal("deap help must not require a product-specific endpoint override")
 	}
 }
 
@@ -125,12 +161,12 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 		},
 		{
 			leaf: "detail", tool: "get_digital_employee_detail",
-			flags: map[string]string{"assistant-id": "assistant-1"},
+			flags:    map[string]string{"assistant-id": "assistant-1"},
 			wantArgs: map[string]any{"assistantId": "assistant-1"},
 		},
 		{
 			leaf: "list", tool: "list_digital_employees",
-			flags: map[string]string{"keyword": "值班", "page": "2", "page-size": "101"},
+			flags:    map[string]string{"keyword": "值班", "page": "2", "page-size": "101"},
 			wantArgs: map[string]any{"keyword": "值班", "page": 2, "pageSize": 101},
 		},
 		{
@@ -149,33 +185,30 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 		},
 		{
 			leaf: "publish", tool: "publish_digital_employee", confirmed: true,
-			flags: map[string]string{"agent-uuid": "agent-1"},
+			flags:    map[string]string{"agent-uuid": "agent-1"},
 			wantArgs: map[string]any{"agentUuid": "agent-1"},
 		},
 		{
 			leaf: "delete", tool: "delete_digital_employee", confirmed: true,
-			flags: map[string]string{"agent-uuid": "agent-1"},
+			flags:    map[string]string{"agent-uuid": "agent-1"},
 			wantArgs: map[string]any{"agentUuid": "agent-1"},
 		},
 		{
 			leaf: "run-status", tool: "query_de_run_status",
-			flags: map[string]string{"assistant-id": "agent-1", "source-id": "open-message-1", "source-type": "im_message"},
+			flags:    map[string]string{"assistant-id": "agent-1", "source-id": "open-message-1", "source-type": "im_message"},
 			wantArgs: map[string]any{"assistantId": "agent-1", "sourceId": "open-message-1", "sourceType": "im_message"},
 		},
 		{
 			leaf: "trace", tool: "query_de_trace",
-			flags: map[string]string{"assistant-id": "agent-1", "source-id": "open-message-1", "source-type": "trigger_rule"},
+			flags:    map[string]string{"assistant-id": "agent-1", "source-id": "open-message-1", "source-type": "trigger_rule"},
 			wantArgs: map[string]any{"assistantId": "agent-1", "sourceId": "open-message-1", "sourceType": "trigger_rule"},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.leaf, func(t *testing.T) {
 			caller.calls = nil
-			dev := devHandler{}.Command(&captureRunner{})
-			leaf, _, err := dev.Find([]string{"deap-agent", tc.leaf})
-			if err != nil {
-				t.Fatal(err)
-			}
+			root := deapHandler{}.Command(&captureRunner{})
+			leaf := deapFindLeaf(t, root, tc.leaf)
 			if tc.confirmed {
 				leaf.Flags().Bool("yes", false, "test confirmation")
 				tc.flags["yes"] = "true"
@@ -243,11 +276,8 @@ func TestDevDeapAgentConstraintsFailBeforeMCP(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.leaf+tc.wantErr, func(t *testing.T) {
 			caller.calls = nil
-			dev := devHandler{}.Command(&captureRunner{})
-			leaf, _, err := dev.Find([]string{"deap-agent", tc.leaf})
-			if err != nil {
-				t.Fatal(err)
-			}
+			root := deapHandler{}.Command(&captureRunner{})
+			leaf := deapFindLeaf(t, root, tc.leaf)
 			for name, value := range tc.flags {
 				if setErr := leaf.Flags().Set(name, value); setErr != nil {
 					t.Fatal(setErr)
@@ -266,41 +296,33 @@ func TestDevDeapAgentConstraintsFailBeforeMCP(t *testing.T) {
 
 func TestDevDeapAgentRemovesRetiredFlagsAndKeepsIdentityHidden(t *testing.T) {
 	caller, _ := newDeapAgentTestTree(t, false)
-	dev := devHandler{}.Command(&captureRunner{})
-	create, _, err := dev.Find([]string{"deap-agent", "create"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := deapHandler{}.Command(&captureRunner{})
+	create := deapFindLeaf(t, root, "create")
 	for _, forbidden := range []string{"org-id", "user-id", "agent-type", "developers-json"} {
 		if flag := create.Flags().Lookup(forbidden); flag != nil {
 			t.Fatalf("forbidden identity/retired flag --%s is exposed", forbidden)
 		}
 	}
-	list, _, err := dev.Find([]string{"deap-agent", "list"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	list := deapFindLeaf(t, root, "list")
 	if flag := list.Flags().Lookup("sort-by"); flag != nil {
 		t.Fatal("retired --sort-by is exposed")
 	}
-	send, _, err := dev.Find([]string{"deap-agent", "send-message"})
-	if err == nil && send != nil && send.Name() == "send-message" {
-		t.Fatal("retired send-message command is exposed; 推送能力已从观测接口移除")
+	// send-message 已下线：不能用 deapFindLeaf（它找不到就 Fatal，语义刚好反了），
+	// 直接断言两个子组里都没有它。
+	for _, group := range []string{"manage", "observe"} {
+		if cmd, _, findErr := root.Find([]string{group, "send-message"}); findErr == nil &&
+			cmd != nil && cmd.Name() == "send-message" {
+			t.Fatalf("retired send-message command is exposed under %s; 推送能力已从观测接口移除", group)
+		}
 	}
-	trace, _, err := dev.Find([]string{"deap-agent", "trace"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	trace := deapFindLeaf(t, root, "trace")
 	if flag := trace.Flags().Lookup("trace-id"); flag != nil {
 		t.Fatal("retired --trace-id is exposed; current MCP input uses the run locator")
 	}
 	if flag := trace.Flags().Lookup("run-id"); flag != nil {
 		t.Fatal("retired --run-id is exposed; 调用方拿不到 runId，只能按来源定位")
 	}
-	save, _, err := dev.Find([]string{"deap-agent", "save-draft"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	save := deapFindLeaf(t, root, "save-draft")
 	for _, forbidden := range []string{
 		"developers-json", "prompt-config-json", "model-config-json", "knowledge-config-json",
 		"memory-config-json", "selected-skills-json", "deleted-skills-json", "scopes-json",
@@ -345,21 +367,15 @@ func TestDevDeapAgentRemovesRetiredFlagsAndKeepsIdentityHidden(t *testing.T) {
 
 func TestDevDeapAgentHelpMatchesCurrentMCPInputs(t *testing.T) {
 	newDeapAgentTestTree(t, false)
-	dev := devHandler{}.Command(&captureRunner{})
+	root := deapHandler{}.Command(&captureRunner{})
 
-	publish, _, err := dev.Find([]string{"deap-agent", "publish"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	publish := deapFindLeaf(t, root, "publish")
 	if flag := publish.Flags().Lookup("allow-join-group"); flag == nil || flag.DefValue != "false" {
 		t.Fatalf("allow-join-group default = %v, current MCP declares an optional boolean without a default", flag)
 	}
 
 	for _, name := range []string{"run-status", "trace"} {
-		command, _, findErr := dev.Find([]string{"deap-agent", name})
-		if findErr != nil {
-			t.Fatal(findErr)
-		}
+		command := deapFindLeaf(t, root, name)
 		if flag := command.Flags().Lookup("assistant-id"); flag == nil {
 			t.Fatalf("%s is missing MCP input --assistant-id", name)
 		}
@@ -376,11 +392,8 @@ func TestDevDeapAgentHelpMatchesCurrentMCPInputs(t *testing.T) {
 
 func TestDevDeapAgentHelpExplainsFullReplacementAndTraceAuthorization(t *testing.T) {
 	caller, _ := newDeapAgentTestTree(t, false)
-	dev := devHandler{}.Command(&captureRunner{})
-	save, _, err := dev.Find([]string{"deap-agent", "save-draft"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := deapHandler{}.Command(&captureRunner{})
+	save := deapFindLeaf(t, root, "save-draft")
 	save.SetOut(io.Discard)
 	if helpErr := save.Help(); helpErr != nil {
 		t.Fatal(helpErr)
@@ -388,10 +401,7 @@ func TestDevDeapAgentHelpExplainsFullReplacementAndTraceAuthorization(t *testing
 	if !strings.Contains(save.Long, "全量覆写") || !strings.Contains(save.Long, "detail") || strings.Contains(save.Long, "export-draft") {
 		t.Fatalf("save-draft help does not explain read-before-write full replacement: %q", save.Long)
 	}
-	trace, _, err := dev.Find([]string{"deap-agent", "trace"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	trace := deapFindLeaf(t, root, "trace")
 	final, ok := contractfinal.RuntimeContractFinal(trace)
 	if !ok || final.Interface == nil || final.Interface.Availability != "available" {
 		t.Fatalf("trace ContractFinal interface = %+v ok=%v, want available", final.Interface, ok)

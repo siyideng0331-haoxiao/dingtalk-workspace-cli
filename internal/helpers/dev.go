@@ -37,7 +37,12 @@ func init() {
 //	dev doc      open-platform developer doc search (bridges the devdoc
 //	             product; `dws devdoc` keeps working independently)
 //
-// Future developer capabilities (event subscription, MCP tooling, ...) join
+// DEAP digital employees are deliberately NOT here: DEAP is a separate platform
+// rather than a part of the open platform application model, so it owns the
+// top-level `dws deap` prefix (see deap_agent.go). Sharing `dev` made the two
+// products' routing and wording interfere.
+//
+// Future open-platform capabilities (event subscription, MCP tooling, ...) join
 // as new subtrees here instead of new top-level commands.
 type devHandler struct{}
 
@@ -51,20 +56,19 @@ func (devHandler) Command(runner executor.Runner) *cobra.Command {
 	contract.RegisterProductDecl(contract.ProductDecl{
 		ID: "dev",
 		Selection: contract.ProductSelectionDecl{
-			AgentSummary: "管理开放平台应用、权限、机器人、版本发布、本地连接器与 DEAP 数字员工",
+			AgentSummary: "管理开放平台应用、权限、机器人、版本发布与本地连接器",
 			UseWhen: []string{
 				"创建/配置开放平台应用、机器人、权限、事件订阅或发布版本",
-				"创建、维护、发布或观测 DEAP 数字员工",
 			},
 			AvoidWhen: []string{
-				"只查开放平台文档用 devdoc；普通业务聊天/邮信用 chat/mail",
+				"只查开放平台文档用 devdoc；DEAP 数字员工用 deap；普通业务聊天/邮信用 chat/mail",
 			},
 		},
 	})
 	root := &cobra.Command{
 		Use:               "dev",
 		Short:             "开放平台开发者能力",
-		Long:              "钉钉开放平台开发者命令组：应用生命周期管理（app）、机器人本地调试建联（connect）、DEAP 数字员工开发与观测（deap-agent）、开发文档搜索（doc）。",
+		Long:              "钉钉开放平台开发者命令组：应用生命周期管理（app）、机器人本地调试建联（connect）、开发文档搜索（doc）。DEAP 数字员工不在本组，用顶级命令 dws deap。",
 		Args:              cobra.NoArgs,
 		TraverseChildren:  true,
 		DisableAutoGenTag: true,
@@ -90,7 +94,6 @@ func (devHandler) Command(runner executor.Runner) *cobra.Command {
 	root.AddCommand(
 		newDevAppCommand(runner),
 		newDevAppRobotConnectCommand(runner),
-		newDeapAgentCommand(),
 		doc,
 	)
 	return root
