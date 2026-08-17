@@ -22,14 +22,18 @@ const (
 	// deapProductID 是 DEAP 的产品标识；契约要求 CanonicalPath 严格等于 <ProductID>.<Name>。
 	deapProductID = "deap"
 
-	deapAgentCreateTool    = "create_digital_employee"
-	deapAgentDetailTool    = "get_digital_employee_detail"
-	deapAgentListTool      = "list_digital_employees"
-	deapAgentSaveDraftTool = "update_digital_employee_draft"
-	deapAgentPublishTool   = "publish_digital_employee"
-	deapAgentDeleteTool    = "delete_digital_employee"
-	deapAgentRunStatusTool = "query_de_run_status"
-	deapAgentTraceTool     = "query_de_trace"
+	deapAgentCreateTool           = "create_digital_employee"
+	deapAgentDetailTool           = "get_digital_employee_detail"
+	deapAgentListTool             = "list_digital_employees"
+	deapAgentSaveDraftTool        = "update_digital_employee_draft"
+	deapAgentPublishTool          = "publish_digital_employee"
+	deapAgentDeleteTool           = "delete_digital_employee"
+	deapAgentRunStatusTool        = "query_de_run_status"
+	deapAgentTraceTool            = "query_de_trace"
+	deapAddInternalSubAgentTool    = "add_de_internal_sub_agent"
+	deapRemoveInternalSubAgentTool = "remove_de_internal_sub_agent"
+	deapAddA2ASubAgentTool         = "add_de_a2a_sub_agent"
+	deapRemoveA2ASubAgentTool      = "remove_de_a2a_sub_agent"
 )
 
 var deapAgentDryRun = &contract.DryRunSpec{
@@ -51,7 +55,7 @@ func init() {
 
 // deapHandler 挂载顶级命令 `dws deap`，按“管理态 / 观测态”分两个子组：
 //
-//	deap manage    数字员工生命周期（创建 / 详情 / 列表 / 草稿 / 发布 / 删除）
+//	deap manage    数字员工生命周期（创建 / 详情 / 列表 / 草稿 / 子智能体 / 发布 / 删除）
 //	deap observe   执行观测（执行状态 / 执行 trace）
 //
 // 两个子组的安全属性不同：管理态含不可逆写，观测态全是只读。后续 DEAP 其它能力
@@ -98,7 +102,7 @@ func newDeapManageCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "manage",
 		Short:             "数字员工生命周期管理",
-		Long:              "DEAP 数字员工的生命周期管理：创建草稿、查询详情与列表、全量覆写草稿、发布与删除。save-draft / publish / delete 均为高影响写操作，先 --dry-run 确认再加 --yes。",
+		Long:              "DEAP 数字员工的生命周期管理：创建草稿、查询详情与列表、全量覆写草稿、配置内部或外部 A2A 子智能体、发布与删除。save-draft、子智能体配置、publish、delete 均为高影响写操作，先 --dry-run 确认再加 --yes。",
 		Args:              cobra.NoArgs,
 		TraverseChildren:  true,
 		DisableAutoGenTag: true,
@@ -112,6 +116,10 @@ func newDeapManageCommand() *cobra.Command {
 		newDeapAgentSaveDraftCommand(),
 		newDeapAgentPublishCommand(),
 		newDeapAgentDeleteCommand(),
+		newDeapAddInternalSubAgentCommand(),
+		newDeapRemoveInternalSubAgentCommand(),
+		newDeapAddA2ASubAgentCommand(),
+		newDeapRemoveA2ASubAgentCommand(),
 	)
 	return cmd
 }
@@ -417,6 +425,152 @@ func newDeapAgentDeleteCommand() *cobra.Command {
 				UseWhen:      []string{"用户明确要求删除数字员工，并已确认 agentUuid 与不可逆影响时"},
 				AvoidWhen:    []string{"只需停止发布或暂时修改配置时不要删除", "未确认目标与影响范围时不要执行"},
 				Examples:     []string{"dws deap manage delete --agent-uuid <agentUuid> --dry-run --format json"},
+			},
+		},
+	})
+}
+
+func newDeapAddInternalSubAgentCommand() *cobra.Command {
+	return NewLeafCommand(LeafSpec{
+		Use:       "add-internal-sub-agent",
+		Short:     "添加内部 Agent 子智能体",
+		Long:      "把当前组织内已创建的 Agent 添加为指定数字员工的子智能体。该操作只修改草稿配置，不会自动发布；重复添加同一个内部 Agent 不会重复创建。真实执行前必须确认。",
+		Tool:      deapAddInternalSubAgentTool,
+		Server:    deapAgentServerID,
+		PostMount: deapAgentNoArgs,
+		Flags: []LeafFlag{
+			{Name: "agent-uuid", Usage: "主数字员工 ID", Bind: "agentUuid", Required: true, Trim: true},
+			{Name: "sub-agent-uuid", Usage: "待添加的内部 Agent ID", Bind: "subAgentUuid", Required: true, Trim: true},
+		},
+		Safety: contract.SafetySpec{
+			Effect: "write", Risk: "high",
+			Confirmation: "user_required", Idempotency: "idempotent",
+		},
+		Contract: LeafContract{
+			Identity: contract.ToolIdentitySpec{
+				ProductID: deapProductID, Name: "add_de_internal_sub_agent",
+				CanonicalPath: "deap.add_de_internal_sub_agent",
+				CLIPath:       "deap manage add-internal-sub-agent",
+				PrimaryCLIPath: "deap manage add-internal-sub-agent", Group: "manage",
+			},
+			Description: "把当前组织内已创建的 Agent 添加为指定数字员工的子智能体。操作只更新草稿配置，不会自动发布。",
+			DryRun:      deapAgentDryRun,
+			Interface:   deapAgentMCPInterface(deapAddInternalSubAgentTool),
+			Selection: contract.SelectionSpec{
+				AgentSummary: "把已有的内部 Agent 添加为数字员工子智能体",
+				UseWhen:      []string{"已有组织内 Agent ID，需要把它加入数字员工草稿的子智能体配置时"},
+				AvoidWhen:    []string{"接入外部 Agent Card 时使用 add-a2a-sub-agent", "只需修改数字员工人设时使用 save-draft"},
+				Examples:     []string{"dws deap manage add-internal-sub-agent --agent-uuid <agentUuid> --sub-agent-uuid <subAgentUuid> --dry-run --format json"},
+			},
+		},
+	})
+}
+
+func newDeapRemoveInternalSubAgentCommand() *cobra.Command {
+	return NewLeafCommand(LeafSpec{
+		Use:       "remove-internal-sub-agent",
+		Short:     "移除内部 Agent 子智能体",
+		Long:      "按子智能体实例 ID 从指定数字员工草稿中移除内部 Agent。该操作不会自动发布，且实例 ID 与内部 Agent ID 不同；真实执行前必须确认。",
+		Tool:      deapRemoveInternalSubAgentTool,
+		Server:    deapAgentServerID,
+		PostMount: deapAgentNoArgs,
+		Flags: []LeafFlag{
+			{Name: "agent-uuid", Usage: "主数字员工 ID", Bind: "agentUuid", Required: true, Trim: true},
+			{Name: "sub-agent-instance-id", Usage: "内部子智能体实例 ID", Bind: "subAgentInstanceId", Required: true, Trim: true},
+		},
+		Safety: contract.SafetySpec{
+			Effect: "destructive", Risk: "high",
+			Confirmation: "user_required", Idempotency: "unknown",
+		},
+		Contract: LeafContract{
+			Identity: contract.ToolIdentitySpec{
+				ProductID: deapProductID, Name: "remove_de_internal_sub_agent",
+				CanonicalPath: "deap.remove_de_internal_sub_agent",
+				CLIPath:       "deap manage remove-internal-sub-agent",
+				PrimaryCLIPath: "deap manage remove-internal-sub-agent", Group: "manage",
+			},
+			Description: "按实例 ID 从数字员工草稿中移除一个内部 Agent 子智能体，不会自动发布。",
+			DryRun:      deapAgentDryRun,
+			Interface:   deapAgentMCPInterface(deapRemoveInternalSubAgentTool),
+			Selection: contract.SelectionSpec{
+				AgentSummary: "从数字员工草稿中移除内部 Agent 子智能体",
+				UseWhen:      []string{"已确认内部子智能体实例 ID，需要解除其与数字员工的草稿绑定时"},
+				AvoidWhen:    []string{"移除外部 A2A 子智能体时使用 remove-a2a-sub-agent", "只有内部 Agent ID、没有实例 ID 时不要执行"},
+				Examples:     []string{"dws deap manage remove-internal-sub-agent --agent-uuid <agentUuid> --sub-agent-instance-id <instanceId> --dry-run --format json"},
+			},
+		},
+	})
+}
+
+func newDeapAddA2ASubAgentCommand() *cobra.Command {
+	return NewLeafCommand(LeafSpec{
+		Use:       "add-a2a-sub-agent",
+		Short:     "添加外部 A2A 子智能体",
+		Long:      "通过外部 Agent Card URL 创建 A2A 子智能体并添加到指定数字员工草稿。该操作不会自动发布，也不保证重复调用去重；真实执行前必须确认。",
+		Tool:      deapAddA2ASubAgentTool,
+		Server:    deapAgentServerID,
+		PostMount: deapAgentNoArgs,
+		Flags: []LeafFlag{
+			{Name: "agent-uuid", Usage: "主数字员工 ID", Bind: "agentUuid", Required: true, Trim: true},
+			{Name: "name", Usage: "外部 A2A 子智能体名称", Bind: "name", Required: true, Trim: true},
+			{Name: "description", Usage: "外部 A2A 子智能体描述", Bind: "description", Required: true, Trim: true},
+			{Name: "agent-card-url", Usage: "外部 A2A Agent Card URL", Bind: "agentCardUrl", Required: true, Trim: true},
+		},
+		Safety: contract.SafetySpec{
+			Effect: "write", Risk: "high",
+			Confirmation: "user_required", Idempotency: "non_idempotent",
+		},
+		Contract: LeafContract{
+			Identity: contract.ToolIdentitySpec{
+				ProductID: deapProductID, Name: "add_de_a2a_sub_agent",
+				CanonicalPath: "deap.add_de_a2a_sub_agent",
+				CLIPath:       "deap manage add-a2a-sub-agent",
+				PrimaryCLIPath: "deap manage add-a2a-sub-agent", Group: "manage",
+			},
+			Description: "通过 Agent Card URL 创建外部 A2A 子智能体并添加到数字员工草稿，不会自动发布。",
+			DryRun:      deapAgentDryRun,
+			Interface:   deapAgentMCPInterface(deapAddA2ASubAgentTool),
+			Selection: contract.SelectionSpec{
+				AgentSummary: "通过 Agent Card URL 添加外部 A2A 子智能体",
+				UseWhen:      []string{"持有外部 A2A Agent Card URL，需要把外部智能体加入数字员工草稿时"},
+				AvoidWhen:    []string{"添加当前组织内已有 Agent 时使用 add-internal-sub-agent", "无法确认 Agent Card 来源与用途时不要执行"},
+				Examples:     []string{`dws deap manage add-a2a-sub-agent --agent-uuid <agentUuid> --name "外部客服" --description "处理外部咨询" --agent-card-url <agentCardUrl> --dry-run --format json`},
+			},
+		},
+	})
+}
+
+func newDeapRemoveA2ASubAgentCommand() *cobra.Command {
+	return NewLeafCommand(LeafSpec{
+		Use:       "remove-a2a-sub-agent",
+		Short:     "移除外部 A2A 子智能体",
+		Long:      "按子智能体实例 ID 从指定数字员工草稿中移除外部 A2A 子智能体。该操作不会自动发布；真实执行前必须确认。",
+		Tool:      deapRemoveA2ASubAgentTool,
+		Server:    deapAgentServerID,
+		PostMount: deapAgentNoArgs,
+		Flags: []LeafFlag{
+			{Name: "agent-uuid", Usage: "主数字员工 ID", Bind: "agentUuid", Required: true, Trim: true},
+			{Name: "sub-agent-instance-id", Usage: "外部 A2A 子智能体实例 ID", Bind: "subAgentInstanceId", Required: true, Trim: true},
+		},
+		Safety: contract.SafetySpec{
+			Effect: "destructive", Risk: "high",
+			Confirmation: "user_required", Idempotency: "unknown",
+		},
+		Contract: LeafContract{
+			Identity: contract.ToolIdentitySpec{
+				ProductID: deapProductID, Name: "remove_de_a2a_sub_agent",
+				CanonicalPath: "deap.remove_de_a2a_sub_agent",
+				CLIPath:       "deap manage remove-a2a-sub-agent",
+				PrimaryCLIPath: "deap manage remove-a2a-sub-agent", Group: "manage",
+			},
+			Description: "按实例 ID 从数字员工草稿中移除一个外部 A2A 子智能体，不会自动发布。",
+			DryRun:      deapAgentDryRun,
+			Interface:   deapAgentMCPInterface(deapRemoveA2ASubAgentTool),
+			Selection: contract.SelectionSpec{
+				AgentSummary: "从数字员工草稿中移除外部 A2A 子智能体",
+				UseWhen:      []string{"已确认外部 A2A 子智能体实例 ID，需要从数字员工草稿移除时"},
+				AvoidWhen:    []string{"移除内部 Agent 子智能体时使用 remove-internal-sub-agent", "未确认实例 ID 与目标数字员工时不要执行"},
+				Examples:     []string{"dws deap manage remove-a2a-sub-agent --agent-uuid <agentUuid> --sub-agent-instance-id <instanceId> --dry-run --format json"},
 			},
 		},
 	})

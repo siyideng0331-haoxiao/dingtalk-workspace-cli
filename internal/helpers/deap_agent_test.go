@@ -72,7 +72,11 @@ func TestDeapCommandTreeSplitsManageAndObserve(t *testing.T) {
 	root := deapHandler{}.Command(&captureRunner{})
 
 	wantGroups := map[string][]string{
-		"manage":  {"create", "detail", "list", "save-draft", "publish", "delete"},
+		"manage": {
+			"create", "detail", "list", "save-draft", "publish", "delete",
+			"add-internal-sub-agent", "remove-internal-sub-agent",
+			"add-a2a-sub-agent", "remove-a2a-sub-agent",
+		},
 		"observe": {"run-status", "trace"},
 	}
 	if got := len(root.Commands()); got != len(wantGroups) {
@@ -182,6 +186,44 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 			wantArgs: map[string]any{"agentUuid": "agent-1"},
 		},
 		{
+			leaf: "add-internal-sub-agent", tool: "add_de_internal_sub_agent", confirmed: true,
+			flags: map[string]string{
+				"agent-uuid": "agent-1", "sub-agent-uuid": "internal-agent-1",
+			},
+			wantArgs: map[string]any{
+				"agentUuid": "agent-1", "subAgentUuid": "internal-agent-1",
+			},
+		},
+		{
+			leaf: "remove-internal-sub-agent", tool: "remove_de_internal_sub_agent", confirmed: true,
+			flags: map[string]string{
+				"agent-uuid": "agent-1", "sub-agent-instance-id": "internal-instance-1",
+			},
+			wantArgs: map[string]any{
+				"agentUuid": "agent-1", "subAgentInstanceId": "internal-instance-1",
+			},
+		},
+		{
+			leaf: "add-a2a-sub-agent", tool: "add_de_a2a_sub_agent", confirmed: true,
+			flags: map[string]string{
+				"agent-uuid": "agent-1", "name": "外部客服", "description": "外部 A2A 客服",
+				"agent-card-url": "https://example.com/.well-known/agent-card.json",
+			},
+			wantArgs: map[string]any{
+				"agentUuid": "agent-1", "name": "外部客服", "description": "外部 A2A 客服",
+				"agentCardUrl": "https://example.com/.well-known/agent-card.json",
+			},
+		},
+		{
+			leaf: "remove-a2a-sub-agent", tool: "remove_de_a2a_sub_agent", confirmed: true,
+			flags: map[string]string{
+				"agent-uuid": "agent-1", "sub-agent-instance-id": "a2a-instance-1",
+			},
+			wantArgs: map[string]any{
+				"agentUuid": "agent-1", "subAgentInstanceId": "a2a-instance-1",
+			},
+		},
+		{
 			leaf: "run-status", tool: "query_de_run_status",
 			flags:    map[string]string{"assistant-id": "agent-1", "source-id": "open-message-1", "source-type": "im_message"},
 			wantArgs: map[string]any{"assistantId": "agent-1", "sourceId": "open-message-1", "sourceType": "im_message"},
@@ -243,6 +285,12 @@ func TestDevDeapAgentConstraintsFailBeforeMCP(t *testing.T) {
 		{leaf: "trace", flags: map[string]string{"assistant-id": "agent-1", "source-id": "src-1"}, wantErr: "source-type"},
 		{leaf: "list", flags: map[string]string{"page": "0"}, wantErr: "--page 不能小于 1"},
 		{leaf: "list", flags: map[string]string{"page-size": "0"}, wantErr: "--page-size 不能小于 1"},
+		{leaf: "add-internal-sub-agent", flags: map[string]string{"agent-uuid": "agent-1"}, wantErr: "sub-agent-uuid"},
+		{leaf: "remove-internal-sub-agent", flags: map[string]string{"agent-uuid": "agent-1"}, wantErr: "sub-agent-instance-id"},
+		{leaf: "add-a2a-sub-agent", flags: map[string]string{
+			"agent-uuid": "agent-1", "name": "外部客服", "description": "外部 A2A 客服",
+		}, wantErr: "agent-card-url"},
+		{leaf: "remove-a2a-sub-agent", flags: map[string]string{"agent-uuid": "agent-1"}, wantErr: "sub-agent-instance-id"},
 		{leaf: "create", flags: map[string]string{
 			"name": "值班助手", "description": "处理值班问题", "dept-id": "dept-1", "dept-name": "值班组",
 			"profile-json": `{"tag":"forbidden"}`,
