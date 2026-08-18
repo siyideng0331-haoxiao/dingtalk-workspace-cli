@@ -329,11 +329,11 @@ func newDeapAgentSkillCreateCommand() *cobra.Command {
 		},
 		Call: deapAgentCallSkillCreate,
 		Contract: LeafContract{
-			Identity:    contract.ToolIdentitySpec{ProductID: "dev", Name: deapAgentSkillCreateFileTool, CanonicalPath: "dev.create_skill_from_file", CLIPath: "dev deap-agent skill create", PrimaryCLIPath: "dev deap-agent skill create", Group: "deap-agent.skill"},
+			Identity:    contract.ToolIdentitySpec{ProductID: deapProductID, Name: deapAgentSkillCreateFileTool, CanonicalPath: "deap.create_skill_from_file", CLIPath: "deap skill create", PrimaryCLIPath: "deap skill create", Group: "skill"},
 			Description: "校验本地 ZIP，并通过可信 OpenAPI multipart 门面完成上传、创建和安全详情查询。",
 			DryRun:      deapAgentDryRun,
 			Interface:   &contract.InterfaceSpec{Mode: contract.InterfaceModeComposite, Availability: contract.InterfaceAvailable, Reason: "本地 ZIP 校验后流式调用 OpenAPI multipart 一步创建接口"},
-			Selection:   contract.SelectionSpec{AgentSummary: "从本地 ZIP 创建 Skill 资源", UseWhen: []string{"已有合法 Skill ZIP，需要为目标数字员工创建并取得 skillId 时"}, AvoidWhen: []string{"只有远程 URL 的纯 MCP 场景使用 create_skill_by_url"}, Examples: []string{"dws dev deap-agent skill create --agent-uuid <agentUuid> --file ./my-skill.zip --dry-run --format json"}},
+			Selection:   contract.SelectionSpec{AgentSummary: "从本地 ZIP 创建 Skill 资源", UseWhen: []string{"已有合法 Skill ZIP，需要为目标数字员工创建并取得 skillId 时"}, AvoidWhen: []string{"只有远程 URL 的纯 MCP 场景使用 create_skill_by_url"}, Examples: []string{"dws deap skill create --agent-uuid <agentUuid> --file ./my-skill.zip --dry-run --format json"}},
 			Parameters: []contract.ParamDecl{
 				{Name: "agent-uuid", Property: "agentUuid", InterfaceType: "string"},
 				{Name: "file", Property: "file", InterfaceType: "binary"},
@@ -382,10 +382,10 @@ func newDeapAgentSkillListCommand() *cobra.Command {
 		},
 		Safety: contract.SafetySpec{Effect: "read", Risk: "low", Confirmation: "not_required", Idempotency: "idempotent"},
 		Contract: LeafContract{
-			Identity:    contract.ToolIdentitySpec{ProductID: "dev", Name: deapAgentSkillListTool, CanonicalPath: "dev.list_skills", CLIPath: "dev deap-agent skill list", PrimaryCLIPath: "dev deap-agent skill list", Group: "deap-agent.skill"},
+			Identity:    contract.ToolIdentitySpec{ProductID: deapProductID, Name: deapAgentSkillListTool, CanonicalPath: "deap.list_skills", CLIPath: "deap skill list", PrimaryCLIPath: "deap skill list", Group: "skill"},
 			Description: "查询独立 Skill 资源列表和非敏感配置。",
 			DryRun:      deapAgentDryRun, Interface: deapAgentMCPInterface(deapAgentSkillListTool),
-			Selection: contract.SelectionSpec{AgentSummary: "查询目标数字员工 tenant 下的 Skill 列表", UseWhen: []string{"需要选择或核对目标数字员工的 Skill 时"}, AvoidWhen: []string{"已知 skillId 需要完整详情时使用 skill query"}, Examples: []string{"dws dev deap-agent skill list --agent-uuid <agentUuid> --snapshot draft --format json"}},
+			Selection: contract.SelectionSpec{AgentSummary: "查询目标数字员工 tenant 下的 Skill 列表", UseWhen: []string{"需要选择或核对目标数字员工的 Skill 时"}, AvoidWhen: []string{"已知 skillId 需要完整详情时使用 skill query"}, Examples: []string{"dws deap skill list --agent-uuid <agentUuid> --snapshot draft --format json"}},
 		},
 	})
 }
@@ -402,10 +402,10 @@ func newDeapAgentSkillQueryCommand() *cobra.Command {
 		},
 		Safety: contract.SafetySpec{Effect: "read", Risk: "low", Confirmation: "not_required", Idempotency: "idempotent"},
 		Contract: LeafContract{
-			Identity:    contract.ToolIdentitySpec{ProductID: "dev", Name: deapAgentSkillQueryTool, CanonicalPath: "dev.get_skill_detail", CLIPath: "dev deap-agent skill query", PrimaryCLIPath: "dev deap-agent skill query", Group: "deap-agent.skill"},
+			Identity:    contract.ToolIdentitySpec{ProductID: deapProductID, Name: deapAgentSkillQueryTool, CanonicalPath: "deap.get_skill_detail", CLIPath: "deap skill query", PrimaryCLIPath: "deap skill query", Group: "skill"},
 			Description: "按 skillId 查询独立 Skill 资源详情和非敏感配置。",
 			DryRun:      deapAgentDryRun, Interface: deapAgentMCPInterface(deapAgentSkillQueryTool),
-			Selection: contract.SelectionSpec{AgentSummary: "查询目标数字员工 tenant 下的一个 Skill", UseWhen: []string{"已知 agentUuid 和 skillId，需要核对解析信息或配置时"}, AvoidWhen: []string{"需要浏览全部 Skill 时使用 skill list"}, Examples: []string{"dws dev deap-agent skill query --agent-uuid <agentUuid> --skill-id <skillId> --format json"}},
+			Selection: contract.SelectionSpec{AgentSummary: "查询目标数字员工 tenant 下的一个 Skill", UseWhen: []string{"已知 agentUuid 和 skillId，需要核对解析信息或配置时"}, AvoidWhen: []string{"需要浏览全部 Skill 时使用 skill list"}, Examples: []string{"dws deap skill query --agent-uuid <agentUuid> --skill-id <skillId> --format json"}},
 		},
 	})
 }
@@ -419,10 +419,10 @@ func newDeapAgentMCPCreateCommand() *cobra.Command {
 		Safety: contract.SafetySpec{Effect: "write", Risk: "high", Confirmation: "user_required", Idempotency: "unknown"},
 		Call:   deapAgentCallMCPCreateFromFile,
 		Contract: LeafContract{
-			Identity:    contract.ToolIdentitySpec{ProductID: "dev", Name: deapAgentMCPCreateTool, CanonicalPath: "dev.create_mcp", CLIPath: "dev deap-agent mcp create", PrimaryCLIPath: "dev deap-agent mcp create", Group: "deap-agent.mcp"},
+			Identity:    contract.ToolIdentitySpec{ProductID: deapProductID, Name: deapAgentMCPCreateTool, CanonicalPath: "deap.create_mcp", CLIPath: "deap mcp create", PrimaryCLIPath: "deap mcp create", Group: "mcp"},
 			Description: "通过本地 JSON 文件安全传入定义和凭据，创建独立 MCP 资源。",
 			DryRun:      deapAgentDryRun, Interface: deapAgentMCPInterface(deapAgentMCPCreateTool),
-			Selection:  contract.SelectionSpec{AgentSummary: "从本地配置文件创建独立 MCP 资源", UseWhen: []string{"需要注册新的 MCP 定义和鉴权配置并取得 mcpId 时"}, AvoidWhen: []string{"只需查询现有 MCP 时使用 mcp list 或 mcp query", "不要把凭据直接拼进命令行"}, Examples: []string{"dws dev deap-agent mcp create --config-file ./mcp.json --dry-run --format json"}},
+			Selection:  contract.SelectionSpec{AgentSummary: "从本地配置文件创建独立 MCP 资源", UseWhen: []string{"需要注册新的 MCP 定义和鉴权配置并取得 mcpId 时"}, AvoidWhen: []string{"只需查询现有 MCP 时使用 mcp list 或 mcp query", "不要把凭据直接拼进命令行"}, Examples: []string{"dws deap mcp create --config-file ./mcp.json --dry-run --format json"}},
 			Parameters: []contract.ParamDecl{{Name: "config-file", Property: "config", InterfaceType: "object"}},
 		},
 	})
@@ -440,10 +440,10 @@ func newDeapAgentMCPListCommand() *cobra.Command {
 		},
 		Safety: contract.SafetySpec{Effect: "read", Risk: "low", Confirmation: "not_required", Idempotency: "idempotent"},
 		Contract: LeafContract{
-			Identity:    contract.ToolIdentitySpec{ProductID: "dev", Name: deapAgentMCPListTool, CanonicalPath: "dev.list_mcps", CLIPath: "dev deap-agent mcp list", PrimaryCLIPath: "dev deap-agent mcp list", Group: "deap-agent.mcp"},
+			Identity:    contract.ToolIdentitySpec{ProductID: deapProductID, Name: deapAgentMCPListTool, CanonicalPath: "deap.list_mcps", CLIPath: "deap mcp list", PrimaryCLIPath: "deap mcp list", Group: "mcp"},
 			Description: "查询独立 MCP 资源列表和服务端脱敏配置。",
 			DryRun:      deapAgentDryRun, Interface: deapAgentMCPInterface(deapAgentMCPListTool),
-			Selection: contract.SelectionSpec{AgentSummary: "查询当前企业的 MCP 资源列表", UseWhen: []string{"需要选择可关联到数字员工草稿的 MCP 时"}, AvoidWhen: []string{"已知 mcpId 需要单项详情时使用 mcp query"}, Examples: []string{"dws dev deap-agent mcp list --keywords 文档 --page 1 --page-size 20 --format json"}},
+			Selection: contract.SelectionSpec{AgentSummary: "查询当前企业的 MCP 资源列表", UseWhen: []string{"需要选择可关联到数字员工草稿的 MCP 时"}, AvoidWhen: []string{"已知 mcpId 需要单项详情时使用 mcp query"}, Examples: []string{"dws deap mcp list --keywords 文档 --page 1 --page-size 20 --format json"}},
 		},
 	})
 }
@@ -458,10 +458,10 @@ func newDeapAgentMCPQueryCommand() *cobra.Command {
 		},
 		Safety: contract.SafetySpec{Effect: "read", Risk: "low", Confirmation: "not_required", Idempotency: "idempotent"},
 		Contract: LeafContract{
-			Identity:    contract.ToolIdentitySpec{ProductID: "dev", Name: deapAgentMCPQueryTool, CanonicalPath: "dev.get_mcp_detail", CLIPath: "dev deap-agent mcp query", PrimaryCLIPath: "dev deap-agent mcp query", Group: "deap-agent.mcp"},
+			Identity:    contract.ToolIdentitySpec{ProductID: deapProductID, Name: deapAgentMCPQueryTool, CanonicalPath: "deap.get_mcp_detail", CLIPath: "deap mcp query", PrimaryCLIPath: "deap mcp query", Group: "mcp"},
 			Description: "按 mcpId 查询独立 MCP 资源定义、工具列表和脱敏配置。",
 			DryRun:      deapAgentDryRun, Interface: deapAgentMCPInterface(deapAgentMCPQueryTool),
-			Selection: contract.SelectionSpec{AgentSummary: "查询一个独立 MCP 资源的脱敏详情", UseWhen: []string{"已知 mcpId，需要核对定义或工具解析结果时"}, AvoidWhen: []string{"需要取得明文凭据时不要使用，系统不提供明文回显"}, Examples: []string{"dws dev deap-agent mcp query --mcp-id <mcpId> --format json"}},
+			Selection: contract.SelectionSpec{AgentSummary: "查询一个独立 MCP 资源的脱敏详情", UseWhen: []string{"已知 mcpId，需要核对定义或工具解析结果时"}, AvoidWhen: []string{"需要取得明文凭据时不要使用，系统不提供明文回显"}, Examples: []string{"dws deap mcp query --mcp-id <mcpId> --format json"}},
 		},
 	})
 }

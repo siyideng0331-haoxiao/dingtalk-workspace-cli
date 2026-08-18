@@ -14,8 +14,8 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 		confirmation string
 		parameters   map[string]string
 	}{
-		"dev.create_digital_employee": {
-			"dev deap-agent create", "create_digital_employee", "write", "medium", "not_required",
+		"deap.create_digital_employee": {
+			"deap manage create", "create_digital_employee", "write", "medium", "not_required",
 			map[string]string{
 				"name": "name", "description": "description", "dept-id": "deptId", "dept-name": "deptName",
 				"icon": "icon", "profile-json": "digitalTagEmployeeProfile",
@@ -25,16 +25,16 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 				"response-mode":  "digitalTagEmployeeProfile.responseMode",
 			},
 		},
-		"dev.get_digital_employee_detail": {
-			"dev deap-agent detail", "get_digital_employee_detail", "read", "low", "not_required",
-			map[string]string{"agent-uuid": "agentUuid", "type": "type"},
+		"deap.get_digital_employee_detail": {
+			"deap manage detail", "get_digital_employee_detail", "read", "low", "not_required",
+			map[string]string{"assistant-id": "assistantId", "type": "type"},
 		},
-		"dev.list_digital_employees": {
-			"dev deap-agent list", "list_digital_employees", "read", "low", "not_required",
+		"deap.list_digital_employees": {
+			"deap manage list", "list_digital_employees", "read", "low", "not_required",
 			map[string]string{"keyword": "keyword", "page": "page", "page-size": "pageSize"},
 		},
-		"dev.update_digital_employee_draft": {
-			"dev deap-agent save-draft", "update_digital_employee_draft", "write", "high", "user_required",
+		"deap.update_digital_employee_draft": {
+			"deap manage save-draft", "update_digital_employee_draft", "write", "high", "user_required",
 			map[string]string{
 				"agent-uuid": "agentUuid", "name": "name", "description": "description", "dept-id": "deptId",
 				"dept-name": "deptName", "icon": "icon", "prompt": "prompt", "profile-json": "digitalTagEmployeeProfile",
@@ -45,20 +45,20 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 				"skills-file":    "skills", "mcps-file": "mcps",
 			},
 		},
-		"dev.publish_digital_employee": {
-			"dev deap-agent publish", "publish_digital_employee", "write", "high", "user_required",
+		"deap.publish_digital_employee": {
+			"deap manage publish", "publish_digital_employee", "write", "high", "user_required",
 			map[string]string{"agent-uuid": "agentUuid", "allow-join-group": "allowJoinGroup"},
 		},
-		"dev.delete_digital_employee": {
-			"dev deap-agent delete", "delete_digital_employee", "destructive", "high", "user_required",
+		"deap.delete_digital_employee": {
+			"deap manage delete", "delete_digital_employee", "destructive", "high", "user_required",
 			map[string]string{"agent-uuid": "agentUuid"},
 		},
-		"dev.query_de_run_status": {
-			"dev deap-agent run-status", "query_de_run_status", "read", "low", "not_required",
+		"deap.query_de_run_status": {
+			"deap observe run-status", "query_de_run_status", "read", "low", "not_required",
 			map[string]string{"source-id": "sourceId", "source-type": "sourceType", "assistant-id": "assistantId"},
 		},
-		"dev.query_de_trace": {
-			"dev deap-agent trace", "query_de_trace", "read", "high", "not_required",
+		"deap.query_de_trace": {
+			"deap observe trace", "query_de_trace", "read", "high", "not_required",
 			map[string]string{"source-id": "sourceId", "source-type": "sourceType", "assistant-id": "assistantId"},
 		},
 	}
@@ -116,28 +116,28 @@ func TestDeapAgentSkillMCPLeavesReachFinalSchema(t *testing.T) {
 		availability string
 		parameters   map[string]string
 	}{
-		"dev.create_skill_from_file": {
-			"dev deap-agent skill create", "", "available",
+		"deap.create_skill_from_file": {
+			"deap skill create", "", "available",
 			map[string]string{"agent-uuid": "agentUuid", "file": "file"},
 		},
-		"dev.list_skills": {
-			"dev deap-agent skill list", "list_skills", "available",
+		"deap.list_skills": {
+			"deap skill list", "list_skills", "available",
 			map[string]string{"agent-uuid": "agentUuid", "snapshot": "snapshot"},
 		},
-		"dev.get_skill_detail": {
-			"dev deap-agent skill query", "get_skill_detail", "available",
+		"deap.get_skill_detail": {
+			"deap skill query", "get_skill_detail", "available",
 			map[string]string{"agent-uuid": "agentUuid", "skill-id": "skillId", "snapshot": "snapshot"},
 		},
-		"dev.create_mcp": {
-			"dev deap-agent mcp create", "create_mcp", "available",
+		"deap.create_mcp": {
+			"deap mcp create", "create_mcp", "available",
 			map[string]string{"config-file": "config"},
 		},
-		"dev.list_mcps": {
-			"dev deap-agent mcp list", "list_mcps", "available",
+		"deap.list_mcps": {
+			"deap mcp list", "list_mcps", "available",
 			map[string]string{"keywords": "keywords", "page": "page", "page-size": "pageSize"},
 		},
-		"dev.get_mcp_detail": {
-			"dev deap-agent mcp query", "get_mcp_detail", "available",
+		"deap.get_mcp_detail": {
+			"deap mcp query", "get_mcp_detail", "available",
 			map[string]string{"mcp-id": "mcpId"},
 		},
 	}
