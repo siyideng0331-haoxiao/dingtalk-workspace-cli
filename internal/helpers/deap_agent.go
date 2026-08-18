@@ -430,7 +430,7 @@ func newDeapAddSubAgentCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use:       "add-sub-agent",
 		Short:     "添加内部或外部 A2A 子智能体",
-		Long:      "按 --type internal|a2a 为指定数字员工添加子智能体。internal 使用 --sub-agent-uuid；a2a 使用 --name、--description、--agent-card-url。该操作只修改草稿配置，不自动发布；外部 A2A 添加不保证重复调用去重。真实执行前必须确认。",
+		Long:      "按 --type internal|a2a 为指定数字员工添加子智能体。internal 使用 --sub-agent-uuid；a2a 使用 --name、--description、--agent-card-url、--protocol-version。该操作只修改草稿配置，不自动发布；外部 A2A 添加不保证重复调用去重。真实执行前必须确认。",
 		Tool:      deapAddSubAgentTool,
 		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
@@ -441,6 +441,7 @@ func newDeapAddSubAgentCommand() *cobra.Command {
 			{Name: "name", Usage: "外部 A2A 子智能体名称", Bind: "name", Trim: true, OmitEmpty: true, RequiredWhen: "type=a2a"},
 			{Name: "description", Usage: "外部 A2A 子智能体描述", Bind: "description", Trim: true, OmitEmpty: true, RequiredWhen: "type=a2a"},
 			{Name: "agent-card-url", Usage: "外部 A2A Agent Card URL", Bind: "agentCardUrl", Trim: true, OmitEmpty: true, Format: "uri", RequiredWhen: "type=a2a"},
+			{Name: "protocol-version", Usage: "A2A 协议版本：0.3.0 或 1.0", Bind: "protocolVersion", Trim: true, OmitEmpty: true, Enum: []string{"0.3.0", "1.0"}, RequiredWhen: "type=a2a"},
 		},
 		Safety: contract.SafetySpec{
 			Effect: "write", Risk: "high",
@@ -455,7 +456,7 @@ func newDeapAddSubAgentCommand() *cobra.Command {
 					return fmt.Errorf("--sub-agent-uuid 在 --type internal 时必填")
 				}
 			case "a2a":
-				for _, name := range []string{"name", "description", "agent-card-url"} {
+				for _, name := range []string{"name", "description", "agent-card-url", "protocol-version"} {
 					value, _ := cmd.Flags().GetString(name)
 					if strings.TrimSpace(value) == "" {
 						return fmt.Errorf("--%s 在 --type a2a 时必填", name)
@@ -480,7 +481,7 @@ func newDeapAddSubAgentCommand() *cobra.Command {
 				AvoidWhen:    []string{"只需修改数字员工人设时使用 save-draft", "无法确认外部 Agent Card 来源与用途时不要执行"},
 				Examples: []string{
 					"dws deap manage add-sub-agent --agent-uuid <agentUuid> --type internal --sub-agent-uuid <subAgentUuid> --dry-run --format json",
-					`dws deap manage add-sub-agent --agent-uuid <agentUuid> --type a2a --name "外部客服" --description "处理外部咨询" --agent-card-url <agentCardUrl> --dry-run --format json`,
+					`dws deap manage add-sub-agent --agent-uuid <agentUuid> --type a2a --name "外部客服" --description "处理外部咨询" --agent-card-url <agentCardUrl> --protocol-version 1.0 --dry-run --format json`,
 				},
 			},
 		},

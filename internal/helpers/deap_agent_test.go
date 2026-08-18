@@ -206,11 +206,11 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 			leaf: "add-sub-agent", tool: "add_de_sub_agent", confirmed: true,
 			flags: map[string]string{
 				"agent-uuid": "agent-1", "type": "a2a", "name": "外部客服", "description": "外部 A2A 客服",
-				"agent-card-url": "https://example.com/.well-known/agent-card.json",
+				"agent-card-url": "https://example.com/.well-known/agent-card.json", "protocol-version": "1.0",
 			},
 			wantArgs: map[string]any{
 				"agentUuid": "agent-1", "type": "a2a", "name": "外部客服", "description": "外部 A2A 客服",
-				"agentCardUrl": "https://example.com/.well-known/agent-card.json",
+				"agentCardUrl": "https://example.com/.well-known/agent-card.json", "protocolVersion": "1.0",
 			},
 		},
 		{
@@ -288,6 +288,10 @@ func TestDevDeapAgentConstraintsFailBeforeMCP(t *testing.T) {
 		{leaf: "add-sub-agent", flags: map[string]string{
 			"agent-uuid": "agent-1", "type": "a2a", "name": "外部客服", "description": "外部 A2A 客服",
 		}, wantErr: "agent-card-url"},
+		{leaf: "add-sub-agent", flags: map[string]string{
+			"agent-uuid": "agent-1", "type": "a2a", "name": "外部客服", "description": "外部 A2A 客服",
+			"agent-card-url": "https://example.com/.well-known/agent-card.json",
+		}, wantErr: "protocol-version"},
 		{leaf: "add-sub-agent", flags: map[string]string{"agent-uuid": "agent-1", "type": "unknown"}, wantErr: "type"},
 		{leaf: "remove-sub-agent", flags: map[string]string{"agent-uuid": "agent-1", "type": "internal"}, wantErr: "sub-agent-instance-id"},
 		{leaf: "create", flags: map[string]string{

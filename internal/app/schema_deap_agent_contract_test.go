@@ -57,6 +57,7 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 			map[string]string{
 				"agent-uuid": "agentUuid", "type": "type", "sub-agent-uuid": "subAgentUuid",
 				"name": "name", "description": "description", "agent-card-url": "agentCardUrl",
+				"protocol-version": "protocolVersion",
 			},
 		},
 		"deap.remove_de_sub_agent": {
