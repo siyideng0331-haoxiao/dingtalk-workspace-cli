@@ -52,24 +52,16 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 			"deap manage delete", "delete_digital_employee", "destructive", "high", "user_required",
 			map[string]string{"agent-uuid": "agentUuid"},
 		},
-		"deap.add_de_internal_sub_agent": {
-			"deap manage add-internal-sub-agent", "add_de_internal_sub_agent", "write", "high", "user_required",
-			map[string]string{"agent-uuid": "agentUuid", "sub-agent-uuid": "subAgentUuid"},
-		},
-		"deap.remove_de_internal_sub_agent": {
-			"deap manage remove-internal-sub-agent", "remove_de_internal_sub_agent", "destructive", "high", "user_required",
-			map[string]string{"agent-uuid": "agentUuid", "sub-agent-instance-id": "subAgentInstanceId"},
-		},
-		"deap.add_de_a2a_sub_agent": {
-			"deap manage add-a2a-sub-agent", "add_de_a2a_sub_agent", "write", "high", "user_required",
+		"deap.add_de_sub_agent": {
+			"deap manage add-sub-agent", "add_de_sub_agent", "write", "high", "user_required",
 			map[string]string{
-				"agent-uuid": "agentUuid", "name": "name", "description": "description",
-				"agent-card-url": "agentCardUrl",
+				"agent-uuid": "agentUuid", "type": "type", "sub-agent-uuid": "subAgentUuid",
+				"name": "name", "description": "description", "agent-card-url": "agentCardUrl",
 			},
 		},
-		"deap.remove_de_a2a_sub_agent": {
-			"deap manage remove-a2a-sub-agent", "remove_de_a2a_sub_agent", "destructive", "high", "user_required",
-			map[string]string{"agent-uuid": "agentUuid", "sub-agent-instance-id": "subAgentInstanceId"},
+		"deap.remove_de_sub_agent": {
+			"deap manage remove-sub-agent", "remove_de_sub_agent", "destructive", "high", "user_required",
+			map[string]string{"agent-uuid": "agentUuid", "type": "type", "sub-agent-instance-id": "subAgentInstanceId"},
 		},
 		"deap.query_de_run_status": {
 			"deap observe run-status", "query_de_run_status", "read", "low", "not_required",
