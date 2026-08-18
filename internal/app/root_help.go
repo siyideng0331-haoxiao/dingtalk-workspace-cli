@@ -190,6 +190,12 @@ func resolveVisibleProducts() map[string]bool {
 	for id := range DirectRuntimeProductIDs() {
 		allowed[id] = true
 	}
+	// The public DEAP command uses a stable user-facing product name while its
+	// built-in MCP server keeps the environment-specific deap-dev identifier.
+	// Keep the command visible whenever that direct-runtime server is present.
+	if allowed[deapDevProductID] {
+		allowed[deapCLIProductID] = true
+	}
 	return allowed
 }
 
