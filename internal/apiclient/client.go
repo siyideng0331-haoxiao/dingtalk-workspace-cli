@@ -13,7 +13,7 @@
 
 // Package apiclient provides a lightweight HTTP client for calling DingTalk
 // OpenAPI (https://api.dingtalk.com) directly, bypassing the MCP JSON-RPC
-// transport. It is used exclusively by the `dws api` command.
+// transport. It is shared by `dws api` and narrow streaming upload commands.
 package apiclient
 
 import (
@@ -23,9 +23,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -64,6 +66,15 @@ type RawAPIResponse struct {
 	StatusCode int
 	Header     http.Header
 	Body       []byte
+}
+
+// MultipartUploadRequest describes one streaming multipart upload.
+type MultipartUploadRequest struct {
+	Path      string
+	FieldName string
+	FileName  string
+	File      io.Reader
+	Fields    map[string]string
 }
 
 // APIClient wraps an HTTP client for DingTalk OpenAPI calls.
@@ -152,6 +163,88 @@ func (c *APIClient) Do(ctx context.Context, req RawAPIRequest) (*RawAPIResponse,
 		Header:     resp.Header,
 		Body:       body,
 	}, nil
+}
+
+// UploadMultipart streams a file and form fields to a DingTalk OpenAPI endpoint.
+func (c *APIClient) UploadMultipart(ctx context.Context, req MultipartUploadRequest) (*RawAPIResponse, error) {
+	if c == nil || c.HTTPClient == nil {
+		return nil, fmt.Errorf("OpenAPI HTTP client is not configured")
+	}
+	if req.File == nil {
+		return nil, fmt.Errorf("multipart file is required")
+	}
+	fullURL, err := c.buildURL(req.Path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building request URL: %w", err)
+	}
+	if err := ValidateTargetHost(fullURL); err != nil {
+		return nil, err
+	}
+
+	pipeReader, pipeWriter := io.Pipe()
+	form := multipart.NewWriter(pipeWriter)
+	writeDone := make(chan error, 1)
+	go func() {
+		writeErr := writeMultipartBody(form, req)
+		if writeErr != nil {
+			_ = pipeWriter.CloseWithError(writeErr)
+		} else {
+			_ = pipeWriter.Close()
+		}
+		writeDone <- writeErr
+	}()
+
+	httpReq, err := newHTTPRequest(ctx, http.MethodPost, fullURL, pipeReader)
+	if err != nil {
+		_ = pipeReader.CloseWithError(err)
+		<-writeDone
+		return nil, fmt.Errorf("creating HTTP request: %w", err)
+	}
+	httpReq.Header.Set(AuthHeader, c.Token)
+	httpReq.Header.Set("Content-Type", form.FormDataContentType())
+	httpReq.Header.Set("User-Agent", "dws-cli/openapi-upload")
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		_ = pipeReader.CloseWithError(err)
+		<-writeDone
+		return nil, fmt.Errorf("executing HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(resp.Body)
+	writeErr := <-writeDone
+	if writeErr != nil {
+		return nil, fmt.Errorf("streaming multipart request: %w", writeErr)
+	}
+	if readErr != nil {
+		return nil, fmt.Errorf("reading response body: %w", readErr)
+	}
+	return &RawAPIResponse{StatusCode: resp.StatusCode, Header: resp.Header, Body: body}, nil
+}
+
+func writeMultipartBody(form *multipart.Writer, req MultipartUploadRequest) error {
+	fieldName := strings.TrimSpace(req.FieldName)
+	if fieldName == "" {
+		fieldName = "file"
+	}
+	fieldNames := make([]string, 0, len(req.Fields))
+	for name := range req.Fields {
+		fieldNames = append(fieldNames, name)
+	}
+	sort.Strings(fieldNames)
+	for _, name := range fieldNames {
+		if err := form.WriteField(name, req.Fields[name]); err != nil {
+			return err
+		}
+	}
+	part, err := form.CreateFormFile(fieldName, req.FileName)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(part, req.File); err != nil {
+		return err
+	}
+	return form.Close()
 }
 
 // buildURL constructs the full request URL from path and query params.

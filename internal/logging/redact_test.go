@@ -119,6 +119,27 @@ func TestSanitizeArguments(t *testing.T) {
 	}
 }
 
+func TestSanitizeArgumentsRedactsSensitiveValuesInsideArrays(t *testing.T) {
+	got := SanitizeArguments(map[string]any{
+		"skills": []any{
+			map[string]any{"skillId": "skill-1", "token": "array-secret"},
+		},
+		"mcps": []map[string]any{
+			{"mcpId": "mcp-1", "config": map[string]any{"configString": `{"token":"nested-secret"}`, "envs": map[string]any{"FOO": "env-secret"}, "headers": map[string]any{"X-Custom-Key": "header-secret"}}},
+		},
+	}, 4096)
+	for _, secret := range []string{"array-secret", "nested-secret", "env-secret", "header-secret"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("SanitizeArguments leaked %q inside array: %s", secret, got)
+		}
+	}
+	for _, safe := range []string{"skill-1", "mcp-1"} {
+		if !strings.Contains(got, safe) {
+			t.Fatalf("SanitizeArguments removed safe scalar %q: %s", safe, got)
+		}
+	}
+}
+
 func TestSanitizeArguments_Empty(t *testing.T) {
 	t.Parallel()
 	if got := SanitizeArguments(nil, 100); got != "{}" {

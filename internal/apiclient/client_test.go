@@ -17,12 +17,62 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 )
+
+func TestAPIClientUploadMultipartStreamsFileAndUsesAuthHeader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1.0/assistant/skills" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get(AuthHeader); got != "access-token" {
+			t.Errorf("auth header = %q", got)
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("ParseMultipartForm() error = %v", err)
+			return
+		}
+		if got := r.FormValue("agentUuid"); got != "agent-1" {
+			t.Errorf("agentUuid = %q", got)
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			t.Errorf("FormFile() error = %v", err)
+			return
+		}
+		defer file.Close()
+		body, _ := io.ReadAll(file)
+		if header.Filename != "skill.zip" || !bytes.Equal(body, []byte("zip-bytes")) {
+			t.Errorf("file name=%q body=%q", header.Filename, body)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"skillId":"skill-1"}`)
+	}))
+	defer server.Close()
+	AllowedHosts["127.0.0.1"] = true
+	t.Cleanup(func() { delete(AllowedHosts, "127.0.0.1") })
+
+	client := NewClient("access-token", server.URL)
+	client.HTTPClient = server.Client()
+	response, err := client.UploadMultipart(context.Background(), MultipartUploadRequest{
+		Path:      "/v1.0/assistant/skills",
+		FieldName: "file",
+		FileName:  "skill.zip",
+		File:      bytes.NewBufferString("zip-bytes"),
+		Fields:    map[string]string{"agentUuid": "agent-1"},
+	})
+	if err != nil {
+		t.Fatalf("UploadMultipart() error = %v", err)
+	}
+	if response.StatusCode != http.StatusCreated || string(response.Body) != `{"skillId":"skill-1"}` {
+		t.Fatalf("UploadMultipart() response = %+v", response)
+	}
+}
 
 func TestNewClient_DefaultBaseURL(t *testing.T) {
 	c := NewClient("tok", "")

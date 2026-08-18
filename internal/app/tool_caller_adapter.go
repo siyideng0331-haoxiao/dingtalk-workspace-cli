@@ -113,6 +113,18 @@ func (a *toolCallerAdapter) CallToolWithToken(ctx context.Context, token, produc
 	return a.CallTool(ctx, productID, toolName, args)
 }
 
+// AccessToken resolves the same active-profile token used by MCP tool calls.
+func (a *toolCallerAdapter) AccessToken(ctx context.Context) (string, error) {
+	if a == nil {
+		return "", fmt.Errorf("ToolCaller token resolver is not configured")
+	}
+	explicitToken := ""
+	if a.flags != nil {
+		explicitToken = a.flags.Token
+	}
+	return resolveRuntimeAuthToken(ctx, explicitToken)
+}
+
 func (a *toolCallerAdapter) Format() string {
 	if a != nil && a.flags != nil {
 		return a.flags.Format

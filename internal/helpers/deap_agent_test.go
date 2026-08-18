@@ -4,21 +4,514 @@
 package helpers
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/apiclient"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/corecmd/contractfinal"
+	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/testseam"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/pkg/edition"
 )
+
+type deapAgentSkillUploaderStub struct {
+	gotAgentUUID string
+	gotPath      string
+	result       deapAgentSkillCreated
+	err          error
+}
+
+func (s *deapAgentSkillUploaderStub) UploadAndCreate(_ context.Context, agentUUID, filePath string) (deapAgentSkillCreated, error) {
+	s.gotAgentUUID = agentUUID
+	s.gotPath = filePath
+	return s.result, s.err
+}
+
+func TestDevDeapAgentSkillCreateUsesUploadFacadeAndSafeOutput(t *testing.T) {
+	caller, output := newDeapAgentTestTree(t, false)
+	tempDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldDir) })
+	file, err := os.Create("skill.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(file)
+	entry, err := writer.Create("SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := entry.Write([]byte("# Weather")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	uploader := &deapAgentSkillUploaderStub{result: deapAgentSkillCreated{SkillID: "skill-1", Name: "weather", DisplayName: "天气", Description: "查询天气", Version: 1}}
+	testseam.Swap(t, &deapAgentSkillUploader, deapAgentSkillUploadAndCreator(uploader))
+	dev := devHandler{}.Command(&captureRunner{})
+	create, rest, err := dev.Find([]string{"deap-agent", "skill", "create"})
+	if err != nil || len(rest) != 0 {
+		t.Fatalf("find skill create: command=%v rest=%v err=%v", create, rest, err)
+	}
+	create.Flags().Bool("yes", false, "test confirmation")
+	for name, value := range map[string]string{"agent-uuid": "agent-1", "file": "./skill.zip", "yes": "true"} {
+		if err := create.Flags().Set(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := create.RunE(create, nil); err != nil {
+		t.Fatalf("RunE() error = %v", err)
+	}
+	if !strings.HasSuffix(uploader.gotPath, "skill.zip") {
+		t.Fatalf("upload facade file = %q", uploader.gotPath)
+	}
+	if uploader.gotAgentUUID != "agent-1" {
+		t.Fatalf("upload facade agentUuid = %q", uploader.gotAgentUUID)
+	}
+	if len(caller.calls) != 0 {
+		t.Fatalf("local ZIP create made %d MCP JSON calls", len(caller.calls))
+	}
+	got := output.String()
+	for _, want := range []string{"skill-1", "weather", "天气", "查询天气"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("safe create output missing %q: %s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"fileUrl", "uploadUrl", "credential", "secret"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("create output leaked forbidden field %q: %s", forbidden, got)
+		}
+	}
+}
+
+func TestDevDeapAgentSkillCreateLabelsStagesAndRedactsURLs(t *testing.T) {
+	caller, _ := newDeapAgentTestTree(t, false)
+	tempDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldDir) })
+	if err := os.WriteFile("bad.zip", []byte("bad"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dev := devHandler{}.Command(&captureRunner{})
+	invalid, _, err := dev.Find([]string{"deap-agent", "skill", "create"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"agent-uuid": "agent-1", "file": "./bad.zip"} {
+		if err := invalid.Flags().Set(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := invalid.RunE(invalid, nil); err == nil || !strings.Contains(err.Error(), "validate 阶段失败") {
+		t.Fatalf("invalid package error = %v", err)
+	}
+
+	file, err := os.Create("valid.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(file)
+	entry, err := writer.Create("SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = entry.Write([]byte("# Skill"))
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []string{"upload", "create", "query"} {
+		t.Run(stage, func(t *testing.T) {
+			uploader := &deapAgentSkillUploaderStub{err: &deapAgentSkillStageError{Stage: stage, Err: errors.New("request https://oss.example.test/object?token=secret failed")}}
+			testseam.Swap(t, &deapAgentSkillUploader, deapAgentSkillUploadAndCreator(uploader))
+			command := devHandler{}.Command(&captureRunner{})
+			create, _, findErr := command.Find([]string{"deap-agent", "skill", "create"})
+			if findErr != nil {
+				t.Fatal(findErr)
+			}
+			create.Flags().Bool("yes", false, "test confirmation")
+			for name, value := range map[string]string{"agent-uuid": "agent-1", "file": "./valid.zip", "yes": "true"} {
+				if setErr := create.Flags().Set(name, value); setErr != nil {
+					t.Fatal(setErr)
+				}
+			}
+			runErr := create.RunE(create, nil)
+			if runErr == nil || !strings.Contains(runErr.Error(), stage+" 阶段失败") {
+				t.Fatalf("stage error = %v", runErr)
+			}
+			if strings.Contains(runErr.Error(), "oss.example") || strings.Contains(runErr.Error(), "token=secret") {
+				t.Fatalf("stage error leaked temporary URL: %v", runErr)
+			}
+		})
+	}
+	if len(caller.calls) != 0 {
+		t.Fatalf("failed skill create made %d MCP JSON calls", len(caller.calls))
+	}
+}
+
+func TestDeapAgentOpenAPISkillUploaderStreamsMultipartAndParsesSafeResult(t *testing.T) {
+	tempDir := t.TempDir()
+	filePath := tempDir + "/skill.zip"
+	file, err := os.Create(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(file)
+	entry, err := writer.Create("SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = entry.Write([]byte("# Skill"))
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1.0/assistant/skills" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get(apiclient.AuthHeader); got != "access-token" {
+			t.Errorf("auth header = %q", got)
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("ParseMultipartForm() error = %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if got := r.FormValue("agentUuid"); got != "agent-1" {
+			t.Errorf("agentUuid = %q", got)
+		}
+		part, header, openErr := r.FormFile("file")
+		if openErr != nil {
+			t.Errorf("FormFile() error = %v", openErr)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer part.Close()
+		body, readErr := io.ReadAll(part)
+		if readErr != nil || len(body) == 0 || header.Filename != "skill.zip" {
+			t.Errorf("uploaded file name=%q bytes=%d err=%v", header.Filename, len(body), readErr)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"skillId":"skill-1","skill":{"skillId":"skill-1","name":"weather","displayName":"天气","description":"查询天气"}}`)
+	}))
+	defer server.Close()
+	apiclient.AllowedHosts["127.0.0.1"] = true
+	t.Cleanup(func() { delete(apiclient.AllowedHosts, "127.0.0.1") })
+
+	uploader := deapAgentOpenAPISkillUploader{
+		baseURL:    server.URL,
+		httpClient: server.Client(),
+		resolveToken: func(context.Context) (string, error) {
+			return "access-token", nil
+		},
+	}
+	result, err := uploader.UploadAndCreate(context.Background(), "agent-1", filePath)
+	if err != nil {
+		t.Fatalf("UploadAndCreate() error = %v", err)
+	}
+	if result.SkillID != "skill-1" || result.Name != "weather" || result.DisplayName != "天气" {
+		t.Fatalf("UploadAndCreate() result = %+v", result)
+	}
+}
+
+func TestDeapAgentSkillPackageValidation(t *testing.T) {
+	tempDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldDir) })
+
+	writeZIP := func(name string, entries map[string]string) {
+		t.Helper()
+		file, createErr := os.Create(name)
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		writer := zip.NewWriter(file)
+		for entryName, body := range entries {
+			entry, entryErr := writer.Create(entryName)
+			if entryErr != nil {
+				t.Fatal(entryErr)
+			}
+			if _, entryErr := entry.Write([]byte(body)); entryErr != nil {
+				t.Fatal(entryErr)
+			}
+		}
+		if closeErr := writer.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+
+	writeZIP("valid.zip", map[string]string{"SKILL.md": "# Example", "scripts/run.sh": "echo ok"})
+	if _, err := deapAgentValidateSkillPackage("./valid.zip"); err != nil {
+		t.Fatalf("valid package rejected: %v", err)
+	}
+
+	writeZIP("wrong.tar", map[string]string{"SKILL.md": "# Example"})
+	writeZIP("missing-skill.zip", map[string]string{"README.md": "missing"})
+	writeZIP("traversal.zip", map[string]string{"SKILL.md": "# Example", "../escape.sh": "bad"})
+	if err := os.WriteFile("corrupt.zip", []byte("not a zip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir("directory.zip", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("too-large.zip", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate("too-large.zip", deapAgentSkillMaxPackageSize+1); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		path    string
+		wantErr string
+	}{
+		{"./wrong.tar", ".zip"},
+		{"./directory.zip", "普通文件"},
+		{"./corrupt.zip", "ZIP"},
+		{"./too-large.zip", "50 MiB"},
+		{"./missing-skill.zip", "SKILL.md"},
+		{"./traversal.zip", "路径"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			if _, err := deapAgentValidateSkillPackage(tc.path); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("validate(%q) error = %v, want containing %q", tc.path, err, tc.wantErr)
+			}
+		})
+	}
+}
 
 type deapAgentCall struct {
 	productID string
 	toolName  string
 	args      map[string]any
+}
+
+func TestDevDeapAgentSkillAndMCPCommandsRouteFrozenContracts(t *testing.T) {
+	caller, _ := newDeapAgentTestTree(t, false)
+	tempDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldDir) })
+	if err := os.WriteFile("mcp.json", []byte(`{"name":"weather","description":"查询天气","detailIntro":"天气 MCP","userQuestionTips":["请输入城市"],"configType":"JSON","configString":"{\"url\":\"https://mcp.example.test\",\"token\":\"secret\"}","envs":{"API_TOKEN":"env-secret"},"toolsDisabled":{"search":false}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("skills.json", []byte(`[{"skillId":"skill-1","enabled":true,"attributes":{"configDefinitions":{"city":"hangzhou"}}}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("mcps.json", []byte(`[{"mcpId":"mcp-1","enabled":true,"config":{"credentialRef":"cred-1"}}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		path      []string
+		tool      string
+		flags     map[string]string
+		wantArgs  map[string]any
+		confirmed bool
+	}{
+		{path: []string{"skill", "list"}, tool: "list_skills", flags: map[string]string{"agent-uuid": "agent-1"}, wantArgs: map[string]any{"agentUuid": "agent-1", "snapshot": "draft"}},
+		{path: []string{"skill", "query"}, tool: "get_skill_detail", flags: map[string]string{"agent-uuid": "agent-1", "skill-id": "skill-1", "snapshot": "published"}, wantArgs: map[string]any{"agentUuid": "agent-1", "skillId": "skill-1", "snapshot": "published"}},
+		{path: []string{"mcp", "create"}, tool: "create_mcp", flags: map[string]string{"config-file": "./mcp.json"}, wantArgs: map[string]any{"config": map[string]any{"name": "weather", "description": "查询天气", "detailIntro": "天气 MCP", "userQuestionTips": []any{"请输入城市"}, "configType": "JSON", "configString": `{"url":"https://mcp.example.test","token":"secret"}`, "envs": map[string]any{"API_TOKEN": "env-secret"}, "toolsDisabled": map[string]any{"search": false}}}, confirmed: true},
+		{path: []string{"mcp", "list"}, tool: "list_mcps", flags: map[string]string{}, wantArgs: map[string]any{"keywords": "", "page": 1, "pageSize": 20}},
+		{path: []string{"mcp", "query"}, tool: "get_mcp_detail", flags: map[string]string{"mcp-id": "mcp-1"}, wantArgs: map[string]any{"mcpId": "mcp-1"}},
+		{path: []string{"detail"}, tool: "get_digital_employee_detail", flags: map[string]string{"agent-uuid": "agent-1", "type": "published"}, wantArgs: map[string]any{"agentUuid": "agent-1", "type": "published"}},
+		{path: []string{"save-draft"}, tool: "update_digital_employee_draft", flags: map[string]string{"agent-uuid": "agent-1", "skills-file": "./skills.json", "mcps-file": "./mcps.json"}, wantArgs: map[string]any{"agentUuid": "agent-1", "skills": []any{map[string]any{"skillId": "skill-1", "enabled": true, "attributes": map[string]any{"configDefinitions": map[string]any{"city": "hangzhou"}}}}, "mcps": []any{map[string]any{"mcpId": "mcp-1", "enabled": true, "config": map[string]any{"credentialRef": "cred-1"}}}}, confirmed: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(strings.Join(tc.path, "_"), func(t *testing.T) {
+			caller.calls = nil
+			dev := devHandler{}.Command(&captureRunner{})
+			lookup := append([]string{"deap-agent"}, tc.path...)
+			leaf, rest, findErr := dev.Find(lookup)
+			if findErr != nil || len(rest) != 0 {
+				t.Fatalf("find %v: leaf=%v rest=%v err=%v", lookup, leaf, rest, findErr)
+			}
+			if tc.confirmed {
+				leaf.Flags().Bool("yes", false, "test confirmation")
+				tc.flags["yes"] = "true"
+			}
+			for name, value := range tc.flags {
+				if setErr := leaf.Flags().Set(name, value); setErr != nil {
+					t.Fatal(setErr)
+				}
+			}
+			if runErr := leaf.RunE(leaf, nil); runErr != nil {
+				t.Fatalf("RunE() error = %v", runErr)
+			}
+			if len(caller.calls) != 1 {
+				t.Fatalf("MCP call count = %d, want 1", len(caller.calls))
+			}
+			call := caller.calls[0]
+			if call.productID != deapAgentServerID || call.toolName != tc.tool {
+				t.Fatalf("route = %s/%s, want %s/%s", call.productID, call.toolName, deapAgentServerID, tc.tool)
+			}
+			if !reflect.DeepEqual(call.args, tc.wantArgs) {
+				t.Fatalf("args = %#v, want %#v", call.args, tc.wantArgs)
+			}
+		})
+	}
+}
+
+func TestDevDeapAgentConfigFilesStayRedactedInDryRun(t *testing.T) {
+	caller, output := newDeapAgentTestTree(t, true)
+	tempDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldDir) })
+	files := map[string]string{
+		"mcp.json":    `{"name":"weather","description":"查询天气","userQuestionTips":["请输入城市"],"configType":"JSON","configString":"{\"token\":\"mcp-secret\"}","envs":{"API_TOKEN":"env-secret"},"toolsDisabled":{"search":false}}`,
+		"skills.json": `[{"skillId":"skill-1","attributes":{"configDefinitions":{"apiToken":"skill-secret"}}}]`,
+		"mcps.json":   `[{"mcpId":"mcp-1","credential":{"password":"draft-secret"}}]`,
+	}
+	for name, body := range files {
+		if err := os.WriteFile(name, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	run := func(path []string, flags map[string]string) string {
+		t.Helper()
+		output.Reset()
+		dev := devHandler{}.Command(&captureRunner{})
+		command, rest, findErr := dev.Find(append([]string{"deap-agent"}, path...))
+		if findErr != nil || len(rest) != 0 {
+			t.Fatalf("find %v: rest=%v err=%v", path, rest, findErr)
+		}
+		command.Flags().Bool("yes", false, "test confirmation")
+		flags["yes"] = "true"
+		for name, value := range flags {
+			if setErr := command.Flags().Set(name, value); setErr != nil {
+				t.Fatal(setErr)
+			}
+		}
+		if runErr := command.RunE(command, nil); runErr != nil {
+			t.Fatalf("run %v: %v", path, runErr)
+		}
+		return output.String()
+	}
+
+	mcpOutput := run([]string{"mcp", "create"}, map[string]string{"config-file": "./mcp.json"})
+	draftOutput := run([]string{"save-draft"}, map[string]string{"agent-uuid": "agent-1", "skills-file": "./skills.json", "mcps-file": "./mcps.json"})
+	for label, got := range map[string]string{"mcp create": mcpOutput, "save-draft": draftOutput} {
+		for _, secret := range []string{"mcp-secret", "env-secret", "skill-secret", "draft-secret"} {
+			if strings.Contains(got, secret) {
+				t.Fatalf("%s dry-run leaked %q: %s", label, secret, got)
+			}
+		}
+		if !strings.Contains(got, "redacted") {
+			t.Fatalf("%s dry-run lacks redacted marker: %s", label, got)
+		}
+	}
+	if len(caller.calls) != 0 {
+		t.Fatalf("dry-run made %d MCP calls", len(caller.calls))
+	}
+}
+
+func TestDevDeapAgentSaveDraftDistinguishesAbsentAndExplicitEmptyConfigs(t *testing.T) {
+	caller, _ := newDeapAgentTestTree(t, false)
+	tempDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldDir) })
+	if err := os.WriteFile("empty.json", []byte(`[]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(flags map[string]string) map[string]any {
+		t.Helper()
+		caller.calls = nil
+		dev := devHandler{}.Command(&captureRunner{})
+		save, _, findErr := dev.Find([]string{"deap-agent", "save-draft"})
+		if findErr != nil {
+			t.Fatal(findErr)
+		}
+		save.Flags().Bool("yes", false, "test confirmation")
+		flags["yes"] = "true"
+		for name, value := range flags {
+			if setErr := save.Flags().Set(name, value); setErr != nil {
+				t.Fatal(setErr)
+			}
+		}
+		if runErr := save.RunE(save, nil); runErr != nil {
+			t.Fatal(runErr)
+		}
+		if len(caller.calls) != 1 {
+			t.Fatalf("MCP call count = %d, want 1", len(caller.calls))
+		}
+		return caller.calls[0].args
+	}
+
+	absent := run(map[string]string{"agent-uuid": "agent-1"})
+	if _, ok := absent["skills"]; ok {
+		t.Fatalf("omitted --skills-file unexpectedly changed skills: %#v", absent)
+	}
+	if _, ok := absent["mcps"]; ok {
+		t.Fatalf("omitted --mcps-file unexpectedly changed mcps: %#v", absent)
+	}
+	empty := run(map[string]string{"agent-uuid": "agent-1", "skills-file": "./empty.json", "mcps-file": "./empty.json"})
+	if skills, ok := empty["skills"].([]any); !ok || len(skills) != 0 {
+		t.Fatalf("explicit empty skills = %#v, want []", empty["skills"])
+	}
+	if mcps, ok := empty["mcps"].([]any); !ok || len(mcps) != 0 {
+		t.Fatalf("explicit empty mcps = %#v, want []", empty["mcps"])
+	}
 }
 
 type deapAgentCaller struct {
@@ -45,7 +538,7 @@ func newDeapAgentTestTree(t *testing.T, dryRun bool) (*deapAgentCaller, *bytes.B
 	return caller, out
 }
 
-func TestDevDeapAgentCommandTreeDeclaresNineDirectLeaves(t *testing.T) {
+func TestDevDeapAgentCommandTreeKeepsEightLeavesAndAddsSkillMCPGroups(t *testing.T) {
 	newDeapAgentTestTree(t, false)
 	dev := devHandler{}.Command(&captureRunner{})
 	group, remaining, err := dev.Find([]string{"deap-agent"})
@@ -56,8 +549,8 @@ func TestDevDeapAgentCommandTreeDeclaresNineDirectLeaves(t *testing.T) {
 		"create", "detail", "list", "save-draft", "publish",
 		"delete", "run-status", "trace",
 	}
-	if got := len(group.Commands()); got != len(wantLeaves) {
-		t.Fatalf("deap-agent direct child count = %d, want %d", got, len(wantLeaves))
+	if got := len(group.Commands()); got != len(wantLeaves)+2 {
+		t.Fatalf("deap-agent direct child count = %d, want %d", got, len(wantLeaves)+2)
 	}
 	for _, name := range wantLeaves {
 		leaf, rest, findErr := group.Find([]string{name})
@@ -76,6 +569,15 @@ func TestDevDeapAgentCommandTreeDeclaresNineDirectLeaves(t *testing.T) {
 		final, ok := contractfinal.RuntimeContractFinal(leaf)
 		if !ok || final.Identity == nil || final.Interface == nil || final.Safety == nil {
 			t.Errorf("dev deap-agent %s has incomplete ContractFinal: %+v ok=%v", name, final, ok)
+		}
+	}
+	for _, name := range []string{"skill", "mcp"} {
+		subgroup, rest, findErr := group.Find([]string{name})
+		if findErr != nil || len(rest) != 0 || subgroup == group {
+			t.Fatalf("find subgroup %q: command=%v rest=%v err=%v", name, subgroup, rest, findErr)
+		}
+		if !subgroup.HasSubCommands() {
+			t.Errorf("dev deap-agent %s must be a command group", name)
 		}
 	}
 }
@@ -125,12 +627,12 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 		},
 		{
 			leaf: "detail", tool: "get_digital_employee_detail",
-			flags: map[string]string{"assistant-id": "assistant-1"},
-			wantArgs: map[string]any{"assistantId": "assistant-1"},
+			flags:    map[string]string{"assistant-id": "assistant-1"},
+			wantArgs: map[string]any{"agentUuid": "assistant-1", "type": "draft"},
 		},
 		{
 			leaf: "list", tool: "list_digital_employees",
-			flags: map[string]string{"keyword": "值班", "page": "2", "page-size": "101"},
+			flags:    map[string]string{"keyword": "值班", "page": "2", "page-size": "101"},
 			wantArgs: map[string]any{"keyword": "值班", "page": 2, "pageSize": 101},
 		},
 		{
@@ -149,22 +651,22 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 		},
 		{
 			leaf: "publish", tool: "publish_digital_employee", confirmed: true,
-			flags: map[string]string{"agent-uuid": "agent-1"},
+			flags:    map[string]string{"agent-uuid": "agent-1"},
 			wantArgs: map[string]any{"agentUuid": "agent-1"},
 		},
 		{
 			leaf: "delete", tool: "delete_digital_employee", confirmed: true,
-			flags: map[string]string{"agent-uuid": "agent-1"},
+			flags:    map[string]string{"agent-uuid": "agent-1"},
 			wantArgs: map[string]any{"agentUuid": "agent-1"},
 		},
 		{
 			leaf: "run-status", tool: "query_de_run_status",
-			flags: map[string]string{"assistant-id": "agent-1", "source-id": "open-message-1", "source-type": "im_message"},
+			flags:    map[string]string{"assistant-id": "agent-1", "source-id": "open-message-1", "source-type": "im_message"},
 			wantArgs: map[string]any{"assistantId": "agent-1", "sourceId": "open-message-1", "sourceType": "im_message"},
 		},
 		{
 			leaf: "trace", tool: "query_de_trace",
-			flags: map[string]string{"assistant-id": "agent-1", "source-id": "open-message-1", "source-type": "trigger_rule"},
+			flags:    map[string]string{"assistant-id": "agent-1", "source-id": "open-message-1", "source-type": "trigger_rule"},
 			wantArgs: map[string]any{"assistantId": "agent-1", "sourceId": "open-message-1", "sourceType": "trigger_rule"},
 		},
 	}
