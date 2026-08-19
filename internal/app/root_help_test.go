@@ -51,6 +51,21 @@ func TestRootHelpHidesCompatibilityOnlyCommands(t *testing.T) {
 	}
 }
 
+func TestRootHelpShowsTopLevelDeapService(t *testing.T) {
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"-h"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("root help: %v\n%s", err, out.String())
+	}
+
+	if help := out.String(); !strings.Contains(help, "● deap") {
+		t.Fatalf("root help missing top-level deap service:\n%s", help)
+	}
+}
+
 func TestCalendarEventCreateHelpKeepsRoomsStringMetavar(t *testing.T) {
 	cmd := NewRootCommand()
 	var out bytes.Buffer

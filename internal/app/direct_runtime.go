@@ -46,6 +46,7 @@ const (
 	defaultPATServerID    = "abc3c880fb90f04b52d1426aaf093766e5fc9ec38411688cbb74df42a584d374"
 	devappProductID       = "devapp"
 	devappServerPath      = "/server/op-app"
+	deapCLIProductID      = "deap"
 	deapDevProductID      = "deap-dev"
 	deapDevServerPath     = "/server/68e7e41374caa1336dc642bc3dd220de6f1e7077356dc0d4fc128f62d52d7d9b"
 )

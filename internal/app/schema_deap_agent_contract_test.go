@@ -53,6 +53,18 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 			"deap manage delete", "delete_digital_employee", "destructive", "high", "user_required",
 			map[string]string{"agent-uuid": "agentUuid"},
 		},
+		"deap.add_de_sub_agent": {
+			"deap manage add-sub-agent", "add_de_sub_agent", "write", "high", "user_required",
+			map[string]string{
+				"agent-uuid": "agentUuid", "type": "type", "sub-agent-uuid": "subAgentUuid",
+				"name": "name", "description": "description", "agent-card-url": "agentCardUrl",
+				"protocol-version": "protocolVersion",
+			},
+		},
+		"deap.remove_de_sub_agent": {
+			"deap manage remove-sub-agent", "remove_de_sub_agent", "destructive", "high", "user_required",
+			map[string]string{"agent-uuid": "agentUuid", "type": "type", "sub-agent-instance-id": "subAgentInstanceId"},
+		},
 		"deap.query_de_run_status": {
 			"deap observe run-status", "query_de_run_status", "read", "low", "not_required",
 			map[string]string{"source-id": "sourceId", "source-type": "sourceType", "assistant-id": "assistantId"},
