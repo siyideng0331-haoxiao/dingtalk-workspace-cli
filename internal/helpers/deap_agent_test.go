@@ -686,8 +686,8 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 		},
 		{
 			leaf: "detail", tool: "get_digital_employee_detail",
-			flags:    map[string]string{"assistant-id": "assistant-1"},
-			wantArgs: map[string]any{"assistantId": "assistant-1", "type": "draft"},
+			flags:    map[string]string{"assistant-id": "assistant-1", "type": "published"},
+			wantArgs: map[string]any{"assistantId": "assistant-1", "type": "published"},
 		},
 		{
 			leaf: "list", tool: "list_digital_employees",
@@ -765,6 +765,24 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 	}
 }
 
+func TestDeapDetailDefaultsToDraft(t *testing.T) {
+	caller, _ := newDeapAgentTestTree(t, false)
+	root := deapHandler{}.Command(&captureRunner{})
+	detail := deapFindLeaf(t, root, "detail")
+	if err := detail.Flags().Set("assistant-id", "assistant-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := detail.RunE(detail, nil); err != nil {
+		t.Fatalf("RunE() error = %v", err)
+	}
+
+	want := map[string]any{"assistantId": "assistant-1", "type": "draft"}
+	if len(caller.calls) != 1 || !reflect.DeepEqual(caller.calls[0].args, want) {
+		t.Fatalf("detail call = %#v, want args %#v", caller.calls, want)
+	}
+}
+
 func TestDevDeapAgentConstraintsFailBeforeMCP(t *testing.T) {
 	caller, _ := newDeapAgentTestTree(t, false)
 	cases := []struct {
@@ -780,6 +798,7 @@ func TestDevDeapAgentConstraintsFailBeforeMCP(t *testing.T) {
 		{leaf: "trace", flags: map[string]string{"assistant-id": "agent-1", "source-id": "src-1"}, wantErr: "source-type"},
 		{leaf: "list", flags: map[string]string{"page": "0"}, wantErr: "--page 不能小于 1"},
 		{leaf: "list", flags: map[string]string{"page-size": "0"}, wantErr: "--page-size 不能小于 1"},
+		{leaf: "detail", flags: map[string]string{"assistant-id": "agent-1", "type": "merged"}, wantErr: "--type"},
 		{leaf: "create", flags: map[string]string{
 			"name": "值班助手", "description": "处理值班问题", "dept-id": "dept-1", "dept-name": "值班组",
 			"profile-json": `{"tag":"forbidden"}`,

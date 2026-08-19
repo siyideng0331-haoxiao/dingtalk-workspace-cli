@@ -207,13 +207,13 @@ func newDeapAgentDetailCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use:       "detail",
 		Short:     "查询数字员工管理态详情",
-		Long:      "按 assistantId 查询 DEAP 数字员工详情。--type draft 返回未发布草稿及其 Skill/MCP 引用配置，published 返回线上已发布配置。仅有管理权限的调用人可读；iconUrl 可能是带签名的临时地址，长期保存应使用 icon。",
+		Long:      "按 assistantId 查询 DEAP 数字员工详情。--type draft 返回未发布草稿及其 Skill/MCP 引用配置，published 返回线上已发布配置，默认 draft；返回 status 中 online 表示已发布，dev/offline 表示未发布。仅有该数字员工管理权限的调用人可读；ID 不存在或不是数字员工时返回 NOT_FOUND。保存草稿前应先查询 draft；iconUrl 可能是带签名的临时地址，长期保存应使用 icon。",
 		Tool:      deapAgentDetailTool,
 		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
 			{Name: "assistant-id", Usage: "数字员工 ID", Bind: "assistantId", Required: true, Trim: true},
-			{Name: "type", Usage: "详情来源：draft（未发布草稿）或 published（线上已发布配置）", Bind: "type", Default: "draft", ArgDefault: "draft", Enum: []string{"draft", "published"}},
+			{Name: "type", Usage: "详情来源：draft（未发布草稿）或 published（线上已发布配置）", Bind: "type", Default: "draft", ArgDefault: "draft", Trim: true, Enum: []string{"draft", "published"}},
 		},
 		Safety: contract.SafetySpec{
 			Effect: "read", Risk: "low",
@@ -226,14 +226,20 @@ func newDeapAgentDetailCommand() *cobra.Command {
 				CLIPath:       "deap manage detail", PrimaryCLIPath: "deap manage detail",
 				Group: "manage",
 			},
-			Description: "按 assistantId 查询数字员工 draft 或 published 详情及其 Skill/MCP 引用配置。",
+			Description: "按 assistantId 查询数字员工 draft 或 published 详情及其 Skill/MCP 引用配置。type 默认 draft；返回 status 中 online 表示已发布，dev/offline 表示未发布。",
 			DryRun:      deapAgentDryRun,
 			Interface:   deapAgentMCPInterface(deapAgentDetailTool),
 			Selection: contract.SelectionSpec{
 				AgentSummary: "按 assistantId 查询数字员工草稿或已发布详情",
 				UseWhen:      []string{"需要读取数字员工完整配置、发布前检查或保存草稿前回读时"},
 				AvoidWhen:    []string{"需要分页查找多个数字员工时使用 list", "只查一次运行状态时使用 run-status"},
-				Examples:     []string{"dws deap manage detail --assistant-id <assistantId> --type draft --format json"},
+				Examples: []string{
+					"dws deap manage detail --assistant-id <assistantId> --type draft --format json",
+					"dws deap manage detail --assistant-id <assistantId> --type published --format json",
+				},
+			},
+			Parameters: []contract.ParamDecl{
+				{Name: "type", Property: "type", Enum: []string{"draft", "published"}},
 			},
 		},
 	})
