@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -24,16 +25,14 @@ import (
 )
 
 type deapAgentSkillUploaderStub struct {
-	gotAgentUUID string
-	gotPath      string
-	result       deapAgentSkillCreated
-	err          error
+	gotPath string
+	fileURL string
+	err     error
 }
 
-func (s *deapAgentSkillUploaderStub) UploadAndCreate(_ context.Context, agentUUID, filePath string) (deapAgentSkillCreated, error) {
-	s.gotAgentUUID = agentUUID
+func (s *deapAgentSkillUploaderStub) Upload(_ context.Context, filePath string) (string, error) {
 	s.gotPath = filePath
-	return s.result, s.err
+	return s.fileURL, s.err
 }
 
 func TestDevDeapAgentSkillCreateUsesUploadFacadeAndSafeOutput(t *testing.T) {
@@ -66,8 +65,10 @@ func TestDevDeapAgentSkillCreateUsesUploadFacadeAndSafeOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	uploader := &deapAgentSkillUploaderStub{result: deapAgentSkillCreated{SkillID: "skill-1", Name: "weather", DisplayName: "天气", Description: "查询天气", Version: 1}}
-	testseam.Swap(t, &deapAgentSkillUploader, deapAgentSkillUploadAndCreator(uploader))
+	fileURL := "https://signed.example/temporary-secret"
+	uploader := &deapAgentSkillUploaderStub{fileURL: fileURL}
+	testseam.Swap(t, &deapAgentSkillUploader, deapAgentSkillPackageUploader(uploader))
+	caller.resultText = `{"success":true,"data":{"skillId":"skill-1","skill":{"skillId":"skill-1","name":"weather","displayName":"天气","description":"查询天气"}}}`
 	deap := deapHandler{}.Command(&captureRunner{})
 	create, rest, err := deap.Find([]string{"skill", "create"})
 	if err != nil || len(rest) != 0 {
@@ -85,11 +86,15 @@ func TestDevDeapAgentSkillCreateUsesUploadFacadeAndSafeOutput(t *testing.T) {
 	if !strings.HasSuffix(uploader.gotPath, "skill.zip") {
 		t.Fatalf("upload facade file = %q", uploader.gotPath)
 	}
-	if uploader.gotAgentUUID != "agent-1" {
-		t.Fatalf("upload facade agentUuid = %q", uploader.gotAgentUUID)
+	if len(caller.calls) != 1 {
+		t.Fatalf("local ZIP create made %d MCP calls, want 1", len(caller.calls))
 	}
-	if len(caller.calls) != 0 {
-		t.Fatalf("local ZIP create made %d MCP JSON calls", len(caller.calls))
+	call := caller.calls[0]
+	if call.productID != deapAgentServerID || call.toolName != "create_skill_by_url" {
+		t.Fatalf("create route = %s/%s", call.productID, call.toolName)
+	}
+	if call.args["agentUuid"] != "agent-1" || call.args["fileUrl"] != fileURL {
+		t.Fatalf("create args = %#v", call.args)
 	}
 	got := output.String()
 	for _, want := range []string{"skill-1", "weather", "天气", "查询天气"} {
@@ -149,10 +154,34 @@ func TestDevDeapAgentSkillCreateLabelsStagesAndRedactsURLs(t *testing.T) {
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for _, stage := range []string{"upload", "create", "query"} {
+	t.Run("upload", func(t *testing.T) {
+		uploader := &deapAgentSkillUploaderStub{err: errors.New("request https://oss.example.test/object?token=secret failed")}
+		testseam.Swap(t, &deapAgentSkillUploader, deapAgentSkillPackageUploader(uploader))
+		command := deapHandler{}.Command(&captureRunner{})
+		create, _, findErr := command.Find([]string{"skill", "create"})
+		if findErr != nil {
+			t.Fatal(findErr)
+		}
+		create.Flags().Bool("yes", false, "test confirmation")
+		for name, value := range map[string]string{"agent-uuid": "agent-1", "file": "./valid.zip", "yes": "true"} {
+			if setErr := create.Flags().Set(name, value); setErr != nil {
+				t.Fatal(setErr)
+			}
+		}
+		runErr := create.RunE(create, nil)
+		if runErr == nil || !strings.Contains(runErr.Error(), "upload 阶段失败") {
+			t.Fatalf("stage error = %v", runErr)
+		}
+		if strings.Contains(runErr.Error(), "oss.example") || strings.Contains(runErr.Error(), "token=secret") {
+			t.Fatalf("stage error leaked temporary URL: %v", runErr)
+		}
+	})
+	for _, stage := range []string{"create", "query"} {
 		t.Run(stage, func(t *testing.T) {
-			uploader := &deapAgentSkillUploaderStub{err: &deapAgentSkillStageError{Stage: stage, Err: errors.New("request https://oss.example.test/object?token=secret failed")}}
-			testseam.Swap(t, &deapAgentSkillUploader, deapAgentSkillUploadAndCreator(uploader))
+			uploader := &deapAgentSkillUploaderStub{fileURL: "https://oss.example.test/object?token=secret"}
+			testseam.Swap(t, &deapAgentSkillUploader, deapAgentSkillPackageUploader(uploader))
+			caller.err = fmt.Errorf("skill create failed at %s stage: https://oss.example.test/object?token=secret", stage)
+			t.Cleanup(func() { caller.err = nil })
 			command := deapHandler{}.Command(&captureRunner{})
 			create, _, findErr := command.Find([]string{"skill", "create"})
 			if findErr != nil {
@@ -173,12 +202,9 @@ func TestDevDeapAgentSkillCreateLabelsStagesAndRedactsURLs(t *testing.T) {
 			}
 		})
 	}
-	if len(caller.calls) != 0 {
-		t.Fatalf("failed skill create made %d MCP JSON calls", len(caller.calls))
-	}
 }
 
-func TestDeapAgentOpenAPISkillUploaderStreamsMultipartAndParsesSafeResult(t *testing.T) {
+func TestDeapAgentOpenAPISkillUploaderStreamsMultipartAndReturnsFileURL(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := tempDir + "/skill.zip"
 	file, err := os.Create(filePath)
@@ -199,7 +225,7 @@ func TestDeapAgentOpenAPISkillUploaderStreamsMultipartAndParsesSafeResult(t *tes
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/v1.0/assistant/skills" {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1.0/assistant/skills/upload" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
 		if got := r.Header.Get(apiclient.AuthHeader); got != "access-token" {
@@ -210,8 +236,8 @@ func TestDeapAgentOpenAPISkillUploaderStreamsMultipartAndParsesSafeResult(t *tes
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if got := r.FormValue("agentUuid"); got != "agent-1" {
-			t.Errorf("agentUuid = %q", got)
+		if got := r.FormValue("agentUuid"); got != "" {
+			t.Errorf("upload unexpectedly bound agentUuid = %q", got)
 		}
 		part, header, openErr := r.FormFile("file")
 		if openErr != nil {
@@ -225,7 +251,7 @@ func TestDeapAgentOpenAPISkillUploaderStreamsMultipartAndParsesSafeResult(t *tes
 			t.Errorf("uploaded file name=%q bytes=%d err=%v", header.Filename, len(body), readErr)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"skillId":"skill-1","skill":{"skillId":"skill-1","name":"weather","displayName":"天气","description":"查询天气"}}`)
+		_, _ = io.WriteString(w, `{"fileUrl":"https://signed.example/temp"}`)
 	}))
 	defer server.Close()
 	apiclient.AllowedHosts["127.0.0.1"] = true
@@ -238,12 +264,12 @@ func TestDeapAgentOpenAPISkillUploaderStreamsMultipartAndParsesSafeResult(t *tes
 			return "access-token", nil
 		},
 	}
-	result, err := uploader.UploadAndCreate(context.Background(), "agent-1", filePath)
+	fileURL, err := uploader.Upload(context.Background(), filePath)
 	if err != nil {
-		t.Fatalf("UploadAndCreate() error = %v", err)
+		t.Fatalf("Upload() error = %v", err)
 	}
-	if result.SkillID != "skill-1" || result.Name != "weather" || result.DisplayName != "天气" {
-		t.Fatalf("UploadAndCreate() result = %+v", result)
+	if fileURL != "https://signed.example/temp" {
+		t.Fatalf("Upload() fileUrl = %q", fileURL)
 	}
 }
 
@@ -516,13 +542,22 @@ func TestDevDeapAgentSaveDraftDistinguishesAbsentAndExplicitEmptyConfigs(t *test
 }
 
 type deapAgentCaller struct {
-	dryRun bool
-	calls  []deapAgentCall
+	dryRun    bool
+	calls     []deapAgentCall
+	resultText string
+	err        error
 }
 
 func (c *deapAgentCaller) CallTool(_ context.Context, productID, toolName string, args map[string]any) (*edition.ToolResult, error) {
 	c.calls = append(c.calls, deapAgentCall{productID: productID, toolName: toolName, args: args})
-	return &edition.ToolResult{Content: []edition.ContentBlock{{Type: "text", Text: `{}`}}}, nil
+	if c.err != nil {
+		return nil, c.err
+	}
+	text := c.resultText
+	if text == "" {
+		text = `{}`
+	}
+	return &edition.ToolResult{Content: []edition.ContentBlock{{Type: "text", Text: text}}}, nil
 }
 
 func (*deapAgentCaller) Format() string { return "json" }

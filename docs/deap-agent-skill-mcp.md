@@ -13,7 +13,7 @@ dws deap skill create \
   --format json
 ```
 
-CLI 在本地检查 ZIP 扩展名、压缩包完整性、路径安全、50 MiB 上限、解压规模和 `SKILL.md`。随后使用当前登录身份，把文件流式上传到 OpenAPI `POST /v1.0/assistant/skills`。OpenAPI 负责复用 Studio 上传并调用 Skill Center create/query；CLI 不接收或输出临时签名 URL。
+CLI 在本地检查 ZIP 扩展名、压缩包完整性、路径安全、50 MiB 上限、解压规模和 `SKILL.md`。随后使用当前登录身份，把文件流式上传到 OpenAPI `POST /v1.0/assistant/skills/upload`，在内存中取得短期 `fileUrl` 后调用 `create_skill_by_url`。CLI 不落盘、不打印临时签名 URL；上传失败和创建失败分别返回对应阶段错误。
 
 查询命令：
 
@@ -51,3 +51,4 @@ dws deap manage save-draft \
 
 - 2026-08-18：新增 Skill/MCP create/list/query、save-draft Skill/MCP 文件参数和 detail snapshot 参数；Skill create 接入 OpenAPI 流式 multipart 一步创建。原因：复用后台权威链路，同时避免在 MCP JSON、日志和用户输出中传递 ZIP 或临时签名 URL。
 - 2026-08-18：命令路径随最新 DEAP 基线调整为 `dws deap skill|mcp` 与 `dws deap manage save-draft|detail`。原因：保持新增能力与顶级 DEAP 产品命令树一致，避免恢复已撤销的 `dev deap-agent` 旧入口。
+- 2026-08-19：将 `skill create --file` 改为串联 OpenAPI multipart upload 与 `create_skill_by_url` 两个能力，并把 `fileUrl/uploadUrl` 纳入日志脱敏。原因：保持上传和 Skill 创建的服务契约独立，同时让本地 ZIP 通过 CLI 的 HTTP 请求体安全到达 OpenAPI。

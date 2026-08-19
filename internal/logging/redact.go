@@ -42,6 +42,12 @@ var sensitiveKeys = map[string]bool{
 	"config-string":       true,
 	"envs":                true,
 	"headers":             true,
+	"fileurl":             true,
+	"file_url":            true,
+	"file-url":            true,
+	"uploadurl":           true,
+	"upload_url":          true,
+	"upload-url":          true,
 }
 
 // sensitiveSubstrings are substrings that mark a key as sensitive.

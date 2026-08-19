@@ -27,7 +27,7 @@ import (
 
 func TestAPIClientUploadMultipartStreamsFileAndUsesAuthHeader(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/v1.0/assistant/skills" {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1.0/assistant/skills/upload" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
 		if got := r.Header.Get(AuthHeader); got != "access-token" {
@@ -37,8 +37,8 @@ func TestAPIClientUploadMultipartStreamsFileAndUsesAuthHeader(t *testing.T) {
 			t.Errorf("ParseMultipartForm() error = %v", err)
 			return
 		}
-		if got := r.FormValue("agentUuid"); got != "agent-1" {
-			t.Errorf("agentUuid = %q", got)
+		if got := r.FormValue("agentUuid"); got != "" {
+			t.Errorf("upload unexpectedly bound agentUuid = %q", got)
 		}
 		file, header, err := r.FormFile("file")
 		if err != nil {
@@ -51,7 +51,7 @@ func TestAPIClientUploadMultipartStreamsFileAndUsesAuthHeader(t *testing.T) {
 			t.Errorf("file name=%q body=%q", header.Filename, body)
 		}
 		w.WriteHeader(http.StatusCreated)
-		_, _ = io.WriteString(w, `{"skillId":"skill-1"}`)
+		_, _ = io.WriteString(w, `{"fileUrl":"https://signed.example/temp"}`)
 	}))
 	defer server.Close()
 	AllowedHosts["127.0.0.1"] = true
@@ -60,16 +60,15 @@ func TestAPIClientUploadMultipartStreamsFileAndUsesAuthHeader(t *testing.T) {
 	client := NewClient("access-token", server.URL)
 	client.HTTPClient = server.Client()
 	response, err := client.UploadMultipart(context.Background(), MultipartUploadRequest{
-		Path:      "/v1.0/assistant/skills",
+		Path:      "/v1.0/assistant/skills/upload",
 		FieldName: "file",
 		FileName:  "skill.zip",
 		File:      bytes.NewBufferString("zip-bytes"),
-		Fields:    map[string]string{"agentUuid": "agent-1"},
 	})
 	if err != nil {
 		t.Fatalf("UploadMultipart() error = %v", err)
 	}
-	if response.StatusCode != http.StatusCreated || string(response.Body) != `{"skillId":"skill-1"}` {
+	if response.StatusCode != http.StatusCreated || string(response.Body) != `{"fileUrl":"https://signed.example/temp"}` {
 		t.Fatalf("UploadMultipart() response = %+v", response)
 	}
 }

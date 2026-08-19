@@ -25,12 +25,13 @@ import (
 
 const (
 	deapAgentSkillCreateFileTool = "create_skill_from_file"
+	deapAgentSkillCreateURLTool  = "create_skill_by_url"
 	deapAgentSkillListTool       = "list_skills"
 	deapAgentSkillQueryTool      = "get_skill_detail"
 	deapAgentMCPCreateTool       = "create_mcp"
 	deapAgentMCPListTool         = "list_mcps"
 	deapAgentMCPQueryTool        = "get_mcp_detail"
-	deapAgentSkillCreatePath     = "/v1.0/assistant/skills"
+	deapAgentSkillUploadPath     = "/v1.0/assistant/skills/upload"
 
 	deapAgentConfigFileMaxSize    = 1024 * 1024
 	deapAgentSkillMaxPackageSize  = 50 * 1024 * 1024
@@ -53,8 +54,8 @@ type deapAgentSkillCreated struct {
 	Version     int64  `json:"version,omitempty"`
 }
 
-type deapAgentSkillUploadAndCreator interface {
-	UploadAndCreate(ctx context.Context, agentUUID, filePath string) (deapAgentSkillCreated, error)
+type deapAgentSkillPackageUploader interface {
+	Upload(ctx context.Context, filePath string) (string, error)
 }
 
 type deapAgentOpenAPISkillUploader struct {
@@ -84,14 +85,26 @@ type deapAgentOpenAPISkillEnvelope struct {
 	Content *deapAgentOpenAPISkillPayload `json:"content"`
 }
 
-func (u deapAgentOpenAPISkillUploader) UploadAndCreate(ctx context.Context, agentUUID, filePath string) (deapAgentSkillCreated, error) {
+type deapAgentOpenAPIUploadPayload struct {
+	FileURL string `json:"fileUrl"`
+}
+
+type deapAgentOpenAPIUploadEnvelope struct {
+	FileURL string                         `json:"fileUrl"`
+	Success *bool                          `json:"success"`
+	Data    *deapAgentOpenAPIUploadPayload `json:"data"`
+	Result  *deapAgentOpenAPIUploadPayload `json:"result"`
+	Content *deapAgentOpenAPIUploadPayload `json:"content"`
+}
+
+func (u deapAgentOpenAPISkillUploader) Upload(ctx context.Context, filePath string) (string, error) {
 	token, err := u.accessToken(ctx)
 	if err != nil {
-		return deapAgentSkillCreated{}, &deapAgentSkillStageError{Stage: "upload", Err: fmt.Errorf("OpenAPI 认证失败")}
+		return "", &deapAgentSkillStageError{Stage: "upload", Err: fmt.Errorf("OpenAPI 认证失败")}
 	}
 	file, err := os.Open(filePath)
 	if err != nil {
-		return deapAgentSkillCreated{}, &deapAgentSkillStageError{Stage: "upload", Err: fmt.Errorf("Skill ZIP 文件不可读")}
+		return "", &deapAgentSkillStageError{Stage: "upload", Err: fmt.Errorf("Skill ZIP 文件不可读")}
 	}
 	defer file.Close()
 
@@ -100,30 +113,45 @@ func (u deapAgentOpenAPISkillUploader) UploadAndCreate(ctx context.Context, agen
 		client.HTTPClient = u.httpClient
 	}
 	response, err := client.UploadMultipart(ctx, apiclient.MultipartUploadRequest{
-		Path:      deapAgentSkillCreatePath,
+		Path:      deapAgentSkillUploadPath,
 		FieldName: "file",
 		FileName:  filepath.Base(filePath),
 		File:      file,
-		Fields:    map[string]string{"agentUuid": agentUUID},
 	})
 	if err != nil {
-		return deapAgentSkillCreated{}, &deapAgentSkillStageError{Stage: "upload", Err: fmt.Errorf("OpenAPI 上传请求失败")}
+		return "", &deapAgentSkillStageError{Stage: "upload", Err: fmt.Errorf("OpenAPI 上传请求失败")}
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		stage := deapAgentSkillStageFromResponse(response.Body, "upload")
-		return deapAgentSkillCreated{}, &deapAgentSkillStageError{
-			Stage: stage,
+		return "", &deapAgentSkillStageError{
+			Stage: "upload",
 			Err:   fmt.Errorf("OpenAPI 返回 HTTP %d", response.StatusCode),
 		}
 	}
 
-	var envelope deapAgentOpenAPISkillEnvelope
+	var envelope deapAgentOpenAPIUploadEnvelope
 	if err := json.Unmarshal(response.Body, &envelope); err != nil {
-		return deapAgentSkillCreated{}, &deapAgentSkillStageError{Stage: "query", Err: fmt.Errorf("OpenAPI 响应格式非法")}
+		return "", &deapAgentSkillStageError{Stage: "upload", Err: fmt.Errorf("OpenAPI 上传响应格式非法")}
 	}
 	if envelope.Success != nil && !*envelope.Success {
-		stage := deapAgentSkillStageFromResponse(response.Body, "create")
-		return deapAgentSkillCreated{}, &deapAgentSkillStageError{Stage: stage, Err: fmt.Errorf("OpenAPI 返回失败")}
+		return "", &deapAgentSkillStageError{Stage: "upload", Err: fmt.Errorf("OpenAPI 上传失败")}
+	}
+	payload := deapAgentOpenAPIUploadPayload{FileURL: envelope.FileURL}
+	for _, candidate := range []*deapAgentOpenAPIUploadPayload{envelope.Data, envelope.Result, envelope.Content} {
+		if candidate != nil {
+			payload = *candidate
+			break
+		}
+	}
+	if strings.TrimSpace(payload.FileURL) == "" {
+		return "", &deapAgentSkillStageError{Stage: "upload", Err: fmt.Errorf("OpenAPI 上传响应缺少 fileUrl")}
+	}
+	return payload.FileURL, nil
+}
+
+func deapAgentParseSkillCreated(body []byte) (deapAgentSkillCreated, error) {
+	var envelope deapAgentOpenAPISkillEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return deapAgentSkillCreated{}, fmt.Errorf("创建响应格式非法")
 	}
 	payload := deapAgentOpenAPISkillPayload{SkillID: envelope.SkillID, Skill: envelope.Skill}
 	for _, candidate := range []*deapAgentOpenAPISkillPayload{envelope.Data, envelope.Result, envelope.Content} {
@@ -133,7 +161,7 @@ func (u deapAgentOpenAPISkillUploader) UploadAndCreate(ctx context.Context, agen
 		}
 	}
 	if strings.TrimSpace(payload.SkillID) == "" {
-		return deapAgentSkillCreated{}, &deapAgentSkillStageError{Stage: "query", Err: fmt.Errorf("OpenAPI 响应缺少 skillId")}
+		return deapAgentSkillCreated{}, fmt.Errorf("创建响应缺少 skillId")
 	}
 	created := deapAgentSkillCreated{SkillID: payload.SkillID}
 	if payload.Skill != nil {
@@ -205,7 +233,7 @@ func (e *deapAgentSkillStageError) Unwrap() error {
 	return e.Err
 }
 
-var deapAgentSkillUploader deapAgentSkillUploadAndCreator = deapAgentOpenAPISkillUploader{}
+var deapAgentSkillUploader deapAgentSkillPackageUploader = deapAgentOpenAPISkillUploader{}
 
 func deapAgentValidateSkillPackage(rawPath string) (deapAgentSkillPackage, error) {
 	if !strings.EqualFold(filepath.Ext(strings.TrimSpace(rawPath)), ".zip") {
@@ -313,7 +341,7 @@ func newDeapAgentMCPCommand() *cobra.Command {
 func newDeapAgentSkillCreateCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use: "create", Short: "从本地 ZIP 创建 Skill 资源",
-		Long: "校验本地 Skill ZIP 后，通过 OpenAPI multipart 接口完成上传、Skill Center create 与 query。命令不调用 create_by_url，不在 MCP JSON 中传 ZIP，也不输出临时签名 URL。",
+		Long: "校验本地 Skill ZIP 后，先通过 OpenAPI multipart 接口上传，再调用 create_skill_by_url 完成 Skill Center create 与 query。ZIP 不进入 MCP JSON，临时签名 URL 不落盘、不输出。",
 		Tool: deapAgentSkillCreateFileTool, Server: deapAgentServerID, PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
 			{Name: "agent-uuid", Usage: "目标数字员工 UUID（Skill Center V2 tenant）", Bind: "agentUuid", Required: true, Trim: true},
@@ -330,9 +358,9 @@ func newDeapAgentSkillCreateCommand() *cobra.Command {
 		Call: deapAgentCallSkillCreate,
 		Contract: LeafContract{
 			Identity:    contract.ToolIdentitySpec{ProductID: deapProductID, Name: deapAgentSkillCreateFileTool, CanonicalPath: "deap.create_skill_from_file", CLIPath: "deap skill create", PrimaryCLIPath: "deap skill create", Group: "skill"},
-			Description: "校验本地 ZIP，并通过可信 OpenAPI multipart 门面完成上传、创建和安全详情查询。",
+			Description: "校验本地 ZIP，依次调用 OpenAPI upload 与 create_skill_by_url，并只输出安全创建结果。",
 			DryRun:      deapAgentDryRun,
-			Interface:   &contract.InterfaceSpec{Mode: contract.InterfaceModeComposite, Availability: contract.InterfaceAvailable, Reason: "本地 ZIP 校验后流式调用 OpenAPI multipart 一步创建接口"},
+			Interface:   &contract.InterfaceSpec{Mode: contract.InterfaceModeComposite, Availability: contract.InterfaceAvailable, Reason: "本地 ZIP 校验后串联 OpenAPI multipart upload 与 create_skill_by_url"},
 			Selection:   contract.SelectionSpec{AgentSummary: "从本地 ZIP 创建 Skill 资源", UseWhen: []string{"已有合法 Skill ZIP，需要为目标数字员工创建并取得 skillId 时"}, AvoidWhen: []string{"只有远程 URL 的纯 MCP 场景使用 create_skill_by_url"}, Examples: []string{"dws deap skill create --agent-uuid <agentUuid> --file ./my-skill.zip --dry-run --format json"}},
 			Parameters: []contract.ParamDecl{
 				{Name: "agent-uuid", Property: "agentUuid", InterfaceType: "string"},
@@ -352,21 +380,33 @@ func deapAgentCallSkillCreate(cmd *cobra.Command, _ string, args map[string]any)
 	if deps.Caller.DryRun() {
 		return deps.Out.PrintJSON(map[string]any{
 			"dryRun":    true,
-			"action":    "upload_and_create_skill",
+			"action":    "upload_then_create_skill",
 			"agentUuid": agentUUID,
 			"fileName":  filepath.Base(pkg.path),
 			"fileSize":  pkg.size,
 		})
 	}
-	result, err := deapAgentSkillUploader.UploadAndCreate(cmd.Context(), agentUUID, pkg.path)
+	fileURL, err := deapAgentSkillUploader.Upload(cmd.Context(), pkg.path)
 	if err != nil {
 		if staged, ok := err.(*deapAgentSkillStageError); ok {
 			return staged
 		}
 		return &deapAgentSkillStageError{Stage: "upload", Err: err}
 	}
+	responseText, err := callMCPToolReturnTextOnServer(cmd.Context(), deapAgentServerID, deapAgentSkillCreateURLTool, map[string]any{
+		"agentUuid": agentUUID,
+		"fileUrl":   fileURL,
+	})
+	if err != nil {
+		stage := deapAgentSkillStageFromResponse([]byte(err.Error()), "create")
+		return &deapAgentSkillStageError{Stage: stage, Err: err}
+	}
+	result, err := deapAgentParseSkillCreated([]byte(responseText))
+	if err != nil {
+		return &deapAgentSkillStageError{Stage: "query", Err: err}
+	}
 	if strings.TrimSpace(result.SkillID) == "" {
-		return &deapAgentSkillStageError{Stage: "query", Err: fmt.Errorf("门面响应缺少 skillId")}
+		return &deapAgentSkillStageError{Stage: "query", Err: fmt.Errorf("创建响应缺少 skillId")}
 	}
 	return deps.Out.PrintJSON(result)
 }

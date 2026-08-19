@@ -121,6 +121,7 @@ func TestSanitizeArguments(t *testing.T) {
 
 func TestSanitizeArgumentsRedactsSensitiveValuesInsideArrays(t *testing.T) {
 	got := SanitizeArguments(map[string]any{
+		"fileUrl": "https://signed.example/temp?token=upload-secret",
 		"skills": []any{
 			map[string]any{"skillId": "skill-1", "token": "array-secret"},
 		},
@@ -128,7 +129,7 @@ func TestSanitizeArgumentsRedactsSensitiveValuesInsideArrays(t *testing.T) {
 			{"mcpId": "mcp-1", "config": map[string]any{"configString": `{"token":"nested-secret"}`, "envs": map[string]any{"FOO": "env-secret"}, "headers": map[string]any{"X-Custom-Key": "header-secret"}}},
 		},
 	}, 4096)
-	for _, secret := range []string{"array-secret", "nested-secret", "env-secret", "header-secret"} {
+	for _, secret := range []string{"upload-secret", "signed.example", "array-secret", "nested-secret", "env-secret", "header-secret"} {
 		if strings.Contains(got, secret) {
 			t.Fatalf("SanitizeArguments leaked %q inside array: %s", secret, got)
 		}
