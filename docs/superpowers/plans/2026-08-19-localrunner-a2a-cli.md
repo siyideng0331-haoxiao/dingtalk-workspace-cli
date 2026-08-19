@@ -82,12 +82,14 @@ The config contains identifiers only. It does not contain any bearer, ticket, en
 ```http
 POST /v1/assistant/local-runners/{runnerId}/connections/open
 Authorization: Bearer <user-oauth-token>
+X-Dingtalk-Corp-Id: <active-profile-corp-id>
+X-Dingtalk-User-Id: <active-profile-user-id>
 Content-Type: application/json
 
 {"endpointId":"lre_01..."}
 ```
 
-The path `runnerId` and body `endpointId` are required non-blank strings. `tenantId` and `operatorUserId` come only from the OAuth context and must not appear in the CLI request body.
+The path `runnerId` and body `endpointId` are required non-blank strings. `tenantId` and `operatorUserId` must not appear in the CLI request body. Studio uses the two profile headers only as selection claims, resolves the token's DingTalk `unionId`, maps it back to the declared tenant, and rejects the request unless the verified user matches both claims.
 
 HTTP 200 success is exactly:
 
@@ -97,7 +99,7 @@ HTTP 200 success is exactly:
   "data": {
     "runnerId": "lr_01...",
     "endpointId": "lre_01...",
-    "webSocketUrl": "wss://api.dingtalk.com/v1/local-runners/connections/lr_01...",
+    "webSocketUrl": "wss://pre-deap.dingtalk.com/v1/local-runners/connections/lr_01...",
     "connectionTicket": "lr1.<payload>.<signature>",
     "ticketExpiresAtEpochSecond": 1787068920
   }
@@ -127,8 +129,8 @@ type OpenConnectionData struct {
 
 `Success` is a pointer so missing is distinguishable from explicit false. Validation requires present/true `success`, non-null `data`, exact echoed runner/endpoint, an absolute server-selected `wss://` URL, non-empty ticket, and an expiry strictly later than the injected current UTC Unix second.
 
-OpenAPI's shared public default connection base is
-`wss://api.dingtalk.com/v1/local-runners/connections`, with `/{runnerId}`
+Studio's shared pre-release public connection base is
+`wss://pre-deap.dingtalk.com/v1/local-runners/connections`, with `/{runnerId}`
 appended by the server. The CLI treats the resulting `webSocketUrl` as opaque,
 does not construct/rewrite it, does not decode the `lr1` ticket, and does not
 accept `expiresIn` or millisecond alternatives. A ticket is usable for one
@@ -741,8 +743,8 @@ the minimal DTO/client implementation, then run the focused package tests.
   callable loopback origin, OpenAPI base, and Agent Card SHA-256; it contains
   no endpoint bearer, connection ticket, OAuth/local Authorization, body, or
   SSE data.
-- `expose` defaults `--openapi-base` to the already-open public control plane
-  `https://api.dingtalk.com`, while retaining an explicit override for isolated
+- `expose` defaults the compatibility-named `--openapi-base` to Studio's
+  pre-release public gateway `https://pre-deap.dingtalk.com`, while retaining an explicit override for isolated
   tests or separately configured environments. It fetches a loopback Agent
   Card without following it outside loopback, validates the frozen Card
   contract, creates the Runner, transfers the one-time bearer to keyring,
@@ -764,12 +766,110 @@ the minimal DTO/client implementation, then run the focused package tests.
 
 ### 10.7 Phase 1 completion boundary
 
-Local unit/fake-server tests may establish DTO, header, handshake, heartbeat,
+Local unit/fake-server tests may establish DTO, profile header, handshake, heartbeat,
 fresh-ticket reconnect, multiplexing, streaming/cancel, and command-delegation
-behavior. Real OpenAPI HTTP/WSS/public-RPC interoperability, public DNS/TLS,
-outer `api.dingtalk.com` WebSocket Upgrade preservation, load-balancer idle
+behavior. Real Studio HTTP/WSS/public-RPC interoperability, public DNS/TLS,
+outer `pre-deap.dingtalk.com` WebSocket Upgrade preservation, load-balancer idle
 timeouts, server-side card rewrite/hash equality, remote limits, and deployment
 remain external integration gates and must be reported as unverified.
+
+### 10.8 One-command local runtime orchestration
+
+Add `dws deap runtime start-local <agent-card-url>` as a declared composite
+leaf while preserving all four `deap local-runner` leaves. The command accepts
+exactly one required positional loopback Card URL plus optional
+`--local-agent-id`, `--display-name`, `--openapi-base`, `--max-concurrent`, and
+`--streaming` overrides. With no identity/name override, the production runtime
+derives a stable `local-<sha256-prefix>` ID from the normalized Card URL and
+uses the validated Card's non-blank `name`.
+
+The runtime preparation stage reads and validates the Card once, creates the
+Runner/Endpoint through the existing control client, transfers the one-time
+endpoint bearer directly to the system keyring, and saves the same
+non-sensitive config used by `connect`. It returns only a sanitized A2A summary
+and private in-process connect options. The command JSON-encodes that summary
+before invoking the existing blocking `Connect` path, so users can copy the
+public configuration while the WSS/proxy stays active. The summary is exactly
+lowerCamelCase and includes `type="A2A"`, public `agentCardUrl`, credential-free
+Bearer metadata (`system-keyring`, never exported), and the singular
+Runner/Endpoint with pre-connection `CONNECTING` status.
+
+No failure after registration implicitly calls `Revoke`: a failed connection
+returns its stable error while config and keyring state remain available for
+`status`, `connect`, or explicit `revoke`. Context cancellation continues
+through the existing reconnect/session/proxy stack and returns cleanly. The
+command never prints or persists endpoint bearer, connection ticket, OAuth or
+local Authorization, A2A body, or SSE content.
+
+Implementation and verification steps:
+
+- [x] Add command/help/Schema/argument tests proving the exact hierarchy,
+  single positional, optional overrides, production provider, legacy command
+  compatibility, and stable summary-before-connect ordering.
+- [x] Add runtime tests proving deterministic URL-derived ID, Card-name default,
+  one-time Card read, real control/keyring/config preparation, private connect
+  options, clean cancellation, and no automatic revoke on connect failure.
+- [x] Implement only the new runtime preparation method, the sanitized summary
+  DTO, and the `deap runtime start-local` Tier 2 Cobra declaration; reuse
+  existing `Expose` internals and `Connect` without changing HTTP/WSS wire
+  contracts.
+- [x] Run focused RED then GREEN, attempt `go test -race ./internal/cli
+  -count=1`, and preserve its existing cumulative lazy-child slowdown evidence:
+  the bounded diagnostic timed out at package level while both isolated slow
+  tests passed under race. Run the LocalRunner-focused app race, `go test
+  ./internal/app ./internal/cli -count=1`, and an independent-version `go build
+  -o <temporary-output> ./cmd`, followed by tracked/no-index diff checks without
+  any formatter.
+
+### 10.9 In-process `test-echo` acceptance agent
+
+Supersede the URL-only positional UX with
+`dws deap runtime start-local <agent-ref>`. The existing lexical-loopback Agent
+Card URL remains a supported external-agent compatibility form, while the exact
+reference `test-echo` starts a self-contained acceptance agent inside the same
+dws process. No Python, child process, local manifest, or general agent-ID
+resolver is introduced in this phase.
+
+`internal/app/localrunner_echo_agent.go` owns one bounded HTTP server created by
+`net.Listen("tcp", "127.0.0.1:0")`. It exposes only:
+
+- `GET /.well-known/agent-card.json`, returning a dynamic v0.3.0 Card whose
+  callable JSON-RPC URL is the server's exact loopback `/rpc` URL;
+- `POST /rpc` with `Content-Type: application/json`, accepting only JSON-RPC
+  2.0 `message/send` and `message/stream` requests with text message parts;
+- a direct A2A Message echo response for `message/send`, and exactly one
+  flushed `data:` JSON-RPC Message event for `message/stream` before closing.
+
+Every other path, method, media type, malformed shape, or oversized body is
+rejected with a bounded static response. The handler has no logger and never
+prints request bodies, credentials, headers, or response content. The request
+body limit is independent of the tunnel's larger generic proxy bound.
+
+`productionLocalRunnerCommandRuntime.StartLocal` resolves `test-echo` before
+the existing Card-read/create/keyring/config path. The built-in reference,
+rather than its random Card URL, is the deterministic default identity seed;
+the default display name is the built-in Card name. A private closer travels in
+the in-process start result but is absent from the JSON summary. The runtime
+closes the server if Card loading or registration fails, and the command defers
+the same idempotent close across summary encoding, normal Connect return,
+Connect failure, and context cancellation. Registration remains intact after a
+Connect failure, matching Section 10.8; only the ephemeral built-in HTTP server
+is stopped.
+
+Implementation and verification steps:
+
+- [x] Add failing real-HTTP tests for loopback/random-port binding, dynamic
+  Card, `message/send`, first-flushed `message/stream`, path/method/media/body
+  limits, and idempotent close.
+- [x] Add failing runtime/command tests for single-command `test-echo`
+  preparation, stable ID/name independent of port, summary-before-Connect,
+  cleanup after Connect/cancel, and cleanup when registration fails.
+- [x] Implement the bounded Echo handler and the minimal agent-reference
+  resolution/closer lifecycle without changing control, WSS, tunnel, or public
+  Agent Card wire contracts.
+- [x] Run focused RED/GREEN, LocalRunner-focused race, `internal/app` and
+  `internal/localrunner` regression, independent temporary-output build, and
+  tracked/no-index diff checks without a formatter.
 
 ## 11. Protocol and Plan Change History
 
@@ -797,3 +897,6 @@ remain external integration gates and must be reported as unverified.
 | 2026-08-19 | Added explicit lowerCamelCase JSON tags to the sanitized `CreatedRunner` command projection. | The `expose` command directly encodes this object, so Go's default exported field names violated the already-frozen `runnerId`/`endpointId`/`agentCardUrl`/`status` output contract. |
 | 2026-08-19 | Changed the production default LocalRunner OpenAPI base from `https://api-deap.dingtalk.com` to `https://api.dingtalk.com`, retaining explicit `--openapi-base` overrides. | The user selected the already-open DingTalk API domain for the control plane; this changes only the CLI default origin and its Help/Schema projection, not API paths, server-selected WSS URLs, or tunnel wire semantics. |
 | 2026-08-19 | Synchronized OpenAPI Section 2.8's shared public WSS default to `wss://api.dingtalk.com/v1/local-runners/connections/{runnerId}` while retaining opaque `webSocketUrl` consumption. | The public gateway now uses the already-open `api.dingtalk.com` hostname for both HTTP and WSS defaults; container Tengine Upgrade support does not prove outer-edge Upgrade preservation, so published-environment WSS remains an explicit release acceptance gate. |
+| 2026-08-19 | Added the one-command `deap runtime start-local <agent-card-url>` orchestration contract while retaining the lower-level LocalRunner leaves. | Users need a copyable public A2A configuration and a maintained localhost bridge from one invocation; separating preparation/summary from the existing blocking connect path preserves secret boundaries, deterministic defaults, explicit revoke ownership, and compatibility. |
+| 2026-08-19 | Superseded the URL-only positional with `start-local <agent-ref>`, adding the in-process `test-echo` A2A v0.3.0 acceptance agent while retaining loopback Card URLs. | The user requires one dws process with no Python sidecar; a narrowly bounded built-in Echo Agent provides deterministic local acceptance without pretending arbitrary agent IDs or process supervision are implemented. |
+| 2026-08-20 | Migrated the default control and server-selected WSS origin from OpenAPI's `api.dingtalk.com` route to Studio pre-release `pre-deap.dingtalk.com`; every control call now sends active-profile corp/user selection headers in addition to the user OAuth bearer. | Studio owns an existing pre-release public domain and browser-cookie SSO cannot authenticate the CLI. Studio verifies the bearer, resolves its DingTalk identity, and compares it with both headers before accepting the owner context. |

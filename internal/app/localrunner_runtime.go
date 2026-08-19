@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,7 +20,7 @@ import (
 )
 
 const (
-	defaultLocalRunnerOpenAPIBase = "https://api.dingtalk.com"
+	defaultLocalRunnerOpenAPIBase = "https://pre-deap.dingtalk.com"
 	maxLocalAgentCardBytes        = 1 << 20
 )
 
@@ -113,6 +114,87 @@ func (r *productionLocalRunnerCommandRuntime) Expose(ctx context.Context, option
 	if err != nil {
 		return nil, err
 	}
+	return r.exposeLocalAgentCard(ctx, options, rawCard, control)
+}
+
+func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, options localRunnerStartLocalOptions) (*localRunnerStartLocalResult, error) {
+	if r == nil || options.MaxConcurrent <= 0 {
+		return nil, ErrLocalRunnerRuntimeInvalid
+	}
+	agentRef := strings.TrimSpace(options.AgentRef)
+	agentCardURL := agentRef
+	identitySeed := agentRef
+	var closeAgent func() error
+	if agentRef == localRunnerTestEchoRef {
+		agent, err := localRunnerTestEchoAgentStarter()
+		if err != nil {
+			return nil, ErrLocalRunnerRuntimeInvalid
+		}
+		agentCardURL = agent.CardURL()
+		closeAgent = agent.Close
+	} else if !localrunner.ValidateLoopbackHTTPURL(agentRef) {
+		return nil, ErrLocalRunnerRuntimeInvalid
+	}
+	keepAgent := false
+	defer func() {
+		if !keepAgent && closeAgent != nil {
+			_ = closeAgent()
+		}
+	}()
+	rawCard, err := r.readLocalAgentCard(ctx, agentCardURL)
+	if err != nil {
+		return nil, err
+	}
+	localAgentID, displayName, err := resolveLocalRunnerStartIdentity(rawCard, identitySeed, options.LocalAgentID, options.DisplayName)
+	if err != nil {
+		return nil, err
+	}
+	control, err := r.controlClient(options.OpenAPIBase)
+	if err != nil {
+		return nil, err
+	}
+	created, err := r.exposeLocalAgentCard(ctx, localRunnerExposeOptions{
+		LocalAgentID: localAgentID,
+		DisplayName:  displayName,
+		AgentCardURL: agentCardURL,
+		OpenAPIBase:  options.OpenAPIBase,
+	}, rawCard, control)
+	if err != nil {
+		return nil, err
+	}
+	stored, err := r.configs.Load(created.RunnerID)
+	if err != nil {
+		return nil, err
+	}
+	targetURL, err := localrunner.LocalAgentCardTarget(rawCard)
+	if err != nil {
+		return nil, localrunner.ErrInvalidAgentCard
+	}
+	result := &localRunnerStartLocalResult{
+		Summary: localRunnerA2AConfiguration{
+			Type:         "A2A",
+			AgentCardURL: created.AgentCardURL,
+			Authentication: localRunnerA2AAuthentication{
+				Scheme: "Bearer", CredentialStorage: "system-keyring", CredentialExported: false,
+			},
+			LocalRunner: localRunnerA2ALocalRunner{
+				RunnerID: created.RunnerID, EndpointID: created.EndpointID, Status: "CONNECTING",
+			},
+		},
+		ConnectOptions: localRunnerConnectOptions{
+			RunnerID: created.RunnerID, EndpointID: created.EndpointID, TargetURL: targetURL,
+			AgentCardSHA256: stored.AgentCardSHA256, MaxConcurrent: options.MaxConcurrent, Streaming: options.Streaming,
+		},
+		Close: closeAgent,
+	}
+	keepAgent = true
+	return result, nil
+}
+
+func (r *productionLocalRunnerCommandRuntime) exposeLocalAgentCard(ctx context.Context, options localRunnerExposeOptions, rawCard json.RawMessage, control *localrunner.HTTPControlClient) (*localrunner.CreatedRunner, error) {
+	if r == nil || control == nil || strings.TrimSpace(options.LocalAgentID) == "" || strings.TrimSpace(options.DisplayName) == "" || !localrunner.ValidateLoopbackHTTPURL(options.AgentCardURL) {
+		return nil, ErrLocalRunnerRuntimeInvalid
+	}
 	localTarget, err := localrunner.LocalAgentCardTarget(rawCard)
 	if err != nil {
 		return nil, localrunner.ErrInvalidAgentCard
@@ -150,6 +232,36 @@ func (r *productionLocalRunnerCommandRuntime) Expose(ctx context.Context, option
 		return nil, err
 	}
 	return created, nil
+}
+
+func resolveLocalRunnerStartIdentity(rawCard json.RawMessage, identitySeed, localAgentID, displayName string) (string, string, error) {
+	identitySeed = strings.TrimSpace(identitySeed)
+	if identitySeed == "" || (identitySeed != localRunnerTestEchoRef && !localrunner.ValidateLoopbackHTTPURL(identitySeed)) {
+		return "", "", ErrLocalRunnerRuntimeInvalid
+	}
+	var card struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(rawCard, &card); err != nil {
+		return "", "", localrunner.ErrInvalidAgentCard
+	}
+	resolvedID := strings.TrimSpace(localAgentID)
+	if resolvedID == "" {
+		if identitySeed == localRunnerTestEchoRef {
+			resolvedID = localRunnerTestEchoRef
+		} else {
+			digest := sha256.Sum256([]byte(identitySeed))
+			resolvedID = fmt.Sprintf("local-%x", digest[:8])
+		}
+	}
+	resolvedName := strings.TrimSpace(displayName)
+	if resolvedName == "" {
+		resolvedName = strings.TrimSpace(card.Name)
+	}
+	if resolvedID == "" || resolvedName == "" {
+		return "", "", localrunner.ErrInvalidAgentCard
+	}
+	return resolvedID, resolvedName, nil
 }
 
 func (r *productionLocalRunnerCommandRuntime) Status(ctx context.Context, runnerID string) (*localRunnerStatusResult, error) {
@@ -250,7 +362,8 @@ func (r *productionLocalRunnerCommandRuntime) storedControl(runnerID string) (*l
 }
 
 func (r *productionLocalRunnerCommandRuntime) controlClient(baseURL string) (*localrunner.HTTPControlClient, error) {
-	control, err := localrunner.NewHTTPControlClient(baseURL, r.controlHTTPClient, r.oauth)
+	control, err := localrunner.NewHTTPControlClient(baseURL, r.controlHTTPClient, r.oauth,
+		localrunner.ControlOwnerIdentityProviderFunc(r.ownerIdentity))
 	if err != nil {
 		return nil, ErrLocalRunnerRuntimeInvalid
 	}

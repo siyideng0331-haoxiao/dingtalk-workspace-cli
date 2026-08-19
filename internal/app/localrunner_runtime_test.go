@@ -3,9 +3,11 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -39,10 +41,10 @@ func TestProductionLocalRunnerExposeUsesPublicDingTalkDefaultBase(t *testing.T) 
 	controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 		requestedURLs = append(requestedURLs, request.URL.String())
 		status := http.StatusOK
-		body := `{"success":true,"data":{"runnerId":"runner-1","endpointId":"endpoint-1","localAgentId":"agent-1","displayName":"Local agent","status":"ACTIVE","agentCardUrl":"https://api.dingtalk.com/v1/a2a/local-runners/endpoint-1/card","agentCardSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","connected":false,"lastHeartbeatAtEpochSecond":null}}`
+		body := `{"success":true,"data":{"runnerId":"runner-1","endpointId":"endpoint-1","localAgentId":"agent-1","displayName":"Local agent","status":"ACTIVE","agentCardUrl":"https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-1/card","agentCardSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","connected":false,"lastHeartbeatAtEpochSecond":null}}`
 		if request.Method == http.MethodPost {
 			status = http.StatusCreated
-			body = `{"success":true,"data":{"runnerId":"runner-1","endpointId":"endpoint-1","agentCardUrl":"https://api.dingtalk.com/v1/a2a/local-runners/endpoint-1/card","endpointBearer":"endpoint-secret","status":"ACTIVE"}}`
+			body = `{"success":true,"data":{"runnerId":"runner-1","endpointId":"endpoint-1","agentCardUrl":"https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-1/card","endpointBearer":"endpoint-secret","status":"ACTIVE"}}`
 		}
 		return &http.Response{
 			StatusCode: status,
@@ -58,6 +60,7 @@ func TestProductionLocalRunnerExposeUsesPublicDingTalkDefaultBase(t *testing.T) 
 		CardHTTPClient:    localAgent.Client(),
 		OAuth:             staticLocalRunnerOAuth("oauth-token"),
 		Credentials:       credentials,
+		OwnerIdentity:     testLocalRunnerOwnerIdentity,
 	})
 	testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
 
@@ -68,8 +71,8 @@ func TestProductionLocalRunnerExposeUsesPublicDingTalkDefaultBase(t *testing.T) 
 		"--agent-card-url", localAgent.URL,
 	})
 	wantURLs := []string{
-		"https://api.dingtalk.com/v1/assistant/local-runners",
-		"https://api.dingtalk.com/v1/assistant/local-runners/runner-1",
+		"https://pre-deap.dingtalk.com/v1/assistant/local-runners",
+		"https://pre-deap.dingtalk.com/v1/assistant/local-runners/runner-1",
 	}
 	if len(requestedURLs) != len(wantURLs) {
 		t.Fatalf("control request URLs = %v", requestedURLs)
@@ -83,8 +86,205 @@ func TestProductionLocalRunnerExposeUsesPublicDingTalkDefaultBase(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.OpenAPIBase != "https://api.dingtalk.com" {
+	if stored.OpenAPIBase != "https://pre-deap.dingtalk.com" {
 		t.Fatalf("stored OpenAPI base = %q", stored.OpenAPIBase)
+	}
+}
+
+func TestLocalRunnerStartLocalIdentityDefaultsAndOverrides(t *testing.T) {
+	rawCard := json.RawMessage(`{"name":"Card default","protocolVersion":"1.0","capabilities":{},"skills":[],"url":"http://127.0.0.1:8080/rpc"}`)
+	cardURL := "http://127.0.0.1:8080/card"
+	digest := sha256.Sum256([]byte(cardURL))
+	wantDefaultID := fmt.Sprintf("local-%x", digest[:8])
+
+	localAgentID, displayName, err := resolveLocalRunnerStartIdentity(rawCard, cardURL, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if localAgentID != wantDefaultID || displayName != "Card default" {
+		t.Fatalf("default identity = %q/%q, want %q/Card default", localAgentID, displayName, wantDefaultID)
+	}
+
+	localAgentID, displayName, err = resolveLocalRunnerStartIdentity(rawCard, cardURL, "agent-override", "Display override")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if localAgentID != "agent-override" || displayName != "Display override" {
+		t.Fatalf("override identity = %q/%q", localAgentID, displayName)
+	}
+
+	for _, dynamicCard := range []json.RawMessage{
+		json.RawMessage(`{"name":"DWS Test Echo","protocolVersion":"0.3.0","capabilities":{"streaming":true},"skills":[],"url":"http://127.0.0.1:31001/rpc"}`),
+		json.RawMessage(`{"name":"DWS Test Echo","protocolVersion":"0.3.0","capabilities":{"streaming":true},"skills":[],"url":"http://127.0.0.1:32002/rpc"}`),
+	} {
+		localAgentID, displayName, err = resolveLocalRunnerStartIdentity(dynamicCard, localRunnerTestEchoRef, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if localAgentID != localRunnerTestEchoRef || displayName != localRunnerTestEchoDisplayName {
+			t.Fatalf("built-in identity = %q/%q", localAgentID, displayName)
+		}
+	}
+}
+
+func TestProductionLocalRunnerStartLocalPreparesOneCardReadAndSanitizedConnect(t *testing.T) {
+	cardRequests := 0
+	localAgent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cardRequests++
+		_, _ = w.Write([]byte(`{"name":"Card default","protocolVersion":"1.0","capabilities":{"streaming":true},"skills":[],"url":"` + localAgentURL(r) + `/rpc"}`))
+	}))
+	defer localAgent.Close()
+	digest := sha256.Sum256([]byte(localAgent.URL))
+	wantLocalAgentID := fmt.Sprintf("local-%x", digest[:8])
+	var createRequest localrunner.CreateRunnerRequest
+
+	controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		status := http.StatusOK
+		body := `{"success":true,"data":{"runnerId":"runner-1","endpointId":"endpoint-1","localAgentId":"` + wantLocalAgentID + `","displayName":"Card default","status":"ACTIVE","agentCardUrl":"https://api.dingtalk.com/v1/a2a/local-runners/endpoint-1/.well-known/agent-card.json","agentCardSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","connected":false,"lastHeartbeatAtEpochSecond":null}}`
+		if request.Method == http.MethodPost {
+			status = http.StatusCreated
+			body = `{"success":true,"data":{"runnerId":"runner-1","endpointId":"endpoint-1","agentCardUrl":"https://api.dingtalk.com/v1/a2a/local-runners/endpoint-1/.well-known/agent-card.json","endpointBearer":"endpoint-secret","status":"ACTIVE"}}`
+			if err := json.NewDecoder(request.Body).Decode(&createRequest); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return &http.Response{
+			StatusCode: status,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    request,
+		}, nil
+	})
+	credentials := localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)})
+	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+		ConfigDir:         t.TempDir(),
+		ControlHTTPClient: controlClient,
+		CardHTTPClient:    localAgent.Client(),
+		OAuth:             staticLocalRunnerOAuth("oauth-token"),
+		Credentials:       credentials,
+		OwnerIdentity:     testLocalRunnerOwnerIdentity,
+	})
+
+	result, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
+		AgentRef:     localAgent.URL,
+		OpenAPIBase:  "https://api.dingtalk.com",
+		MaxConcurrent: 7,
+		Streaming:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cardRequests != 1 {
+		t.Fatalf("Agent Card requests = %d, want 1", cardRequests)
+	}
+	if createRequest.LocalAgentID != wantLocalAgentID || createRequest.DisplayName != "Card default" {
+		t.Fatalf("create request identity = %q/%q", createRequest.LocalAgentID, createRequest.DisplayName)
+	}
+	if result.Summary.Type != "A2A" || result.Summary.AgentCardURL == "" || result.Summary.Authentication.Scheme != "Bearer" || result.Summary.Authentication.CredentialStorage != "system-keyring" || result.Summary.Authentication.CredentialExported || result.Summary.LocalRunner.RunnerID != "runner-1" || result.Summary.LocalRunner.EndpointID != "endpoint-1" || result.Summary.LocalRunner.Status != "CONNECTING" {
+		t.Fatalf("start-local summary = %#v", result.Summary)
+	}
+	if result.ConnectOptions.TargetURL != localAgent.URL+"/rpc" || result.ConnectOptions.AgentCardSHA256 != strings.Repeat("a", 64) || result.ConnectOptions.MaxConcurrent != 7 || !result.ConnectOptions.Streaming {
+		t.Fatalf("connect options = %#v", result.ConnectOptions)
+	}
+	storedBearer, err := credentials.LoadEndpointBearer(context.Background(), "runner-1", "endpoint-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(storedBearer) != "endpoint-secret" {
+		t.Fatal("endpoint bearer was not stored in system-keyring adapter")
+	}
+	encoded, err := json.Marshal(result.Summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "endpoint-secret") || strings.Contains(string(encoded), "connection-ticket") {
+		t.Fatalf("summary exposed secret material: %s", encoded)
+	}
+}
+
+func TestProductionLocalRunnerStartLocalRunsBuiltInEchoAndClosesIt(t *testing.T) {
+	var createRequest localrunner.CreateRunnerRequest
+	controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		status := http.StatusOK
+		body := `{"success":true,"data":{"runnerId":"runner-echo","endpointId":"endpoint-echo","localAgentId":"test-echo","displayName":"DWS Test Echo","status":"ACTIVE","agentCardUrl":"https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-echo/.well-known/agent-card.json","agentCardSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","connected":false,"lastHeartbeatAtEpochSecond":null}}`
+		if request.Method == http.MethodPost {
+			status = http.StatusCreated
+			body = `{"success":true,"data":{"runnerId":"runner-echo","endpointId":"endpoint-echo","agentCardUrl":"https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-echo/.well-known/agent-card.json","endpointBearer":"endpoint-secret","status":"ACTIVE"}}`
+			if err := json.NewDecoder(request.Body).Decode(&createRequest); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+	})
+	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+		ConfigDir: t.TempDir(), ControlHTTPClient: controlClient,
+		OAuth: staticLocalRunnerOAuth("oauth-token"),
+		Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
+		OwnerIdentity: testLocalRunnerOwnerIdentity,
+	})
+
+	result, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
+		AgentRef: localRunnerTestEchoRef, OpenAPIBase: defaultLocalRunnerOpenAPIBase,
+		MaxConcurrent: 2, Streaming: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Close == nil {
+		t.Fatal("built-in start result has no closer")
+	}
+	if createRequest.LocalAgentID != localRunnerTestEchoRef || createRequest.DisplayName != localRunnerTestEchoDisplayName {
+		t.Fatalf("built-in create identity = %q/%q", createRequest.LocalAgentID, createRequest.DisplayName)
+	}
+	var card struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(createRequest.AgentCard, &card); err != nil || !localrunner.ValidateLoopbackHTTPURL(card.URL) || card.URL != result.ConnectOptions.TargetURL {
+		t.Fatalf("built-in create Card URL=%q target=%q err=%v", card.URL, result.ConnectOptions.TargetURL, err)
+	}
+	response := postLocalRunnerTestEcho(t, result.ConnectOptions.TargetURL, []byte(`{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"kind":"message","role":"user","messageId":"m","parts":[{"kind":"text","text":"ready"}]}}}`))
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("built-in RPC status = %d", response.StatusCode)
+	}
+	if err := result.Close(); err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: time.Second}
+	if _, err := client.Get(strings.TrimSuffix(result.ConnectOptions.TargetURL, "/rpc") + localRunnerTestEchoCardPath); err == nil {
+		t.Fatal("built-in Agent remained available after close")
+	}
+}
+
+func TestProductionLocalRunnerStartLocalClosesBuiltInEchoWhenRegistrationFails(t *testing.T) {
+	var started *localRunnerBuiltInAgent
+	testseam.Swap(t, &localRunnerTestEchoAgentStarter, func() (*localRunnerBuiltInAgent, error) {
+		agent, err := startLocalRunnerTestEchoAgent()
+		started = agent
+		return agent, err
+	})
+	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+		ConfigDir: t.TempDir(),
+		ControlHTTPClient: localRunnerHTTPDoerFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("control unavailable")
+		}),
+		OAuth: staticLocalRunnerOAuth("oauth-token"),
+		Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
+		OwnerIdentity: testLocalRunnerOwnerIdentity,
+	})
+
+	if _, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
+		AgentRef: localRunnerTestEchoRef, OpenAPIBase: defaultLocalRunnerOpenAPIBase,
+		MaxConcurrent: 1, Streaming: true,
+	}); err == nil {
+		t.Fatal("built-in registration unexpectedly succeeded")
+	}
+	if started == nil {
+		t.Fatal("built-in Agent did not start")
+	}
+	client := &http.Client{Timeout: time.Second}
+	if _, err := client.Get(started.CardURL()); err == nil {
+		t.Fatal("registration failure left built-in Agent running")
 	}
 }
 
@@ -448,6 +648,10 @@ func assertLocalRunnerOutputHasNoSecrets(t *testing.T, output string) {
 			t.Fatalf("command output exposed secret material")
 		}
 	}
+}
+
+func testLocalRunnerOwnerIdentity(context.Context) (string, string, error) {
+	return "tenant-1", "operator-1", nil
 }
 
 type staticLocalRunnerOAuth string

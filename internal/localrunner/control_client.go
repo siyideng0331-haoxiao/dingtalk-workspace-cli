@@ -14,11 +14,26 @@ import (
 
 const maxControlResponseBytes = 1 << 20
 
+const (
+	controlTenantHeader = "X-Dingtalk-Corp-Id"
+	controlUserHeader   = "X-Dingtalk-User-Id"
+)
+
 var ErrControlClientInvalid = errors.New("control_client_invalid")
 
 type OAuthAccessTokenProvider interface {
 	AccessToken(context.Context) (string, error)
 	RefreshRejectedAccessToken(context.Context, string) (string, error)
+}
+
+type ControlOwnerIdentityProvider interface {
+	OwnerIdentity(context.Context) (string, string, error)
+}
+
+type ControlOwnerIdentityProviderFunc func(context.Context) (string, string, error)
+
+func (f ControlOwnerIdentityProviderFunc) OwnerIdentity(ctx context.Context) (string, string, error) {
+	return f(ctx)
 }
 
 type HTTPDoer interface {
@@ -46,17 +61,20 @@ type HTTPControlClient struct {
 	baseURL      string
 	httpClient   HTTPDoer
 	tokenProvider OAuthAccessTokenProvider
+	ownerProvider ControlOwnerIdentityProvider
 }
 
-func NewHTTPControlClient(baseURL string, httpClient HTTPDoer, tokenProvider OAuthAccessTokenProvider) (*HTTPControlClient, error) {
+func NewHTTPControlClient(baseURL string, httpClient HTTPDoer, tokenProvider OAuthAccessTokenProvider,
+	ownerProvider ControlOwnerIdentityProvider) (*HTTPControlClient, error) {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil || !validOpenAPIBase(baseURL) || httpClient == nil || tokenProvider == nil {
+	if err != nil || !validOpenAPIBase(baseURL) || httpClient == nil || tokenProvider == nil || ownerProvider == nil {
 		return nil, ErrControlClientInvalid
 	}
 	return &HTTPControlClient{
 		baseURL:       strings.TrimRight(parsed.String(), "/"),
 		httpClient:    httpClient,
 		tokenProvider: tokenProvider,
+		ownerProvider: ownerProvider,
 	}, nil
 }
 
@@ -205,7 +223,13 @@ func (c *HTTPControlClient) request(ctx context.Context, method, path string, bo
 	if err != nil || strings.TrimSpace(token) == "" {
 		return 0, nil, ErrControlClientInvalid
 	}
-	status, response, err := c.requestAttempt(ctx, method, path, body, token)
+	tenantID, userID, err := c.ownerProvider.OwnerIdentity(ctx)
+	tenantID = strings.TrimSpace(tenantID)
+	userID = strings.TrimSpace(userID)
+	if err != nil || tenantID == "" || userID == "" {
+		return 0, nil, ErrControlClientInvalid
+	}
+	status, response, err := c.requestAttempt(ctx, method, path, body, token, tenantID, userID)
 	if err != nil || status != http.StatusUnauthorized {
 		return status, response, err
 	}
@@ -213,10 +237,11 @@ func (c *HTTPControlClient) request(ctx context.Context, method, path string, bo
 	if refreshErr != nil || strings.TrimSpace(fresh) == "" {
 		return 0, nil, ErrControlClientInvalid
 	}
-	return c.requestAttempt(ctx, method, path, body, fresh)
+	return c.requestAttempt(ctx, method, path, body, fresh, tenantID, userID)
 }
 
-func (c *HTTPControlClient) requestAttempt(ctx context.Context, method, path string, body []byte, token string) (int, []byte, error) {
+func (c *HTTPControlClient) requestAttempt(ctx context.Context, method, path string, body []byte,
+	token, tenantID, userID string) (int, []byte, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -230,6 +255,8 @@ func (c *HTTPControlClient) requestAttempt(ctx context.Context, method, path str
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set(controlTenantHeader, tenantID)
+	req.Header.Set(controlUserHeader, userID)
 	response, err := c.httpClient.Do(req)
 	if err != nil {
 		return 0, nil, err

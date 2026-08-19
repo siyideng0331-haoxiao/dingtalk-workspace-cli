@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/cli"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/corecmd/contract"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/helpers"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/localrunner"
@@ -27,10 +28,45 @@ type localRunnerConnectOptions struct {
 	Streaming      bool
 }
 
+type localRunnerStartLocalOptions struct {
+	AgentRef      string
+	LocalAgentID  string
+	DisplayName   string
+	OpenAPIBase   string
+	MaxConcurrent int
+	Streaming     bool
+}
+
+type localRunnerA2AAuthentication struct {
+	Scheme              string `json:"scheme"`
+	CredentialStorage   string `json:"credentialStorage"`
+	CredentialExported  bool   `json:"credentialExported"`
+}
+
+type localRunnerA2ALocalRunner struct {
+	RunnerID   string `json:"runnerId"`
+	EndpointID string `json:"endpointId"`
+	Status     string `json:"status"`
+}
+
+type localRunnerA2AConfiguration struct {
+	Type           string                       `json:"type"`
+	AgentCardURL   string                       `json:"agentCardUrl"`
+	Authentication localRunnerA2AAuthentication `json:"authentication"`
+	LocalRunner    localRunnerA2ALocalRunner    `json:"localRunner"`
+}
+
+type localRunnerStartLocalResult struct {
+	Summary        localRunnerA2AConfiguration
+	ConnectOptions localRunnerConnectOptions
+	Close          func() error
+}
+
 type localRunnerCommandRuntime interface {
 	Expose(context.Context, localRunnerExposeOptions) (*localrunner.CreatedRunner, error)
 	Status(context.Context, string) (*localRunnerStatusResult, error)
 	Revoke(context.Context, string) (*localrunner.RevokeRunnerData, error)
+	StartLocal(context.Context, localRunnerStartLocalOptions) (*localRunnerStartLocalResult, error)
 	Connect(context.Context, localRunnerConnectOptions) (*localrunner.ConnectionStateSnapshot, error)
 }
 
@@ -55,8 +91,72 @@ func newDEAPCommand() *cobra.Command {
 		newLocalRunnerRevokeCommand(),
 		newLocalRunnerConnectCommand(),
 	)
-	deap.AddCommand(localRunner)
+	runtime := &cobra.Command{Use: "runtime", Short: "运行 DEAP 本地 Agent"}
+	runtime.AddCommand(newLocalRunnerStartLocalCommand())
+	deap.AddCommand(localRunner, runtime)
 	return deap
+}
+
+func newLocalRunnerStartLocalCommand() *cobra.Command {
+	options := localRunnerStartLocalOptions{
+		OpenAPIBase:   defaultLocalRunnerOpenAPIBase,
+		MaxConcurrent: 4,
+		Streaming:     true,
+	}
+	cmd := &cobra.Command{
+		Use:   "start-local <agent-ref>",
+		Short: "注册并运行一个本地 A2A Agent",
+		Long:  "使用 test-echo 在当前 dws 进程启动内置验收 Agent，或读取一个 loopback Agent Card URL 兼容外部真实 Agent；注册后先输出不含凭证的公网 A2A 配置，再维持 WSS 与本地 HTTP/SSE 代理。",
+		Args:   cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			options.AgentRef = strings.TrimSpace(args[0])
+			runtime := localRunnerCommandRuntimeProvider()
+			result, err := runtime.StartLocal(cmd.Context(), options)
+			if err != nil {
+				return err
+			}
+			if result.Close != nil {
+				defer result.Close()
+			}
+			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(result.Summary); err != nil {
+				return err
+			}
+			_, err = runtime.Connect(cmd.Context(), result.ConnectOptions)
+			return err
+		},
+	}
+	flags := cmd.Flags()
+	flags.StringVar(&options.LocalAgentID, "local-agent-id", "", "本地 Agent 的稳定 ID；test-echo 默认使用固定 ID，URL 模式确定性派生")
+	flags.StringVar(&options.DisplayName, "display-name", "", "LocalRunner 显示名称；默认使用 Agent Card name")
+	flags.StringVar(&options.OpenAPIBase, "openapi-base", defaultLocalRunnerOpenAPIBase, "DEAP LocalRunner OpenAPI base URL")
+	flags.IntVar(&options.MaxConcurrent, "max-concurrent", 4, "最大并发 A2A 请求数")
+	flags.BoolVar(&options.Streaming, "streaming", true, "声明支持 SSE streaming")
+	positionals := []contract.RuntimeSchemaPositional{{
+		Name: "agent_ref", Type: "string", Description: "内置 test-echo 或本地 loopback Agent Card URL", Required: true, Index: 0,
+	}}
+	cli.AnnotateRuntimePositionals(cmd, positionals...)
+	declaration := localRunnerContract(
+		"runtime_start_local",
+		"deap.runtime_start_local",
+		"deap runtime start-local",
+		"从内置 test-echo 或本地 Agent Card 一键注册并维持公网 A2A LocalRunner 连接",
+		"需要单进程验收 test-echo，或已有可访问的 loopback Agent Card 并需一次完成注册、配置输出和长连接代理时",
+		"任意 agent-id 与进程监督尚不支持；只注册不用长连接时使用 deap local-runner expose，已有 Runner 重连时使用 connect",
+		[]string{"dws deap runtime start-local test-echo", "dws deap runtime start-local http://127.0.0.1:8000/.well-known/agent-card.json"},
+	)
+	declaration.Positionals = positionals
+	declaration.Parameters = []contract.ParamDecl{
+		{Name: "local-agent-id", Property: "localAgentId", InterfaceType: "string", Description: "本地 Agent 的稳定 ID；test-echo 默认固定，URL 模式确定性派生"},
+		{Name: "display-name", Property: "displayName", InterfaceType: "string", Description: "LocalRunner 显示名称；默认使用 Agent Card name"},
+		{Name: "openapi-base", Property: "openApiBase", InterfaceType: "string", Description: "DEAP LocalRunner OpenAPI base URL"},
+		{Name: "max-concurrent", Property: "maxConcurrent", InterfaceType: "integer", Description: "最大并发 A2A 请求数"},
+		{Name: "streaming", Property: "streaming", InterfaceType: "boolean", Description: "声明支持 SSE streaming"},
+	}
+	helpers.DeclareLeafMetadata(cmd, helpers.LeafSpec{
+		Safety:   contract.SafetySpec{Effect: "write", Risk: "medium", Confirmation: "not_required", Idempotency: "non_idempotent"},
+		Contract: declaration,
+	})
+	return cmd
 }
 
 func newLocalRunnerExposeCommand() *cobra.Command {

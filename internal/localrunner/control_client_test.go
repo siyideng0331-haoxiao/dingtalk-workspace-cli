@@ -36,6 +36,10 @@ func TestHTTPControlClientCreatesRunnerWithOneOAuthRefreshAndStoresBearer(t *tes
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/assistant/local-runners" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
+		if r.Header.Get("X-Dingtalk-Corp-Id") != "corp-1" || r.Header.Get("X-Dingtalk-User-Id") != "user-1" {
+			t.Errorf("profile headers = corp %q user %q",
+				r.Header.Get("X-Dingtalk-Corp-Id"), r.Header.Get("X-Dingtalk-User-Id"))
+		}
 		body, _ := io.ReadAll(r.Body)
 		var object map[string]json.RawMessage
 		if json.Unmarshal(body, &object) != nil || len(object) != 3 || object["localAgentId"] == nil || object["displayName"] == nil || object["agentCard"] == nil {
@@ -59,7 +63,7 @@ func TestHTTPControlClientCreatesRunnerWithOneOAuthRefreshAndStoresBearer(t *tes
 
 	provider := &recordingOAuthProvider{accessToken: "rejected-oauth", refreshedToken: "fresh-oauth"}
 	sink := &recordingEndpointBearerSink{}
-	client, err := NewHTTPControlClient(server.URL, server.Client(), provider)
+	client, err := NewHTTPControlClient(server.URL, server.Client(), provider, staticControlOwner{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +99,8 @@ func TestHTTPControlClientOpenConnectionUsesExactBinding(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewHTTPControlClient(server.URL, server.Client(), &recordingOAuthProvider{accessToken: "oauth"})
+	client, err := NewHTTPControlClient(server.URL, server.Client(),
+		&recordingOAuthProvider{accessToken: "oauth"}, staticControlOwner{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +120,8 @@ func TestHTTPControlClientReturnsStableFailureWithoutMessageLeak(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewHTTPControlClient(server.URL, server.Client(), &recordingOAuthProvider{accessToken: "oauth"})
+	client, err := NewHTTPControlClient(server.URL, server.Client(),
+		&recordingOAuthProvider{accessToken: "oauth"}, staticControlOwner{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,9 +137,16 @@ func TestHTTPControlClientReturnsStableFailureWithoutMessageLeak(t *testing.T) {
 
 func TestHTTPControlClientRejectsCleartextNonLoopbackBaseBeforeOAuth(t *testing.T) {
 	provider := &recordingOAuthProvider{accessToken: "must-not-be-used"}
-	if _, err := NewHTTPControlClient("http://api.example.test", http.DefaultClient, provider); !errors.Is(err, ErrControlClientInvalid) {
+	if _, err := NewHTTPControlClient("http://api.example.test", http.DefaultClient, provider,
+		staticControlOwner{}); !errors.Is(err, ErrControlClientInvalid) {
 		t.Fatalf("constructor error = %v, want ErrControlClientInvalid", err)
 	}
+}
+
+type staticControlOwner struct{}
+
+func (staticControlOwner) OwnerIdentity(context.Context) (string, string, error) {
+	return "corp-1", "user-1", nil
 }
 
 type recordingOAuthProvider struct {
