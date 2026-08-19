@@ -30,7 +30,8 @@ const (
 	deapAgentSkillQueryTool      = "get_skill_detail"
 	deapAgentMCPCreateTool       = "create_mcp"
 	deapAgentMCPListTool         = "list_mcps"
-	deapAgentMCPQueryTool        = "get_mcp_detail"
+	deapAgentMCPQueryTool        = "query_mcp"
+	deapAgentMCPQueryIdentity    = "get_mcp_detail"
 	deapAgentSkillUploadPath     = "/v1.0/assistant/skills/upload"
 
 	deapAgentConfigFileMaxSize    = 1024 * 1024
@@ -498,7 +499,7 @@ func newDeapAgentMCPQueryCommand() *cobra.Command {
 		},
 		Safety: contract.SafetySpec{Effect: "read", Risk: "low", Confirmation: "not_required", Idempotency: "idempotent"},
 		Contract: LeafContract{
-			Identity:    contract.ToolIdentitySpec{ProductID: deapProductID, Name: deapAgentMCPQueryTool, CanonicalPath: "deap.get_mcp_detail", CLIPath: "deap mcp query", PrimaryCLIPath: "deap mcp query", Group: "mcp"},
+			Identity:    contract.ToolIdentitySpec{ProductID: deapProductID, Name: deapAgentMCPQueryIdentity, CanonicalPath: "deap.get_mcp_detail", CLIPath: "deap mcp query", PrimaryCLIPath: "deap mcp query", Group: "mcp"},
 			Description: "按 mcpId 查询独立 MCP 资源定义、工具列表和脱敏配置。",
 			DryRun:      deapAgentDryRun, Interface: deapAgentMCPInterface(deapAgentMCPQueryTool),
 			Selection: contract.SelectionSpec{AgentSummary: "查询一个独立 MCP 资源的脱敏详情", UseWhen: []string{"已知 mcpId，需要核对定义或工具解析结果时"}, AvoidWhen: []string{"需要取得明文凭据时不要使用，系统不提供明文回显"}, Examples: []string{"dws deap mcp query --mcp-id <mcpId> --format json"}},

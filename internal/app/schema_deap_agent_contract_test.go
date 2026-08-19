@@ -137,7 +137,7 @@ func TestDeapAgentSkillMCPLeavesReachFinalSchema(t *testing.T) {
 			map[string]string{"keywords": "keywords", "page": "page", "page-size": "pageSize"},
 		},
 		"deap.get_mcp_detail": {
-			"deap mcp query", "get_mcp_detail", "available",
+			"deap mcp query", "query_mcp", "available",
 			map[string]string{"mcp-id": "mcpId"},
 		},
 	}
