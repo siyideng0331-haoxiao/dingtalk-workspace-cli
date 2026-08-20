@@ -58,6 +58,8 @@ func TestRunnerConfigStorePersistsOnlyNonSensitiveFields(t *testing.T) {
 		LoopbackBaseURL: "http://127.0.0.1:8080",
 		OpenAPIBase:     "https://api.dingtalk.com",
 		AgentCardSHA256: agentCardSHA256,
+		AgentKind:       "opencode",
+		WorkDir:         filepath.Join(t.TempDir(), "project"),
 	}
 	if err := store.Save(config); err != nil {
 		t.Fatal(err)
@@ -97,6 +99,40 @@ func TestRunnerConfigStorePersistsOnlyNonSensitiveFields(t *testing.T) {
 	}
 	if _, err := store.Load("runner-1"); !errors.Is(err, ErrRunnerConfigNotFound) {
 		t.Fatalf("load after delete error = %v", err)
+	}
+}
+
+func TestRunnerConfigRequiresPairedOpenCodeKindAndAbsoluteWorkDir(t *testing.T) {
+	valid := StoredRunnerConfig{
+		RunnerID: "runner-1", EndpointID: "endpoint-1", LocalAgentID: "agent-1", DisplayName: "Local agent",
+		AgentCardURL: "http://127.0.0.1:8080/card", LoopbackBaseURL: "http://127.0.0.1:8080",
+		OpenAPIBase: "https://api.dingtalk.com", AgentCardSHA256: "sha256:" + strings.Repeat("a", 64),
+	}
+	for _, test := range []struct {
+		name string
+		kind string
+		dir  string
+		want bool
+	}{
+		{name: "legacy external", want: true},
+		{name: "opencode", kind: "opencode", dir: filepath.Join(t.TempDir(), "project"), want: true},
+		{name: "missing workdir", kind: "opencode"},
+		{name: "missing kind", dir: filepath.Join(t.TempDir(), "project")},
+		{name: "unknown kind", kind: "other", dir: filepath.Join(t.TempDir(), "project")},
+		{name: "relative workdir", kind: "opencode", dir: "relative/project"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := valid
+			candidate.AgentKind = test.kind
+			candidate.WorkDir = test.dir
+			err := candidate.Validate()
+			if test.want && err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+			if !test.want && !errors.Is(err, ErrRunnerConfigInvalid) {
+				t.Fatalf("Validate() error = %v, want ErrRunnerConfigInvalid", err)
+			}
+		})
 	}
 }
 

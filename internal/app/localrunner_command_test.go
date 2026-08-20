@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -212,8 +214,11 @@ func TestLocalRunnerStartLocalHelpSchemaAndExactAgentReference(t *testing.T) {
 	}
 	for _, want := range []string{
 		"start-local <agent-ref>",
+		"opencode",
 		"test-echo",
 		"loopback Agent Card URL",
+		"--workdir",
+		"--model",
 		"--local-agent-id",
 		"--display-name",
 		"--openapi-base",
@@ -246,10 +251,65 @@ func TestLocalRunnerStartLocalHelpSchemaAndExactAgentReference(t *testing.T) {
 	if len(schema.Positionals) != 1 || schema.Positionals[0].Name != "agent_ref" || !schema.Positionals[0].Required {
 		t.Fatalf("start-local positionals = %#v", schema.Positionals)
 	}
-	for _, name := range []string{"local-agent-id", "display-name", "openapi-base", "max-concurrent", "streaming"} {
+	for _, name := range []string{"workdir", "model", "local-agent-id", "display-name", "openapi-base", "max-concurrent", "streaming"} {
 		if schema.Parameters[name] == nil {
 			t.Fatalf("start-local Schema missing --%s", name)
 		}
+	}
+}
+
+func TestLocalRunnerStartLocalOpenCodeNormalizesWorkDirAndPassesModel(t *testing.T) {
+	runtime := &recordingLocalRunnerRuntime{}
+	testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
+	workDir := t.TempDir()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(cwd, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := newRootCommandWithEngine(context.Background(), nil, false, true)
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"deap", "runtime", "start-local", "opencode", "--workdir", relative, "--model", "provider/model"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.startOptions.AgentRef != "opencode" || runtime.startOptions.WorkDir != filepath.Clean(workDir) || runtime.startOptions.Model != "provider/model" {
+		t.Fatalf("start-local OpenCode options = %#v", runtime.startOptions)
+	}
+}
+
+func TestLocalRunnerStartLocalOpenCodeRejectsMissingOrBadWorkDirBeforeRuntime(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(file, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{name: "missing flag", args: []string{"deap", "runtime", "start-local", "opencode"}},
+		{name: "missing path", args: []string{"deap", "runtime", "start-local", "opencode", "--workdir", filepath.Join(t.TempDir(), "missing")}},
+		{name: "file", args: []string{"deap", "runtime", "start-local", "opencode", "--workdir", file}},
+		{name: "flag on echo", args: []string{"deap", "runtime", "start-local", "test-echo", "--workdir", t.TempDir()}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &recordingLocalRunnerRuntime{}
+			testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
+			root := newRootCommandWithEngine(context.Background(), nil, false, true)
+			root.SetOut(&bytes.Buffer{})
+			root.SetErr(&bytes.Buffer{})
+			root.SetArgs(test.args)
+			if err := root.Execute(); err == nil {
+				t.Fatalf("start-local accepted %v", test.args)
+			}
+			if runtime.lastCall != "" {
+				t.Fatalf("invalid command reached runtime as %q", runtime.lastCall)
+			}
+		})
 	}
 }
 

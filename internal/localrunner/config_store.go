@@ -31,6 +31,8 @@ type StoredRunnerConfig struct {
 	LoopbackBaseURL string `json:"loopbackBaseUrl"`
 	OpenAPIBase     string `json:"openApiBase"`
 	AgentCardSHA256 string `json:"agentCardSha256"`
+	AgentKind       string `json:"agentKind,omitempty"`
+	WorkDir         string `json:"workDir,omitempty"`
 }
 
 func (c StoredRunnerConfig) Validate() error {
@@ -38,6 +40,11 @@ func (c StoredRunnerConfig) Validate() error {
 		return ErrRunnerConfigInvalid
 	}
 	if !validLoopbackHTTPURL(c.AgentCardURL) || !validLoopbackOrigin(c.LoopbackBaseURL) || !validOpenAPIBase(c.OpenAPIBase) {
+		return ErrRunnerConfigInvalid
+	}
+	if c.AgentKind == "" && c.WorkDir == "" {
+		// Legacy external/test-echo bindings predate local process metadata.
+	} else if c.AgentKind != "opencode" || strings.TrimSpace(c.WorkDir) != c.WorkDir || !filepath.IsAbs(c.WorkDir) || filepath.Clean(c.WorkDir) != c.WorkDir {
 		return ErrRunnerConfigInvalid
 	}
 	const agentCardSHA256Prefix = "sha256:"

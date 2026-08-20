@@ -887,6 +887,232 @@ func TestProductionLocalRunnerStartLocalClosesBuiltInEchoWhenRegistrationFails(t
 	}
 }
 
+func TestProductionLocalRunnerStartLocalRunsOpenCodeWithStableWorkDirIdentity(t *testing.T) {
+	workDir := t.TempDir()
+	backend := &fakeLocalRunnerOpenCodeBackend{reply: "OpenCode reply"}
+	var started *localRunnerOpenCodeAgent
+	var gotWorkDir string
+	var gotModel string
+	testseam.Swap(t, &localRunnerOpenCodeAgentStarter, func(ctx context.Context, workDir, model string) (*localRunnerOpenCodeAgent, error) {
+		gotWorkDir = workDir
+		gotModel = model
+		agent, err := startLocalRunnerOpenCodeAgentWithBackend(backend, "127.0.0.1:0")
+		started = agent
+		return agent, err
+	})
+	digest := sha256.Sum256([]byte(workDir))
+	wantLocalAgentID := fmt.Sprintf("opencode-%x", digest[:8])
+	agentCardSHA256 := "sha256:" + strings.Repeat("a", 64)
+	var createRequest localrunner.CreateRunnerRequest
+	controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		status := http.StatusOK
+		body := `{"success":true,"data":{"runnerId":"runner-opencode","endpointId":"endpoint-opencode","localAgentId":"` + wantLocalAgentID + `","displayName":"DWS OpenCode","status":"ACTIVE","agentCardUrl":"https://api.dingtalk.com/v1/a2a/local-runners/endpoint-opencode/.well-known/agent-card.json","agentCardSha256":"` + agentCardSHA256 + `","connected":false,"lastHeartbeatAtEpochSecond":null}}`
+		if request.Method == http.MethodPost {
+			status = http.StatusCreated
+			body = `{"success":true,"data":{"runnerId":"runner-opencode","endpointId":"endpoint-opencode","agentCardUrl":"https://api.dingtalk.com/v1/a2a/local-runners/endpoint-opencode/.well-known/agent-card.json","endpointBearer":"endpoint-secret","status":"ACTIVE"}}`
+			if err := json.NewDecoder(request.Body).Decode(&createRequest); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+	})
+	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+		ConfigDir: t.TempDir(), ControlHTTPClient: controlClient,
+		OAuth: staticLocalRunnerOAuth("oauth-token"),
+		Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
+		OwnerIdentity: testLocalRunnerOwnerIdentity,
+	})
+
+	result, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
+		AgentRef: "opencode", WorkDir: workDir, Model: "provider/model",
+		OpenAPIBase: "https://api.dingtalk.com", MaxConcurrent: 3, Streaming: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotWorkDir != workDir || gotModel != "provider/model" {
+		t.Fatalf("OpenCode starter options = workdir %q model %q", gotWorkDir, gotModel)
+	}
+	if createRequest.LocalAgentID != wantLocalAgentID || createRequest.DisplayName != localRunnerOpenCodeDisplayName {
+		t.Fatalf("OpenCode create identity = %q/%q", createRequest.LocalAgentID, createRequest.DisplayName)
+	}
+	if result.ConnectOptions.TargetURL != started.RPCURL() {
+		t.Fatalf("OpenCode connect target = %q, want %q", result.ConnectOptions.TargetURL, started.RPCURL())
+	}
+	stored, err := runtime.configs.Load("runner-opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.AgentKind != "opencode" || stored.WorkDir != workDir {
+		t.Fatalf("stored OpenCode binding = %#v", stored)
+	}
+	if err := result.Close(); err != nil {
+		t.Fatal(err)
+	}
+	backend.mu.Lock()
+	closeCalls := backend.closeCalls
+	backend.mu.Unlock()
+	if closeCalls != 1 {
+		t.Fatalf("OpenCode backend close calls = %d, want 1", closeCalls)
+	}
+}
+
+func TestProductionLocalRunnerStartLocalClosesOpenCodeWhenRegistrationFails(t *testing.T) {
+	backend := &fakeLocalRunnerOpenCodeBackend{reply: "reply"}
+	testseam.Swap(t, &localRunnerOpenCodeAgentStarter, func(context.Context, string, string) (*localRunnerOpenCodeAgent, error) {
+		return startLocalRunnerOpenCodeAgentWithBackend(backend, "127.0.0.1:0")
+	})
+	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+		ConfigDir: t.TempDir(),
+		ControlHTTPClient: localRunnerHTTPDoerFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("control unavailable")
+		}),
+		OAuth: staticLocalRunnerOAuth("oauth-token"),
+		Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
+		OwnerIdentity: testLocalRunnerOwnerIdentity,
+	})
+	if _, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
+		AgentRef: "opencode", WorkDir: t.TempDir(), OpenAPIBase: defaultLocalRunnerOpenAPIBase,
+		MaxConcurrent: 1, Streaming: true,
+	}); err == nil {
+		t.Fatal("OpenCode registration unexpectedly succeeded")
+	}
+	backend.mu.Lock()
+	closeCalls := backend.closeCalls
+	backend.mu.Unlock()
+	if closeCalls != 1 {
+		t.Fatalf("registration failure backend close calls = %d, want 1", closeCalls)
+	}
+}
+
+func TestProductionLocalRunnerStartLocalRejectsStoredOpenCodeWorkDirDriftBeforeStart(t *testing.T) {
+	storedWorkDir := t.TempDir()
+	requestedWorkDir := t.TempDir()
+	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+		ConfigDir: t.TempDir(),
+		ControlHTTPClient: localRunnerHTTPDoerFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("workdir drift reached control plane")
+			return nil, nil
+		}),
+		OAuth: staticLocalRunnerOAuth("oauth-token"),
+		Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
+		OwnerIdentity: testLocalRunnerOwnerIdentity,
+	})
+	if err := runtime.configs.Save(localrunner.StoredRunnerConfig{
+		RunnerID: "runner-existing", EndpointID: "endpoint-existing", LocalAgentID: "stable-agent", DisplayName: localRunnerOpenCodeDisplayName,
+		AgentCardURL: "http://127.0.0.1:32123/.well-known/agent-card.json", LoopbackBaseURL: "http://127.0.0.1:32123",
+		OpenAPIBase: "https://api.dingtalk.com", AgentCardSHA256: "sha256:" + strings.Repeat("a", 64),
+		AgentKind: "opencode", WorkDir: storedWorkDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	startCalls := 0
+	testseam.Swap(t, &localRunnerOpenCodeAgentStarter, func(context.Context, string, string) (*localRunnerOpenCodeAgent, error) {
+		startCalls++
+		return nil, errors.New("must not start")
+	})
+	_, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
+		AgentRef: "opencode", WorkDir: requestedWorkDir, LocalAgentID: "stable-agent",
+		OpenAPIBase: "https://api.dingtalk.com", MaxConcurrent: 1, Streaming: true,
+	})
+	if !errors.Is(err, ErrLocalRunnerRuntimeInvalid) {
+		t.Fatalf("StartLocal error = %v, want ErrLocalRunnerRuntimeInvalid", err)
+	}
+	if startCalls != 0 {
+		t.Fatalf("workdir drift started OpenCode %d times", startCalls)
+	}
+}
+
+func TestProductionLocalRunnerStartLocalResumesStoredOpenCodeWithoutCreateOrUpdate(t *testing.T) {
+	workDir := t.TempDir()
+	initialBackend := &fakeLocalRunnerOpenCodeBackend{reply: "initial"}
+	initialAgent, err := startLocalRunnerOpenCodeAgentWithBackend(initialBackend, "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cardURL := initialAgent.CardURL()
+	rpcURL := initialAgent.RPCURL()
+	rawCard := readLocalRunnerTestCard(t, cardURL)
+	publicURL := "https://api.dingtalk.com/v1/a2a/local-runners/endpoint-existing/.well-known/agent-card.json"
+	publicSnapshot, err := localrunner.RewriteAgentCard(rawCard, "endpoint-existing", "https://api.dingtalk.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverDigest := localRunnerAgentCardDigest(publicSnapshot.JSON)
+	if err := initialAgent.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	controlWrites := 0
+	controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet {
+			controlWrites++
+			t.Fatalf("stored OpenCode recovery sent %s %s", request.Method, request.URL)
+		}
+		body := `{"success":true,"data":{"runnerId":"runner-existing","endpointId":"endpoint-existing","localAgentId":"` + localRunnerOpenCodeDefaultID(workDir) + `","displayName":"DWS OpenCode","status":"ACTIVE","agentCardUrl":"` + publicURL + `","agentCardSha256":"` + serverDigest + `","connected":false,"lastHeartbeatAtEpochSecond":null}}`
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+	})
+	cardClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Scheme == "https" {
+			header := make(http.Header)
+			header.Set("Content-Type", "application/json")
+			return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(bytes.NewReader(publicSnapshot.JSON)), Request: request}, nil
+		}
+		return http.DefaultClient.Do(request)
+	})
+	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+		ConfigDir: t.TempDir(), ControlHTTPClient: controlClient, CardHTTPClient: cardClient,
+		OAuth: staticLocalRunnerOAuth("oauth-token"),
+		Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
+		OwnerIdentity: testLocalRunnerOwnerIdentity,
+	})
+	stored := localrunner.StoredRunnerConfig{
+		RunnerID: "runner-existing", EndpointID: "endpoint-existing",
+		LocalAgentID: localRunnerOpenCodeDefaultID(workDir), DisplayName: localRunnerOpenCodeDisplayName,
+		AgentCardURL: cardURL, LoopbackBaseURL: strings.TrimSuffix(rpcURL, localRunnerOpenCodeRPCPath),
+		OpenAPIBase: "https://api.dingtalk.com", AgentCardSHA256: serverDigest,
+		AgentKind: localRunnerOpenCodeRef, WorkDir: workDir,
+	}
+	if err := runtime.configs.Save(stored); err != nil {
+		t.Fatal(err)
+	}
+	resumedBackend := &fakeLocalRunnerOpenCodeBackend{reply: "resumed"}
+	restartCalls := 0
+	testseam.Swap(t, &localRunnerOpenCodeAgentRestarter, func(_ context.Context, rawOrigin, gotWorkDir, model string) (*localRunnerOpenCodeAgent, error) {
+		restartCalls++
+		if rawOrigin != stored.LoopbackBaseURL || gotWorkDir != workDir || model != "provider/model" {
+			t.Fatalf("OpenCode restart options = origin %q workdir %q model %q", rawOrigin, gotWorkDir, model)
+		}
+		parsed, err := url.Parse(rawOrigin)
+		if err != nil {
+			return nil, err
+		}
+		return startLocalRunnerOpenCodeAgentWithBackend(resumedBackend, parsed.Host)
+	})
+
+	result, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
+		AgentRef: localRunnerOpenCodeRef, WorkDir: workDir, Model: "provider/model",
+		OpenAPIBase: "https://api.dingtalk.com", MaxConcurrent: 2, Streaming: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Close()
+	if restartCalls != 1 || controlWrites != 0 {
+		t.Fatalf("recovery restart calls=%d control writes=%d", restartCalls, controlWrites)
+	}
+	if result.ConnectOptions.RunnerID != stored.RunnerID || result.ConnectOptions.EndpointID != stored.EndpointID || result.ConnectOptions.TargetURL != rpcURL || result.ConnectOptions.AgentCardSHA256 != serverDigest {
+		t.Fatalf("recovered connect options = %#v", result.ConnectOptions)
+	}
+	reloaded, err := runtime.configs.Load(stored.RunnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.AgentCardSHA256 != serverDigest || reloaded.AgentKind != localRunnerOpenCodeRef || reloaded.WorkDir != workDir {
+		t.Fatalf("reloaded stored OpenCode config = %#v", reloaded)
+	}
+}
+
 func TestLocalRunnerCardFetchRejectsRedirectOutsideLoopback(t *testing.T) {
 	runtime := &productionLocalRunnerCommandRuntime{
 		cardHTTPClient: localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {

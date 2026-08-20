@@ -133,7 +133,42 @@ func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, op
 	identitySeed := agentRef
 	var stored *localrunner.StoredRunnerConfig
 	var closeAgent func() error
-	if agentRef == localRunnerTestEchoRef {
+	if agentRef == localRunnerOpenCodeRef {
+		workDir, err := normalizeLocalRunnerOpenCodeWorkDir(options.WorkDir)
+		if err != nil {
+			return nil, err
+		}
+		options.WorkDir = workDir
+		options.Model = strings.TrimSpace(options.Model)
+		identitySeed = localRunnerOpenCodeRef + ":" + workDir
+		storedLocalAgentID := strings.TrimSpace(options.LocalAgentID)
+		if storedLocalAgentID == "" {
+			storedLocalAgentID = localRunnerOpenCodeDefaultID(workDir)
+		}
+		candidate, findErr := r.configs.FindByLocalAgentID(storedLocalAgentID)
+		if findErr == nil {
+			stored = candidate
+		} else if !errors.Is(findErr, localrunner.ErrRunnerConfigNotFound) {
+			return nil, findErr
+		}
+		if stored != nil && (stored.AgentKind != localRunnerOpenCodeRef || stored.WorkDir != workDir) {
+			return nil, ErrLocalRunnerRuntimeInvalid
+		}
+		var agent *localRunnerOpenCodeAgent
+		if stored != nil {
+			agent, err = localRunnerOpenCodeAgentRestarter(ctx, stored.LoopbackBaseURL, workDir, options.Model)
+		} else {
+			agent, err = localRunnerOpenCodeAgentStarter(ctx, workDir, options.Model)
+		}
+		if err != nil {
+			return nil, ErrLocalRunnerRuntimeInvalid
+		}
+		agentCardURL = agent.CardURL()
+		closeAgent = agent.Close
+	} else if agentRef == localRunnerTestEchoRef {
+		if strings.TrimSpace(options.WorkDir) != "" || strings.TrimSpace(options.Model) != "" {
+			return nil, ErrLocalRunnerRuntimeInvalid
+		}
 		storedLocalAgentID := strings.TrimSpace(options.LocalAgentID)
 		if storedLocalAgentID == "" {
 			storedLocalAgentID = localRunnerTestEchoRef
@@ -156,7 +191,7 @@ func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, op
 		}
 		agentCardURL = agent.CardURL()
 		closeAgent = agent.Close
-	} else if !localrunner.ValidateLoopbackHTTPURL(agentRef) {
+	} else if strings.TrimSpace(options.WorkDir) != "" || strings.TrimSpace(options.Model) != "" || !localrunner.ValidateLoopbackHTTPURL(agentRef) {
 		return nil, ErrLocalRunnerRuntimeInvalid
 	}
 	keepAgent := false
@@ -190,6 +225,10 @@ func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, op
 		DisplayName:  displayName,
 		AgentCardURL: agentCardURL,
 		OpenAPIBase:  options.OpenAPIBase,
+	}
+	if agentRef == localRunnerOpenCodeRef {
+		exposeOptions.AgentKind = localRunnerOpenCodeRef
+		exposeOptions.WorkDir = options.WorkDir
 	}
 	targetURL, err := localrunner.LocalAgentCardTarget(rawCard)
 	if err != nil {
@@ -226,7 +265,7 @@ func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, op
 }
 
 func (r *productionLocalRunnerCommandRuntime) recoverStoredLocalAgentCard(ctx context.Context, options localRunnerExposeOptions, rawCard json.RawMessage, targetURL string, stored *localrunner.StoredRunnerConfig, control *localrunner.HTTPControlClient) (*localrunner.CreatedRunner, error) {
-	if r == nil || stored == nil || control == nil || stored.Validate() != nil || strings.TrimSpace(options.LocalAgentID) != stored.LocalAgentID || strings.TrimSpace(options.DisplayName) != stored.DisplayName || strings.TrimSpace(options.AgentCardURL) != stored.AgentCardURL || strings.TrimRight(strings.TrimSpace(options.OpenAPIBase), "/") != stored.OpenAPIBase || !sameLocalRunnerOrigin(stored.LoopbackBaseURL, targetURL) {
+	if r == nil || stored == nil || control == nil || stored.Validate() != nil || strings.TrimSpace(options.LocalAgentID) != stored.LocalAgentID || strings.TrimSpace(options.DisplayName) != stored.DisplayName || strings.TrimSpace(options.AgentCardURL) != stored.AgentCardURL || strings.TrimRight(strings.TrimSpace(options.OpenAPIBase), "/") != stored.OpenAPIBase || options.AgentKind != stored.AgentKind || options.WorkDir != stored.WorkDir || !sameLocalRunnerOrigin(stored.LoopbackBaseURL, targetURL) {
 		return nil, ErrLocalRunnerRuntimeInvalid
 	}
 	view, err := control.GetRunner(ctx, stored.RunnerID)
@@ -309,6 +348,8 @@ func (r *productionLocalRunnerCommandRuntime) exposeLocalAgentCard(ctx context.C
 		LoopbackBaseURL: origin,
 		OpenAPIBase:     strings.TrimRight(strings.TrimSpace(options.OpenAPIBase), "/"),
 		AgentCardSHA256: view.AgentCardSHA256,
+		AgentKind:       options.AgentKind,
+		WorkDir:         options.WorkDir,
 	}
 	if err := r.configs.Save(stored); err != nil {
 		_ = r.credentials.RemoveEndpointBearer(ctx, created.RunnerID, created.EndpointID)
@@ -319,7 +360,11 @@ func (r *productionLocalRunnerCommandRuntime) exposeLocalAgentCard(ctx context.C
 
 func resolveLocalRunnerStartIdentity(rawCard json.RawMessage, identitySeed, localAgentID, displayName string) (string, string, error) {
 	identitySeed = strings.TrimSpace(identitySeed)
-	if identitySeed == "" || (identitySeed != localRunnerTestEchoRef && !localrunner.ValidateLoopbackHTTPURL(identitySeed)) {
+	opencodeWorkDir := ""
+	if strings.HasPrefix(identitySeed, localRunnerOpenCodeRef+":") {
+		opencodeWorkDir = strings.TrimPrefix(identitySeed, localRunnerOpenCodeRef+":")
+	}
+	if identitySeed == "" || (identitySeed != localRunnerTestEchoRef && opencodeWorkDir == "" && !localrunner.ValidateLoopbackHTTPURL(identitySeed)) || (opencodeWorkDir != "" && (!filepath.IsAbs(opencodeWorkDir) || filepath.Clean(opencodeWorkDir) != opencodeWorkDir)) {
 		return "", "", ErrLocalRunnerRuntimeInvalid
 	}
 	var card struct {
@@ -332,6 +377,8 @@ func resolveLocalRunnerStartIdentity(rawCard json.RawMessage, identitySeed, loca
 	if resolvedID == "" {
 		if identitySeed == localRunnerTestEchoRef {
 			resolvedID = localRunnerTestEchoRef
+		} else if opencodeWorkDir != "" {
+			resolvedID = localRunnerOpenCodeDefaultID(opencodeWorkDir)
 		} else {
 			digest := sha256.Sum256([]byte(identitySeed))
 			resolvedID = fmt.Sprintf("local-%x", digest[:8])
@@ -345,6 +392,11 @@ func resolveLocalRunnerStartIdentity(rawCard json.RawMessage, identitySeed, loca
 		return "", "", localrunner.ErrInvalidAgentCard
 	}
 	return resolvedID, resolvedName, nil
+}
+
+func localRunnerOpenCodeDefaultID(workDir string) string {
+	digest := sha256.Sum256([]byte(workDir))
+	return fmt.Sprintf("opencode-%x", digest[:8])
 }
 
 func (r *productionLocalRunnerCommandRuntime) Status(ctx context.Context, runnerID string) (*localRunnerStatusResult, error) {

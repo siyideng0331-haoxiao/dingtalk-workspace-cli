@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/cli"
@@ -17,6 +19,8 @@ type localRunnerExposeOptions struct {
 	DisplayName  string
 	AgentCardURL string
 	OpenAPIBase  string
+	AgentKind    string
+	WorkDir      string
 }
 
 type localRunnerConnectOptions struct {
@@ -30,6 +34,8 @@ type localRunnerConnectOptions struct {
 
 type localRunnerStartLocalOptions struct {
 	AgentRef      string
+	WorkDir       string
+	Model         string
 	LocalAgentID  string
 	DisplayName   string
 	OpenAPIBase   string
@@ -99,10 +105,20 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "start-local <agent-ref>",
 		Short: "注册并运行一个本地 A2A Agent",
-		Long:  "使用 test-echo 在当前 dws 进程启动内置验收 Agent，或读取一个 loopback Agent Card URL 兼容外部真实 Agent；注册后先输出不含凭证的公网 A2A 配置，再维持 WSS 与本地 HTTP/SSE 代理。",
+		Long:  "使用 opencode 在当前 dws 进程启动项目 Agent，使用 test-echo 启动内置验收 Agent，或读取一个 loopback Agent Card URL 兼容外部真实 Agent；注册后先输出不含凭证的公网 A2A 配置，再维持 WSS 与本地 HTTP/SSE 代理。",
 		Args:   cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			options.AgentRef = strings.TrimSpace(args[0])
+			if options.AgentRef == "opencode" {
+				workDir, err := normalizeLocalRunnerOpenCodeWorkDir(options.WorkDir)
+				if err != nil {
+					return err
+				}
+				options.WorkDir = workDir
+				options.Model = strings.TrimSpace(options.Model)
+			} else if strings.TrimSpace(options.WorkDir) != "" || strings.TrimSpace(options.Model) != "" {
+				return ErrLocalRunnerRuntimeInvalid
+			}
 			runtime := localRunnerCommandRuntimeProvider()
 			result, err := runtime.StartLocal(cmd.Context(), options)
 			if err != nil {
@@ -119,26 +135,30 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 		},
 	}
 	flags := cmd.Flags()
-	flags.StringVar(&options.LocalAgentID, "local-agent-id", "", "本地 Agent 的稳定 ID；test-echo 默认使用固定 ID，URL 模式确定性派生")
+	flags.StringVar(&options.WorkDir, "workdir", "", "OpenCode 项目目录；opencode 模式必填，可使用相对或绝对路径")
+	flags.StringVar(&options.Model, "model", "", "OpenCode 模型覆盖；留空使用 OpenCode 默认模型")
+	flags.StringVar(&options.LocalAgentID, "local-agent-id", "", "本地 Agent 的稳定 ID；opencode 按绝对 workdir、test-echo 按固定值、URL 按地址确定性派生")
 	flags.StringVar(&options.DisplayName, "display-name", "", "LocalRunner 显示名称；默认使用 Agent Card name")
 	flags.StringVar(&options.OpenAPIBase, "openapi-base", defaultLocalRunnerOpenAPIBase, "DEAP LocalRunner OpenAPI base URL")
 	flags.IntVar(&options.MaxConcurrent, "max-concurrent", 4, "最大并发 A2A 请求数")
 	flags.BoolVar(&options.Streaming, "streaming", true, "声明支持 SSE streaming")
 	positionals := []contract.RuntimeSchemaPositional{{
-		Name: "agent_ref", Type: "string", Description: "内置 test-echo 或本地 loopback Agent Card URL", Required: true, Index: 0,
+		Name: "agent_ref", Type: "string", Description: "内置 opencode、test-echo 或本地 loopback Agent Card URL", Required: true, Index: 0,
 	}}
 	cli.AnnotateRuntimePositionals(cmd, positionals...)
 	declaration := localRunnerContract(
 		"runtime_start_local",
 		"deap.runtime_start_local",
 		"deap runtime start-local",
-		"从内置 test-echo 或本地 Agent Card 一键注册并维持公网 A2A LocalRunner 连接",
-		"需要单进程验收 test-echo，或已有可访问的 loopback Agent Card 并需一次完成注册、配置输出和长连接代理时",
-		"任意 agent-id 与进程监督尚不支持；只注册不用长连接时使用 deap local-runner expose，已有 Runner 重连时使用 connect",
-		[]string{"dws deap runtime start-local test-echo", "dws deap runtime start-local http://127.0.0.1:8000/.well-known/agent-card.json"},
+		"从内置 OpenCode/test-echo 或本地 Agent Card 一键注册并维持公网 A2A LocalRunner 连接",
+		"需要把指定项目目录中的 OpenCode 单进程暴露为 A2A，验收 test-echo，或连接已有 loopback Agent Card 时",
+		"只注册不用长连接时使用 deap local-runner expose，已有 Runner 重连时使用 connect；任意 agent-id 的进程监督尚不支持",
+		[]string{"dws deap runtime start-local opencode --workdir ./project", "dws deap runtime start-local test-echo"},
 	)
 	declaration.Positionals = positionals
 	declaration.Parameters = []contract.ParamDecl{
+		{Name: "workdir", Property: "workDir", InterfaceType: "string", Description: "OpenCode 项目目录；opencode 模式必填，可使用相对或绝对路径"},
+		{Name: "model", Property: "model", InterfaceType: "string", Description: "OpenCode 模型覆盖；留空使用 OpenCode 默认模型"},
 		{Name: "local-agent-id", Property: "localAgentId", InterfaceType: "string", Description: "本地 Agent 的稳定 ID；test-echo 默认固定，URL 模式确定性派生"},
 		{Name: "display-name", Property: "displayName", InterfaceType: "string", Description: "LocalRunner 显示名称；默认使用 Agent Card name"},
 		{Name: "openapi-base", Property: "openApiBase", InterfaceType: "string", Description: "DEAP LocalRunner OpenAPI base URL"},
@@ -150,6 +170,22 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 		Contract: declaration,
 	})
 	return cmd
+}
+
+func normalizeLocalRunnerOpenCodeWorkDir(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", ErrLocalRunnerRuntimeInvalid
+	}
+	absolute, err := filepath.Abs(strings.TrimSpace(raw))
+	if err != nil {
+		return "", ErrLocalRunnerRuntimeInvalid
+	}
+	absolute = filepath.Clean(absolute)
+	info, err := os.Stat(absolute)
+	if err != nil || !info.IsDir() {
+		return "", ErrLocalRunnerRuntimeInvalid
+	}
+	return absolute, nil
 }
 
 func newLocalRunnerExposeCommand() *cobra.Command {
