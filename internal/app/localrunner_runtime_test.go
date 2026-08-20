@@ -280,6 +280,145 @@ func TestProductionLocalRunnerStartLocalReusesStoredBuiltInBindingWithoutCreate(
 	}
 }
 
+func TestProductionLocalRunnerStartLocalUpdatesStoredBuiltInCardWithoutCreate(t *testing.T) {
+	stored, currentDigest := newLocalRunnerStoredCardUpgradeFixture(t)
+	createCalls := 0
+	getCalls := 0
+	updateCalls := 0
+	controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.Method {
+		case http.MethodPost:
+			createCalls++
+			return nil, errors.New("create must not be called for stored Card upgrade")
+		case http.MethodGet:
+			getCalls++
+			return localRunnerStatusTestResponse(t, request, localrunner.RunnerStatusData{
+				RunnerID: stored.RunnerID, EndpointID: stored.EndpointID,
+				LocalAgentID: stored.LocalAgentID, DisplayName: stored.DisplayName,
+				Status: localrunner.RunnerStatusActive, AgentCardURL: "https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-existing/.well-known/agent-card.json",
+				AgentCardSHA256: stored.AgentCardSHA256,
+			}), nil
+		case http.MethodPut:
+			updateCalls++
+			if request.URL.Path != "/v1/assistant/local-runners/runner-existing/agent-card" {
+				t.Fatalf("UpdateAgentCard path = %q", request.URL.Path)
+			}
+			var update localrunner.UpdateAgentCardRequest
+			if err := json.NewDecoder(request.Body).Decode(&update); err != nil {
+				t.Fatal(err)
+			}
+			var card struct {
+				Version         string `json:"version"`
+				ProtocolVersion string `json:"protocolVersion"`
+			}
+			if err := json.Unmarshal(update.AgentCard, &card); err != nil || card.Version != localRunnerTestEchoAgentVersion || card.ProtocolVersion != "0.3.0" {
+				t.Fatalf("updated Agent Card version = %#v err=%v", card, err)
+			}
+			return localRunnerStatusTestResponse(t, request, localrunner.RunnerStatusData{
+				RunnerID: stored.RunnerID, EndpointID: stored.EndpointID,
+				LocalAgentID: stored.LocalAgentID, DisplayName: stored.DisplayName,
+				Status: localrunner.RunnerStatusActive, AgentCardURL: "https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-existing/.well-known/agent-card.json",
+				AgentCardSHA256: currentDigest,
+			}), nil
+		default:
+			return nil, fmt.Errorf("unexpected control method %s", request.Method)
+		}
+	})
+	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+		ConfigDir: t.TempDir(), ControlHTTPClient: controlClient,
+		OAuth: staticLocalRunnerOAuth("oauth-token"),
+		Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
+		OwnerIdentity: testLocalRunnerOwnerIdentity,
+	})
+	if err := runtime.configs.Save(stored); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
+		AgentRef: localRunnerTestEchoRef, LocalAgentID: stored.LocalAgentID, DisplayName: stored.DisplayName,
+		OpenAPIBase: stored.OpenAPIBase, MaxConcurrent: 3, Streaming: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Close()
+	if createCalls != 0 || getCalls != 1 || updateCalls != 1 {
+		t.Fatalf("control calls = create %d get %d update %d, want 0/1/1", createCalls, getCalls, updateCalls)
+	}
+	if result.ConnectOptions.RunnerID != stored.RunnerID || result.ConnectOptions.EndpointID != stored.EndpointID || result.ConnectOptions.AgentCardSHA256 != currentDigest {
+		t.Fatalf("upgraded connect options = %#v", result.ConnectOptions)
+	}
+	loaded, err := runtime.configs.Load(stored.RunnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.AgentCardSHA256 != currentDigest {
+		t.Fatalf("stored upgraded digest = %q, want %q", loaded.AgentCardSHA256, currentDigest)
+	}
+}
+
+func TestProductionLocalRunnerStartLocalRejectsAgentCardUpdateResponseDrift(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*localrunner.RunnerStatusData)
+	}{
+		{name: "endpoint identity", mutate: func(value *localrunner.RunnerStatusData) { value.EndpointID = "endpoint-other" }},
+		{name: "status", mutate: func(value *localrunner.RunnerStatusData) { value.Status = localrunner.RunnerStatusRevoked }},
+		{name: "digest", mutate: func(value *localrunner.RunnerStatusData) { value.AgentCardSHA256 = "sha256:" + strings.Repeat("c", 64) }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stored, currentDigest := newLocalRunnerStoredCardUpgradeFixture(t)
+			updateCalls := 0
+			controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+				if request.Method == http.MethodPost {
+					return nil, errors.New("create must not be called for stored Card upgrade")
+				}
+				if request.Method == http.MethodGet {
+					return localRunnerStatusTestResponse(t, request, localrunner.RunnerStatusData{
+						RunnerID: stored.RunnerID, EndpointID: stored.EndpointID,
+						LocalAgentID: stored.LocalAgentID, DisplayName: stored.DisplayName,
+						Status: localrunner.RunnerStatusActive, AgentCardURL: "https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-existing/.well-known/agent-card.json",
+						AgentCardSHA256: stored.AgentCardSHA256,
+					}), nil
+				}
+				updateCalls++
+				updated := localrunner.RunnerStatusData{
+					RunnerID: stored.RunnerID, EndpointID: stored.EndpointID,
+					LocalAgentID: stored.LocalAgentID, DisplayName: stored.DisplayName,
+					Status: localrunner.RunnerStatusActive, AgentCardURL: "https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-existing/.well-known/agent-card.json",
+					AgentCardSHA256: currentDigest,
+				}
+				testCase.mutate(&updated)
+				return localRunnerStatusTestResponse(t, request, updated), nil
+			})
+			runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+				ConfigDir: t.TempDir(), ControlHTTPClient: controlClient,
+				OAuth: staticLocalRunnerOAuth("oauth-token"),
+				Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
+				OwnerIdentity: testLocalRunnerOwnerIdentity,
+			})
+			if err := runtime.configs.Save(stored); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
+				AgentRef: localRunnerTestEchoRef, LocalAgentID: stored.LocalAgentID, DisplayName: stored.DisplayName,
+				OpenAPIBase: stored.OpenAPIBase, MaxConcurrent: 1, Streaming: true,
+			})
+			if !errors.Is(err, ErrLocalRunnerRuntimeInvalid) {
+				t.Fatalf("StartLocal() error = %v, want ErrLocalRunnerRuntimeInvalid", err)
+			}
+			if updateCalls != 1 {
+				t.Fatalf("UpdateAgentCard calls = %d, want 1", updateCalls)
+			}
+			loaded, loadErr := runtime.configs.Load(stored.RunnerID)
+			if loadErr != nil || loaded.AgentCardSHA256 != stored.AgentCardSHA256 {
+				t.Fatalf("stored digest after rejected update = %q error=%v, want %q", loaded.AgentCardSHA256, loadErr, stored.AgentCardSHA256)
+			}
+		})
+	}
+}
+
 func TestProductionLocalRunnerStartLocalRejectsStoredBindingDriftWithoutCreate(t *testing.T) {
 	var localAgent *httptest.Server
 	localAgent = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -299,15 +438,16 @@ func TestProductionLocalRunnerStartLocalRejectsStoredBindingDriftWithoutCreate(t
 		OpenAPIBase: "https://pre-deap-open-api.dingtalk.com", AgentCardSHA256: "sha256:" + snapshot.SHA256,
 	}
 	for _, testCase := range []struct {
-		name             string
-		mutateConfig     func(*localrunner.StoredRunnerConfig)
-		openAPIBase      string
-		viewLocalAgentID string
+		name                    string
+		mutateConfig            func(*localrunner.StoredRunnerConfig)
+		openAPIBase             string
+		viewLocalAgentID        string
+		viewAgentCardSHA256     string
 	}{
 		{name: "server local agent identity", viewLocalAgentID: "other-agent"},
 		{name: "target origin", mutateConfig: func(value *localrunner.StoredRunnerConfig) { value.LoopbackBaseURL = "http://127.0.0.1:1" }},
 		{name: "agent card location", mutateConfig: func(value *localrunner.StoredRunnerConfig) { value.AgentCardURL = localAgent.URL + "/other-card" }},
-		{name: "agent card hash", mutateConfig: func(value *localrunner.StoredRunnerConfig) { value.AgentCardSHA256 = "sha256:" + strings.Repeat("b", 64) }},
+		{name: "remote concurrent card hash", viewAgentCardSHA256: "sha256:" + strings.Repeat("b", 64)},
 		{name: "OpenAPI base", openAPIBase: "https://other-open-api.example.test"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -324,12 +464,21 @@ func TestProductionLocalRunnerStartLocalRejectsStoredBindingDriftWithoutCreate(t
 				openAPIBase = testCase.openAPIBase
 			}
 			createCalls := 0
+			updateCalls := 0
 			controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 				if request.Method == http.MethodPost {
 					createCalls++
 					return nil, errors.New("create must not be called for stored binding drift")
 				}
-				body := `{"success":true,"data":{"runnerId":"runner-existing","endpointId":"endpoint-existing","localAgentId":"` + viewLocalAgentID + `","displayName":"Stable agent","status":"ACTIVE","agentCardUrl":"https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-existing/.well-known/agent-card.json","agentCardSha256":"` + stored.AgentCardSHA256 + `","connected":false,"lastHeartbeatAtEpochSecond":null}}`
+				if request.Method == http.MethodPut {
+					updateCalls++
+					return nil, errors.New("update must not be called for stored binding drift")
+				}
+				viewAgentCardSHA256 := stored.AgentCardSHA256
+				if testCase.viewAgentCardSHA256 != "" {
+					viewAgentCardSHA256 = testCase.viewAgentCardSHA256
+				}
+				body := `{"success":true,"data":{"runnerId":"runner-existing","endpointId":"endpoint-existing","localAgentId":"` + viewLocalAgentID + `","displayName":"Stable agent","status":"ACTIVE","agentCardUrl":"https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-existing/.well-known/agent-card.json","agentCardSha256":"` + viewAgentCardSHA256 + `","connected":false,"lastHeartbeatAtEpochSecond":null}}`
 				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 			})
 			runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
@@ -348,8 +497,8 @@ func TestProductionLocalRunnerStartLocalRejectsStoredBindingDriftWithoutCreate(t
 			if !errors.Is(err, ErrLocalRunnerRuntimeInvalid) {
 				t.Fatalf("StartLocal() error = %v, want ErrLocalRunnerRuntimeInvalid", err)
 			}
-			if createCalls != 0 {
-				t.Fatalf("CreateRunner calls = %d, want 0", createCalls)
+			if createCalls != 0 || updateCalls != 0 {
+				t.Fatalf("control mutation calls = create %d update %d, want 0/0", createCalls, updateCalls)
 			}
 		})
 	}
@@ -738,6 +887,61 @@ func readLocalRunnerTestCard(t *testing.T, rawURL string) json.RawMessage {
 		t.Fatalf("read Agent Card status=%d error=%v", response.StatusCode, err)
 	}
 	return json.RawMessage(raw)
+}
+
+func newLocalRunnerStoredCardUpgradeFixture(t *testing.T) (localrunner.StoredRunnerConfig, string) {
+	t.Helper()
+	agent, err := startLocalRunnerTestEchoAgent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cardURL := agent.CardURL()
+	rpcURL := agent.RPCURL()
+	currentCard := readLocalRunnerTestCard(t, cardURL)
+	var legacyCard map[string]json.RawMessage
+	if err := json.Unmarshal(currentCard, &legacyCard); err != nil {
+		t.Fatal(err)
+	}
+	delete(legacyCard, "version")
+	legacyRaw, err := json.Marshal(legacyCard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacySnapshot, err := localrunner.RewriteAgentCard(legacyRaw, "endpoint-existing", "https://pre-deap.dingtalk.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentSnapshot, err := localrunner.RewriteAgentCard(currentCard, "endpoint-existing", "https://pre-deap.dingtalk.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacySnapshot.SHA256 == currentSnapshot.SHA256 {
+		t.Fatal("top-level Agent Card version did not change the public snapshot digest")
+	}
+	if err := agent.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return localrunner.StoredRunnerConfig{
+		RunnerID: "runner-existing", EndpointID: "endpoint-existing",
+		LocalAgentID: "test-echo-20260820", DisplayName: "DWS Test Echo 20260820",
+		AgentCardURL: cardURL, LoopbackBaseURL: strings.TrimSuffix(rpcURL, localRunnerTestEchoRPCPath),
+		OpenAPIBase: "https://pre-deap-open-api.dingtalk.com", AgentCardSHA256: "sha256:" + legacySnapshot.SHA256,
+	}, "sha256:" + currentSnapshot.SHA256
+}
+
+func localRunnerStatusTestResponse(t *testing.T, request *http.Request, data localrunner.RunnerStatusData) *http.Response {
+	t.Helper()
+	raw, err := json.Marshal(struct {
+		Success bool                         `json:"success"`
+		Data    localrunner.RunnerStatusData `json:"data"`
+	}{Success: true, Data: data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK, Header: make(http.Header),
+		Body: io.NopCloser(bytes.NewReader(raw)), Request: request,
+	}
 }
 
 func localRunnerRequestStartAttributes() (map[string]json.RawMessage, error) {

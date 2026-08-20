@@ -794,12 +794,17 @@ exists, it creates the Runner/Endpoint through the existing control client,
 transfers the one-time endpoint bearer directly to the system keyring, and
 saves the same non-sensitive config used by `connect`. If a binding exists, it
 does not call CreateRunner: it GETs the stored Runner, requires exact
-runner/endpoint/local-agent/display-name/hash identity, recomputes the public
-Card hash from the current local Card, and requires the requested Card URL,
-loopback origin, and OpenAPI base to match the stored config. Any invalid,
-duplicate, or mismatched candidate fails closed instead of creating a second
-binding. The store uses a validated directory scan rather than a second
-persistent index, avoiding index/config divergence.
+runner/endpoint/local-agent/display-name identity and requires the remote Card
+hash to remain equal to the old stored hash before recomputing the public Card
+from the current local snapshot. An unchanged digest reuses the binding. A
+changed local digest calls the existing agent-card update on that same Runner,
+then requires the response to preserve every identity, public Card URL,
+`ACTIVE` status, and the exact new `sha256:<64 lowercase hex>` digest before
+atomically replacing only the stored digest. Any pre-update remote digest
+drift, invalid response, duplicate candidate, Card URL/origin mismatch, or
+OpenAPI-base mismatch fails closed instead of overwriting an unknown change or
+creating a second binding. The store uses a validated directory scan rather
+than a second persistent index, avoiding index/config divergence.
 
 Both paths return only a sanitized A2A summary and private in-process connect
 options. The command JSON-encodes that summary before invoking the existing
@@ -850,8 +855,9 @@ registration uses `net.Listen("tcp", "127.0.0.1:0")`; recovery of a stored
 `test-echo` binding reopens its exact validated loopback origin so the persisted
 Card URL and proxy target remain unchanged. It exposes only:
 
-- `GET /.well-known/agent-card.json`, returning a dynamic v0.3.0 Card whose
-  callable JSON-RPC URL is the server's exact loopback `/rpc` URL;
+- `GET /.well-known/agent-card.json`, returning a dynamic Card with fixed agent
+  `version="1.0.0"` and distinct A2A `protocolVersion="0.3.0"`, whose callable
+  JSON-RPC URL is the server's exact loopback `/rpc` URL;
 - `POST /rpc` with `Content-Type: application/json`, accepting only JSON-RPC
   2.0 `message/send` and `message/stream` requests with text message parts;
 - a direct A2A Message echo response for `message/send`, and exactly one
@@ -921,3 +927,4 @@ Implementation and verification steps:
 | 2026-08-20 | Superseded the control-header portion of the Studio migration: LocalRunner control calls now send only the DWS user OAuth bearer and omit optional `X-Dingtalk-Corp-Id` / `X-Dingtalk-User-Id` caller cross-check headers. | Pre-release traces proved bearer verification, trusted identity resolution, employee lookup, and corp conversion succeeded while both create attempts failed `dingtalk_user_header_mismatch`; CLI `TokenData.UserID` and Studio's trusted numeric `uid` have different semantics, so the client must not send an optional exact-match claim it cannot prove. |
 | 2026-08-20 | Made the CLI actively send connection-scoped `heartbeat` frames every `heartbeatIntervalMs=15000` after `hello_ack`, accept sequenced `heartbeat_ack`, and stop the ticker with the WSS attempt lifecycle. | Pre-release evidence showed the server renews its 45-second lease only when it receives a client heartbeat; the prior passive-only client let the lease expire, made public RPC report offline, and then reconnected despite an otherwise healthy socket. |
 | 2026-08-20 | Made `start-local` recover one unique valid `StoredRunnerConfig` by `localAgentId`, validate it against the current Card and authenticated Runner view, and skip CreateRunner; stored `test-echo` bindings reopen their original loopback origin. | Re-running the one-command UX previously attempted a duplicate registration and received `binding already exists`; idempotent recovery must reuse the existing one-to-one binding while failing closed on identity, target, Card, hash, origin, or control-base drift. |
+| 2026-08-20 | Added the required top-level `version="1.0.0"` to the built-in `test-echo` Card while keeping A2A `protocolVersion="0.3.0"`, and allowed guarded in-place Card updates for an otherwise unchanged stored binding. | The official 0.3.0 Agent Card parser rejects a Card without the distinct agent version; an existing one-command binding must publish the corrected snapshot without duplicate registration, but only after the remote still matches the old stored digest and only when the update response proves the same identity, endpoint, URL, ACTIVE state, and exact new digest. |

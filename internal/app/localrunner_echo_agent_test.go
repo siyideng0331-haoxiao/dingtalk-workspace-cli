@@ -37,6 +37,7 @@ func TestLocalRunnerTestEchoAgentServesCardSendAndStream(t *testing.T) {
 	}
 	var card struct {
 		Name            string `json:"name"`
+		Version         string `json:"version"`
 		ProtocolVersion string `json:"protocolVersion"`
 		URL             string `json:"url"`
 		Capabilities    struct {
@@ -46,7 +47,7 @@ func TestLocalRunnerTestEchoAgentServesCardSendAndStream(t *testing.T) {
 	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "application/json" || json.Unmarshal(cardBody, &card) != nil {
 		t.Fatalf("Card response status=%d contentType=%q body=%s", response.StatusCode, response.Header.Get("Content-Type"), cardBody)
 	}
-	if card.Name != localRunnerTestEchoDisplayName || card.ProtocolVersion != "0.3.0" || card.URL != agent.RPCURL() || !card.Capabilities.Streaming {
+	if card.Name != localRunnerTestEchoDisplayName || card.Version != "1.0.0" || card.ProtocolVersion != "0.3.0" || card.URL != agent.RPCURL() || !card.Capabilities.Streaming {
 		t.Fatalf("built-in Card = %#v", card)
 	}
 

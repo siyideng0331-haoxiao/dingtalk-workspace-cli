@@ -237,8 +237,25 @@ func (r *productionLocalRunnerCommandRuntime) recoverStoredLocalAgentCard(ctx co
 		return nil, ErrLocalRunnerRuntimeInvalid
 	}
 	snapshot, err := localrunner.RewriteAgentCard(rawCard, stored.EndpointID, publicBaseURL)
-	if err != nil || "sha256:"+snapshot.SHA256 != stored.AgentCardSHA256 {
+	if err != nil {
 		return nil, ErrLocalRunnerRuntimeInvalid
+	}
+	currentDigest := "sha256:" + snapshot.SHA256
+	if currentDigest != stored.AgentCardSHA256 {
+		updated, err := control.UpdateAgentCard(ctx, stored.RunnerID, localrunner.UpdateAgentCardRequest{AgentCard: rawCard})
+		if err != nil {
+			return nil, err
+		}
+		if updated.RunnerID != stored.RunnerID || updated.EndpointID != stored.EndpointID || updated.LocalAgentID != stored.LocalAgentID || updated.DisplayName != stored.DisplayName || updated.Status != localrunner.RunnerStatusActive || updated.AgentCardURL != view.AgentCardURL || updated.AgentCardSHA256 != currentDigest {
+			return nil, ErrLocalRunnerRuntimeInvalid
+		}
+		nextStored := *stored
+		nextStored.AgentCardSHA256 = currentDigest
+		if err := r.configs.Save(nextStored); err != nil {
+			return nil, err
+		}
+		*stored = nextStored
+		view = updated
 	}
 	return &localrunner.CreatedRunner{
 		RunnerID: stored.RunnerID, EndpointID: stored.EndpointID,

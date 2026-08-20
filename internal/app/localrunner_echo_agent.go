@@ -17,6 +17,7 @@ import (
 const (
 	localRunnerTestEchoRef          = "test-echo"
 	localRunnerTestEchoDisplayName  = "DWS Test Echo"
+	localRunnerTestEchoAgentVersion = "1.0.0"
 	localRunnerTestEchoCardPath     = "/.well-known/agent-card.json"
 	localRunnerTestEchoRPCPath      = "/rpc"
 	localRunnerTestEchoMaxBodyBytes = 64 << 10
@@ -60,6 +61,7 @@ func startLocalRunnerTestEchoAgentOn(listenAddress string) (*localRunnerBuiltInA
 	card, err := json.Marshal(struct {
 		Name               string                   `json:"name"`
 		Description        string                   `json:"description"`
+		Version            string                   `json:"version"`
 		URL                string                   `json:"url"`
 		ProtocolVersion    string                   `json:"protocolVersion"`
 		Capabilities       map[string]bool          `json:"capabilities"`
@@ -68,7 +70,7 @@ func startLocalRunnerTestEchoAgentOn(listenAddress string) (*localRunnerBuiltInA
 		Skills             []map[string]interface{} `json:"skills"`
 	}{
 		Name: localRunnerTestEchoDisplayName, Description: "In-process LocalRunner A2A acceptance echo agent",
-		URL: baseURL + localRunnerTestEchoRPCPath, ProtocolVersion: "0.3.0",
+		Version: localRunnerTestEchoAgentVersion, URL: baseURL + localRunnerTestEchoRPCPath, ProtocolVersion: "0.3.0",
 		Capabilities: map[string]bool{"streaming": true},
 		DefaultInputModes: []string{"text/plain"}, DefaultOutputModes: []string{"text/plain"},
 		Skills: []map[string]interface{}{{
