@@ -88,7 +88,7 @@ var paramAliasCompleteCommands = map[string][]string{
 	"chat message recall":                      {"chat", "message", "recall", "--conversation-id", "fixture-conversation", "--msg-id", "message-1", "--yes"},
 	"chat message reply":                       {"chat", "message", "reply", "--conversation-id", "fixture-conversation", "--ref-msg-id", "message-1", "--ref-sender", "D-sender", "--text", "hello fixture", "--yes"},
 	"chat message search-advanced":             {"chat", "message", "search-advanced", "--conversation-ids", "fixture-conversation", "--query", "fixture"},
-	"chat message send":                        {"chat", "message", "send", "--user", "D-recipient", "--text", "hello fixture", "--uuid", "param-alias-equivalence", "--yes"},
+	"chat message send":                        {"chat", "message", "send", "--user", "staff-123", "--text", "hello fixture", "--uuid", "param-alias-equivalence", "--yes"},
 	"chat message send-by-bot":                 {"chat", "message", "send-by-bot", "--robot-code", "robot-1", "--group", "fixture-conversation", "--title", "Fixture Alert", "--text", "@user-1 @user-2 fixture", "--at-user-ids", "user-1,user-2", "--yes"},
 	"chat message send-by-webhook":             {"chat", "message", "send-by-webhook", "--token", "fixture-token", "--title", "Fixture Alert", "--text", "fixture", "--at-users", "user-1,user-2", "--yes"},
 	"contact +dept-members":                    {"contact", "+dept-members", "--dept", "Fixture Dept"},

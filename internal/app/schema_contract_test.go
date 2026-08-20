@@ -408,8 +408,8 @@ func TestChatSchemaSeparatesSendAndReply(t *testing.T) {
 		t.Fatalf("send definition = %#v", send)
 	}
 	sendParameters := schemaContractMap(send["parameters"])
-	if got := schemaContractString(sendParameters["user"]["property"]); got != "receiverUid" {
-		t.Fatalf("send --user property = %q, want receiverUid", got)
+	if got := schemaContractString(sendParameters["user"]["property"]); got != "" {
+		t.Fatalf("send --user property = %q, want local contact-resolution input", got)
 	}
 	if got := schemaContractString(sendParameters["open-dingtalk-id"]["property"]); got != "receiverOpenDingTalkId" {
 		t.Fatalf("send --open-dingtalk-id property = %q, want receiverOpenDingTalkId", got)

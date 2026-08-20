@@ -33,6 +33,8 @@ func (c *chatFilePathCaller) CallTool(_ context.Context, server, tool string, ar
 	c.calls = append(c.calls, chatFilePathCall{server: server, tool: tool, args: copied})
 
 	switch tool {
+	case "get_user_info_by_user_ids":
+		return textToolResult(`{"result":[{"userId":"staff-123","openDingTalkId":"D-staff-123"}]}`), nil
 	case "init_conversation_file_upload":
 		return textToolResult(`{"resourceUrl":"https://upload.example/file","uploadKey":"upload-key","headers":{"x-upload":"yes"}}`), nil
 	case "commit_conversation_file_upload":
@@ -239,7 +241,7 @@ func TestChatMessageSendFilePathUsesOpenDingTalkIDTarget(t *testing.T) {
 	}
 }
 
-func TestChatMessageSendFilePathUsesUserIDTargetWithoutResolution(t *testing.T) {
+func TestChatMessageSendFilePathResolvesUserIDTarget(t *testing.T) {
 	previousDeps, previousPut, previousArgs := deps, httpPutFile, os.Args
 	t.Cleanup(func() {
 		deps = previousDeps
@@ -256,7 +258,7 @@ func TestChatMessageSendFilePathUsesUserIDTargetWithoutResolution(t *testing.T) 
 	caller := &chatFilePathCaller{}
 	commandArgs := []string{
 		"message", "send",
-		"--user=6871365508",
+		"--user=staff-123",
 		"--msg-type=file",
 		"--file-path=" + filePath,
 	}
@@ -269,23 +271,26 @@ func TestChatMessageSendFilePathUsesUserIDTargetWithoutResolution(t *testing.T) 
 	if err := runChatCoverageCommand(t, caller, commandArgs...); err != nil {
 		t.Fatalf("chat message send --user --file-path: %v", err)
 	}
-	if len(caller.calls) != 3 {
-		t.Fatalf("tool calls = %#v, want init, commit, send", caller.calls)
+	if len(caller.calls) != 4 {
+		t.Fatalf("tool calls = %#v, want resolve, init, commit, send", caller.calls)
 	}
-	for _, index := range []int{0, 1} {
-		if caller.calls[index].args["userId"] != "6871365508" {
+	if caller.calls[0].server != "contact" || caller.calls[0].tool != "get_user_info_by_user_ids" {
+		t.Fatalf("first call = %#v, want contact resolution", caller.calls[0])
+	}
+	for _, index := range []int{1, 2} {
+		if caller.calls[index].args["openDingTalkId"] != "D-staff-123" {
 			t.Fatalf("upload target call %d = %#v", index, caller.calls[index])
 		}
-		if _, leaked := caller.calls[index].args["openDingTalkId"]; leaked {
-			t.Fatalf("upload target call %d changed identifier domain: %#v", index, caller.calls[index])
+		if _, leaked := caller.calls[index].args["userId"]; leaked {
+			t.Fatalf("upload target call %d leaked userId: %#v", index, caller.calls[index])
 		}
 	}
-	send := caller.calls[2]
-	if send.server != "chat" || send.tool != "send_personal_message" || send.args["receiverUid"] != "6871365508" {
+	send := caller.calls[3]
+	if send.server != "chat" || send.tool != "send_personal_message" || send.args["receiverOpenDingTalkId"] != "D-staff-123" {
 		t.Fatalf("send user target call = %#v", send)
 	}
-	if _, leaked := send.args["receiverOpenDingTalkId"]; leaked {
-		t.Fatalf("send user target changed identifier domain: %#v", send.args)
+	if _, leaked := send.args["receiverUid"]; leaked {
+		t.Fatalf("send user target leaked receiverUid: %#v", send.args)
 	}
 }
 

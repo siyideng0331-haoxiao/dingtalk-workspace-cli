@@ -147,7 +147,7 @@ func TestRootKeepsMainBranchChatCompatibilityCommands(t *testing.T) {
 	mustFindCommand(t, root, "conference", "meeting", "reserve")
 }
 
-func TestChatMessageSendHelpDocumentsStableUserIDAndRobotUID(t *testing.T) {
+func TestChatMessageSendHelpDocumentsContactResolvedUserID(t *testing.T) {
 	root := NewRootCommand()
 	var output bytes.Buffer
 	root.SetOut(&output)
@@ -157,7 +157,7 @@ func TestChatMessageSendHelpDocumentsStableUserIDAndRobotUID(t *testing.T) {
 		t.Fatalf("chat message send --help: %v\n%s", err, output.String())
 	}
 	help := output.String()
-	for _, want := range []string{"--user", "稳定 userId/uid", "detail.robotUid", "--open-dingtalk-id"} {
+	for _, want := range []string{"--user", "staffId/userId", "通讯录", "不接受 robotUid", "--open-dingtalk-id"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("chat message send help missing %q:\n%s", want, help)
 		}

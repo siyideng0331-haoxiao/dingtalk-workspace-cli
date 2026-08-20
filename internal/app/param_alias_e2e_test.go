@@ -30,7 +30,8 @@ type paramAliasToolCall struct {
 }
 
 type paramAliasCaptureCaller struct {
-	calls []paramAliasToolCall
+	calls  []paramAliasToolCall
+	dryRun bool
 }
 
 func (c *paramAliasCaptureCaller) CallTool(_ context.Context, server, tool string, args map[string]any) (*edition.ToolResult, error) {
@@ -60,6 +61,8 @@ func (c *paramAliasCaptureCaller) paramAliasResponseForTool(tool string) string 
 		return `{"result":{"items":[{"openConversationId":"fixture-conversation","title":"Fixture Group"}]}}`
 	case "search_contact_by_key_word":
 		return `{"result":[{"name":"Fixture User","userId":"fixture-user","openDingTalkId":"D-fixture-user"}]}`
+	case "get_user_info_by_user_ids":
+		return `{"result":[{"name":"Fixture User","userId":"staff-123","openDingTalkId":"D-recipient"}]}`
 	case "list_doc_versions":
 		return `{"result":{"items":[{"version":3}]}}`
 	case "revert_doc_version":
@@ -85,7 +88,7 @@ func (c *paramAliasCaptureCaller) paramAliasResponseForTool(tool string) string 
 }
 
 func (*paramAliasCaptureCaller) Format() string { return "json" }
-func (*paramAliasCaptureCaller) DryRun() bool   { return false }
+func (c *paramAliasCaptureCaller) DryRun() bool { return c.dryRun }
 func (*paramAliasCaptureCaller) Fields() string { return "" }
 func (*paramAliasCaptureCaller) JQ() string     { return "" }
 
@@ -158,6 +161,12 @@ func executeParamAliasDryRunE2E(t *testing.T, args ...string) (*pipeline.Context
 	}
 	root := NewRootCommand()
 	rootNewCommandRunnerWithFlags = originalRunnerFactory
+	for index := 0; index+2 < len(args); index++ {
+		if args[index] == "chat" && args[index+1] == "message" && args[index+2] == "send" {
+			helpers.InitDeps(&paramAliasCaptureCaller{dryRun: true})
+			break
+		}
+	}
 	root.SetOut(io.Discard)
 	root.SetErr(io.Discard)
 	root.SetArgs(args)
@@ -322,7 +331,7 @@ func TestCrossPlatformCoverageParamAliasWriteCommandFinalPayload(t *testing.T) {
 	caller := &paramAliasCaptureCaller{}
 	ctx, err := executeParamAliasE2E(t, caller,
 		"chat", "message", "send",
-		"--to-user", "6871365508",
+		"--to-user", "staff-123",
 		"--text", "hello alias",
 		"--uuid", "alias-e2e",
 	)
@@ -332,12 +341,15 @@ func TestCrossPlatformCoverageParamAliasWriteCommandFinalPayload(t *testing.T) {
 	if len(ctx.Corrections) != 1 || ctx.Corrections[0].Original != "--to-user" || ctx.Corrections[0].Corrected != "--user" {
 		t.Fatalf("chat corrections = %#v", ctx.Corrections)
 	}
-	if len(caller.calls) != 1 || caller.calls[0].tool != "send_personal_message" {
+	if len(caller.calls) != 2 || caller.calls[0].tool != "get_user_info_by_user_ids" || caller.calls[1].tool != "send_personal_message" {
 		t.Fatalf("chat calls = %#v", caller.calls)
 	}
-	payload := caller.calls[0].args
-	if payload["receiverUid"] != "6871365508" || payload["uuid"] != "alias-e2e" || payload["msgType"] != "markdown" {
+	payload := caller.calls[1].args
+	if payload["receiverOpenDingTalkId"] != "D-recipient" || payload["uuid"] != "alias-e2e" || payload["msgType"] != "markdown" {
 		t.Fatalf("chat payload identity fields = %#v", payload)
+	}
+	if _, leaked := payload["receiverUid"]; leaked {
+		t.Fatalf("chat payload leaked receiverUid: %#v", payload)
 	}
 	content, _ := payload["content"].(string)
 	if !strings.Contains(content, "hello alias") {
@@ -627,14 +639,14 @@ func TestCrossPlatformCoverageSelectedParamAliasesProduceCanonicalEquivalentDryR
 			tool: "send_personal_message",
 			canonicalArgs: []string{
 				"--dry-run", "chat", "message", "send",
-				"--user", "6871365508", "--text", "hello dry-run", "--uuid", "alias-dry-run",
+				"--user", "staff-123", "--text", "hello dry-run", "--uuid", "alias-dry-run",
 			},
 			aliasArgs: []string{
 				"--dry-run", "chat", "message", "send",
-				"--to-user", "6871365508", "--text", "hello dry-run", "--uuid", "alias-dry-run",
+				"--to-user", "staff-123", "--text", "hello dry-run", "--uuid", "alias-dry-run",
 			},
 			wantCorrections: 1,
-			wantArgKeys:     []string{"clawType", "content", "msgType", "receiverUid", "uuid"},
+			wantArgKeys:     []string{"clawType", "content", "msgType", "receiverOpenDingTalkId", "uuid"},
 		},
 		{
 			name: "mail write folder id concept alias",
