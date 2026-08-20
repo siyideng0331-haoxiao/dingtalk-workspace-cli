@@ -120,6 +120,24 @@ func (f *opencodeForwarder) forwardStream(ctx context.Context, convID, text stri
 }
 
 func (f *opencodeForwarder) forwardStreamWithAttachments(ctx context.Context, convID, text string, attachments []connectMediaAttachment, _ func(string)) (string, error) {
+	reply, err := f.forwardRawWithAttachments(ctx, convID, text, attachments)
+	if err != nil {
+		return "", err
+	}
+	if agentReplyIsError(reply) {
+		return agentBackendErrorReply(reply), nil
+	}
+	if strings.TrimSpace(reply) == "" {
+		return opencodeNoTextReply, nil
+	}
+	return brandReply(f.name(), reply), nil
+}
+
+func (f *opencodeForwarder) forwardRaw(ctx context.Context, convID, text string) (string, error) {
+	return f.forwardRawWithAttachments(ctx, convID, text, nil)
+}
+
+func (f *opencodeForwarder) forwardRawWithAttachments(ctx context.Context, convID, text string, attachments []connectMediaAttachment) (string, error) {
 	ctx, cancel := applyTimeout(ctx, f.timeout)
 	defer cancel()
 
@@ -127,15 +145,29 @@ func (f *opencodeForwarder) forwardStreamWithAttachments(ctx context.Context, co
 	if err != nil {
 		return "", err
 	}
-	reply, err := f.forwardWithClient(ctx, client, convID, text, attachments)
+	reply, err := f.forwardRawWithClient(ctx, client, convID, text, attachments)
 	if errors.Is(err, errOpencodeSessionMissing) && f.sessions != nil {
 		f.sessions.reset(convID)
-		reply, err = f.forwardWithClient(ctx, client, convID, text, attachments)
+		reply, err = f.forwardRawWithClient(ctx, client, convID, text, attachments)
 	}
 	return reply, err
 }
 
 func (f *opencodeForwarder) forwardWithClient(ctx context.Context, client *opencodeHTTPClient, convID, text string, attachments []connectMediaAttachment) (string, error) {
+	reply, err := f.forwardRawWithClient(ctx, client, convID, text, attachments)
+	if err != nil {
+		return "", err
+	}
+	if agentReplyIsError(reply) {
+		return agentBackendErrorReply(reply), nil
+	}
+	if strings.TrimSpace(reply) == "" {
+		return opencodeNoTextReply, nil
+	}
+	return brandReply(f.name(), reply), nil
+}
+
+func (f *opencodeForwarder) forwardRawWithClient(ctx context.Context, client *opencodeHTTPClient, convID, text string, attachments []connectMediaAttachment) (string, error) {
 	sessionID := ""
 	if f.sessions != nil {
 		sessionID = f.sessions.id(convID)
@@ -154,13 +186,7 @@ func (f *opencodeForwarder) forwardWithClient(ctx context.Context, client *openc
 	if err != nil {
 		return "", err
 	}
-	if agentReplyIsError(reply) {
-		return agentBackendErrorReply(reply), nil
-	}
-	if strings.TrimSpace(reply) == "" {
-		return opencodeNoTextReply, nil
-	}
-	return brandReply(f.name(), reply), nil
+	return reply, nil
 }
 
 func (f *opencodeForwarder) name() string { return "opencode" }
@@ -222,6 +248,7 @@ type opencodeServer struct {
 	cmd        *exec.Cmd
 	done       chan error
 	httpClient *http.Client
+	output     io.Writer
 }
 
 func newOpencodeServer(bin string, env []string, workDir string, yolo bool) *opencodeServer {
@@ -230,6 +257,7 @@ func newOpencodeServer(bin string, env []string, workDir string, yolo bool) *ope
 		env:     env,
 		workDir: workDir,
 		yolo:    yolo,
+		output:  os.Stderr,
 		// No client-level Timeout: a turn can legitimately run for minutes.
 		// f.timeout (from --agent-timeout / DWS_AGENT_TIMEOUT_MS, default 0 =
 		// no limit) governs via the per-request ctx when set.
@@ -263,8 +291,12 @@ func (s *opencodeServer) ensure(ctx context.Context) (*opencodeHTTPClient, error
 		cmd.Dir = s.workDir
 	}
 	cmd.Env = s.commandEnv(password)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	output := s.output
+	if output == nil {
+		output = os.Stderr
+	}
+	cmd.Stdout = output
+	cmd.Stderr = output
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("启动 opencode serve 失败：%w", err)
 	}
