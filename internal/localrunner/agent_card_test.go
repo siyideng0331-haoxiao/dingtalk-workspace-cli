@@ -37,7 +37,12 @@ func TestRewriteAgentCardValidatesLoopbackAndRemovesLocalURLs(t *testing.T) {
 	if err := json.Unmarshal(snapshot.JSON, &published); err != nil {
 		t.Fatal(err)
 	}
-	if published["authentication"] != nil || string(published["securitySchemes"]) != `{"localRunnerBearer":{"httpAuthSecurityScheme":{"scheme":"Bearer"}}}` || string(published["security"]) != `[{"localRunnerBearer":[]}]` {
+	var securitySchemes map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(published["securitySchemes"], &securitySchemes); err != nil {
+		t.Fatal(err)
+	}
+	bearer := securitySchemes["localRunnerBearer"]
+	if published["authentication"] != nil || len(securitySchemes) != 1 || len(bearer) != 2 || string(bearer["type"]) != `"http"` || string(bearer["scheme"]) != `"bearer"` || bearer["httpAuthSecurityScheme"] != nil || string(published["security"]) != `[{"localRunnerBearer":[]}]` {
 		t.Fatalf("published bearer declaration mismatch")
 	}
 	if bytes.Contains(snapshot.JSON, []byte("source-secret")) || bytes.Contains(snapshot.JSON, []byte("endpoint-secret")) {

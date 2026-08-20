@@ -711,7 +711,7 @@ the minimal DTO/client implementation, then run the focused package tests.
 - Every public snapshot replaces any source `authentication`,
   `securitySchemes`, and `security` declarations with standard A2A HTTP Bearer
   metadata exactly as
-  `securitySchemes.localRunnerBearer.httpAuthSecurityScheme.scheme="Bearer"`
+  `securitySchemes.localRunnerBearer={"type":"http","scheme":"bearer"}`
   and `security=[{"localRunnerBearer":[]}]`. This is a credential-free scheme
   declaration: it never embeds, derives, or hints at the one-time
   `endpointBearer` value.
@@ -928,3 +928,4 @@ Implementation and verification steps:
 | 2026-08-20 | Made the CLI actively send connection-scoped `heartbeat` frames every `heartbeatIntervalMs=15000` after `hello_ack`, accept sequenced `heartbeat_ack`, and stop the ticker with the WSS attempt lifecycle. | Pre-release evidence showed the server renews its 45-second lease only when it receives a client heartbeat; the prior passive-only client let the lease expire, made public RPC report offline, and then reconnected despite an otherwise healthy socket. |
 | 2026-08-20 | Made `start-local` recover one unique valid `StoredRunnerConfig` by `localAgentId`, validate it against the current Card and authenticated Runner view, and skip CreateRunner; stored `test-echo` bindings reopen their original loopback origin. | Re-running the one-command UX previously attempted a duplicate registration and received `binding already exists`; idempotent recovery must reuse the existing one-to-one binding while failing closed on identity, target, Card, hash, origin, or control-base drift. |
 | 2026-08-20 | Added the required top-level `version="1.0.0"` to the built-in `test-echo` Card while keeping A2A `protocolVersion="0.3.0"`, and allowed guarded in-place Card updates for an otherwise unchanged stored binding. | The official 0.3.0 Agent Card parser rejects a Card without the distinct agent version; an existing one-command binding must publish the corrected snapshot without duplicate registration, but only after the remote still matches the old stored digest and only when the update response proves the same identity, endpoint, URL, ACTIVE state, and exact new digest. |
+| 2026-08-21 | Replaced the nested `httpAuthSecurityScheme` public Card declaration with the flat discriminated `localRunnerBearer={"type":"http","scheme":"bearer"}` shape and synchronized CLI digest/resume expectations. | The messaging A2A SDK selects security-scheme subtypes through the top-level `type` discriminator and rejects the old nested shape; keeping the CLI rewrite on that shape would also recompute a different digest after OpenAPI publishes the corrected Card and would trigger an erroneous resume PUT. |

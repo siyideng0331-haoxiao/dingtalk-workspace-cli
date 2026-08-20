@@ -223,6 +223,7 @@ func TestProductionLocalRunnerStartLocalReusesStoredBuiltInBindingWithoutCreate(
 	if err != nil {
 		t.Fatal(err)
 	}
+	serverDigest := localRunnerFlatBearerDigest(t, snapshot.JSON)
 	if err := previousAgent.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -230,14 +231,19 @@ func TestProductionLocalRunnerStartLocalReusesStoredBuiltInBindingWithoutCreate(
 		RunnerID: "runner-existing", EndpointID: "endpoint-existing",
 		LocalAgentID: "test-echo-20260820", DisplayName: "DWS Test Echo 20260820",
 		AgentCardURL: previousCardURL, LoopbackBaseURL: strings.TrimSuffix(previousRPCURL, localRunnerTestEchoRPCPath),
-		OpenAPIBase: "https://pre-deap-open-api.dingtalk.com", AgentCardSHA256: "sha256:" + snapshot.SHA256,
+		OpenAPIBase: "https://pre-deap-open-api.dingtalk.com", AgentCardSHA256: serverDigest,
 	}
 	createCalls := 0
 	getCalls := 0
+	updateCalls := 0
 	controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
-		if request.Method == http.MethodPost {
+		switch request.Method {
+		case http.MethodPost:
 			createCalls++
 			return nil, errors.New("create must not be called for stored binding")
+		case http.MethodPut:
+			updateCalls++
+			return nil, errors.New("update must not be called when the server digest matches the current Card")
 		}
 		getCalls++
 		body := `{"success":true,"data":{"runnerId":"runner-existing","endpointId":"endpoint-existing","localAgentId":"test-echo-20260820","displayName":"DWS Test Echo 20260820","status":"ACTIVE","agentCardUrl":"https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-existing/.well-known/agent-card.json","agentCardSha256":"` + stored.AgentCardSHA256 + `","connected":false,"lastHeartbeatAtEpochSecond":null}}`
@@ -264,8 +270,8 @@ func TestProductionLocalRunnerStartLocalReusesStoredBuiltInBindingWithoutCreate(
 		t.Fatal(err)
 	}
 	defer result.Close()
-	if createCalls != 0 || getCalls != 1 {
-		t.Fatalf("control calls = create %d get %d, want 0/1", createCalls, getCalls)
+	if createCalls != 0 || getCalls != 1 || updateCalls != 0 {
+		t.Fatalf("control calls = create %d get %d update %d, want 0/1/0", createCalls, getCalls, updateCalls)
 	}
 	if result.Summary.LocalRunner.RunnerID != stored.RunnerID || result.Summary.LocalRunner.EndpointID != stored.EndpointID || result.ConnectOptions.RunnerID != stored.RunnerID || result.ConnectOptions.EndpointID != stored.EndpointID {
 		t.Fatalf("recovered binding = summary %#v connect %#v", result.Summary.LocalRunner, result.ConnectOptions)
@@ -927,6 +933,29 @@ func newLocalRunnerStoredCardUpgradeFixture(t *testing.T) (localrunner.StoredRun
 		AgentCardURL: cardURL, LoopbackBaseURL: strings.TrimSuffix(rpcURL, localRunnerTestEchoRPCPath),
 		OpenAPIBase: "https://pre-deap-open-api.dingtalk.com", AgentCardSHA256: "sha256:" + legacySnapshot.SHA256,
 	}, "sha256:" + currentSnapshot.SHA256
+}
+
+func localRunnerFlatBearerDigest(t *testing.T, published []byte) string {
+	t.Helper()
+	var card map[string]any
+	if err := json.Unmarshal(published, &card); err != nil {
+		t.Fatal(err)
+	}
+	card["securitySchemes"] = map[string]any{
+		"localRunnerBearer": map[string]any{"type": "http", "scheme": "bearer"},
+	}
+	var canonical bytes.Buffer
+	encoder := json.NewEncoder(&canonical)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(card); err != nil {
+		t.Fatal(err)
+	}
+	canonicalBytes := bytes.TrimSuffix(canonical.Bytes(), []byte{'\n'})
+	if !bytes.Equal(canonicalBytes, published) {
+		t.Fatalf("flat bearer canonical Card differs from RewriteAgentCard output:\nwant: %s\n got: %s", canonicalBytes, published)
+	}
+	digest := sha256.Sum256(canonicalBytes)
+	return fmt.Sprintf("sha256:%x", digest[:])
 }
 
 func localRunnerStatusTestResponse(t *testing.T, request *http.Request, data localrunner.RunnerStatusData) *http.Response {

@@ -61,9 +61,8 @@ func RewriteAgentCard(raw json.RawMessage, endpointID, publicBaseURL string) (*A
 	delete(card, "authentication")
 	card["securitySchemes"] = map[string]any{
 		"localRunnerBearer": map[string]any{
-			"httpAuthSecurityScheme": map[string]any{
-				"scheme": "Bearer",
-			},
+			"type":   "http",
+			"scheme": "bearer",
 		},
 	}
 	card["security"] = []any{
