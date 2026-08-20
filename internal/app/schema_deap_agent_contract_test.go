@@ -125,7 +125,7 @@ func TestDeapAgentSkillMCPLeavesReachFinalSchema(t *testing.T) {
 			map[string]string{"agent-uuid": "agentUuid", "snapshot": "snapshot"},
 		},
 		"deap.get_skill_detail": {
-			"deap skill query", "get_skill_detail", "available",
+			"deap skill query", "query_skill", "available",
 			map[string]string{"agent-uuid": "agentUuid", "skill-id": "skillId", "snapshot": "snapshot"},
 		},
 		"deap.create_mcp": {

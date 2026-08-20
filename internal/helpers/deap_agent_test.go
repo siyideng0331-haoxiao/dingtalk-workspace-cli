@@ -383,7 +383,7 @@ func TestDevDeapAgentSkillAndMCPCommandsRouteFrozenContracts(t *testing.T) {
 		confirmed bool
 	}{
 		{path: []string{"skill", "list"}, tool: "list_skills", flags: map[string]string{"agent-uuid": "agent-1"}, wantArgs: map[string]any{"agentUuid": "agent-1", "snapshot": "draft"}},
-		{path: []string{"skill", "query"}, tool: "get_skill_detail", flags: map[string]string{"agent-uuid": "agent-1", "skill-id": "skill-1", "snapshot": "published"}, wantArgs: map[string]any{"agentUuid": "agent-1", "skillId": "skill-1", "snapshot": "published"}},
+		{path: []string{"skill", "query"}, tool: "query_skill", flags: map[string]string{"agent-uuid": "agent-1", "skill-id": "skill-1", "snapshot": "published"}, wantArgs: map[string]any{"agentUuid": "agent-1", "skillId": "skill-1", "snapshot": "published"}},
 		{path: []string{"mcp", "create"}, tool: "create_mcp", flags: map[string]string{"config-file": "./mcp.json"}, wantArgs: map[string]any{"config": map[string]any{"name": "weather", "description": "查询天气", "detailIntro": "天气 MCP", "userQuestionTips": []any{"请输入城市"}, "configType": "JSON", "configString": `{"url":"https://mcp.example.test","token":"secret"}`, "envs": map[string]any{"API_TOKEN": "env-secret"}, "toolsDisabled": map[string]any{"search": false}}}, confirmed: true},
 		{path: []string{"mcp", "list"}, tool: "list_mcps", flags: map[string]string{}, wantArgs: map[string]any{"keywords": "", "page": 1, "pageSize": 20}},
 		{path: []string{"mcp", "query"}, tool: "query_mcp", flags: map[string]string{"mcp-id": "mcp-1"}, wantArgs: map[string]any{"mcpId": "mcp-1"}},

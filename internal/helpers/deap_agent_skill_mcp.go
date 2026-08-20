@@ -27,7 +27,8 @@ const (
 	deapAgentSkillCreateFileTool = "create_skill_from_file"
 	deapAgentSkillCreateURLTool  = "create_skill_by_url"
 	deapAgentSkillListTool       = "list_skills"
-	deapAgentSkillQueryTool      = "get_skill_detail"
+	deapAgentSkillQueryTool      = "query_skill"
+	deapAgentSkillQueryIdentity  = "get_skill_detail"
 	deapAgentMCPCreateTool       = "create_mcp"
 	deapAgentMCPListTool         = "list_mcps"
 	deapAgentMCPQueryTool        = "query_mcp"
@@ -443,7 +444,7 @@ func newDeapAgentSkillQueryCommand() *cobra.Command {
 		},
 		Safety: contract.SafetySpec{Effect: "read", Risk: "low", Confirmation: "not_required", Idempotency: "idempotent"},
 		Contract: LeafContract{
-			Identity:    contract.ToolIdentitySpec{ProductID: deapProductID, Name: deapAgentSkillQueryTool, CanonicalPath: "deap.get_skill_detail", CLIPath: "deap skill query", PrimaryCLIPath: "deap skill query", Group: "skill"},
+			Identity:    contract.ToolIdentitySpec{ProductID: deapProductID, Name: deapAgentSkillQueryIdentity, CanonicalPath: "deap.get_skill_detail", CLIPath: "deap skill query", PrimaryCLIPath: "deap skill query", Group: "skill"},
 			Description: "按 skillId 查询独立 Skill 资源详情和非敏感配置。",
 			DryRun:      deapAgentDryRun, Interface: deapAgentMCPInterface(deapAgentSkillQueryTool),
 			Selection: contract.SelectionSpec{AgentSummary: "查询目标数字员工 tenant 下的一个 Skill", UseWhen: []string{"已知 agentUuid 和 skillId，需要核对解析信息或配置时"}, AvoidWhen: []string{"需要浏览全部 Skill 时使用 skill list"}, Examples: []string{"dws deap skill query --agent-uuid <agentUuid> --skill-id <skillId> --format json"}},
