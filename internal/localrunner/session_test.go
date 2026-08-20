@@ -74,6 +74,104 @@ func TestTunnelSessionSendsHelloAcceptsAckAndAnswersHeartbeat(t *testing.T) {
 	}
 }
 
+func TestTunnelSessionActivelyHeartbeatsAndAcceptsAckWithoutChangingRequestSequences(t *testing.T) {
+	codec := NewTunnelCodec(DefaultMaxFrameBytes)
+	ack := validHelloAck()
+	ack.Attributes["heartbeatIntervalMs"] = json.RawMessage(`5`)
+	socket := newBlockingTunnelSocket()
+	socket.Queue(encodeSocketMessage(t, codec, ack))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	session := NewTunnelSession(testIdentity(), &heartbeatTestState{}, &staticSocketDialer{socket: socket}, codec)
+	session.now = func() time.Time { return time.Unix(100, 0) }
+	data := validOpenConnectionData(t)
+	go func() {
+		done <- session.RunAttempt(ctx, *data, HelloConfig{AgentCardSHA256: "sha", MaxConcurrent: 2}, &sequenceReplyHandler{})
+	}()
+
+	heartbeats, ok := waitForWrittenFrames(socket, codec, FrameHeartbeat, 2, 250*time.Millisecond)
+	if !ok {
+		cancel()
+		<-done
+		t.Fatal("session did not send heartbeats at the hello_ack interval")
+	}
+	if heartbeats[0].Sequence != 1 || heartbeats[1].Sequence != 2 {
+		cancel()
+		<-done
+		t.Fatalf("heartbeat sequences = %d,%d, want 1,2", heartbeats[0].Sequence, heartbeats[1].Sequence)
+	}
+
+	heartbeatAck := validFrame(FrameHeartbeatAck)
+	heartbeatAck.Sequence = 1
+	socket.Queue(encodeSocketMessage(t, codec, heartbeatAck))
+	for _, requestID := range []string{"request-1", "request-2"} {
+		request := validFrame(FrameRequestStart)
+		request.RequestID = requestID
+		request.Sequence = 0
+		socket.Queue(encodeSocketMessage(t, codec, request))
+	}
+	responses, ok := waitForWrittenFrames(socket, codec, FrameResponseStart, 2, 250*time.Millisecond)
+	if !ok {
+		cancel()
+		<-done
+		t.Fatal("heartbeat acknowledgement prevented concurrent request responses")
+	}
+	responseSequences := map[string]int64{}
+	for _, response := range responses {
+		responseSequences[response.RequestID] = response.Sequence
+	}
+	if responseSequences["request-1"] != 0 || responseSequences["request-2"] != 0 {
+		cancel()
+		<-done
+		t.Fatalf("response sequences = %#v, want independent zero starts", responseSequences)
+	}
+
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("session error = %v, want context cancellation", err)
+	}
+	writesAtStop := len(socket.Writes())
+	time.Sleep(20 * time.Millisecond)
+	if len(socket.Writes()) != writesAtStop {
+		t.Fatal("heartbeat ticker continued after context cancellation")
+	}
+}
+
+func TestTunnelSessionStopsActiveHeartbeatAfterDisconnect(t *testing.T) {
+	codec := NewTunnelCodec(DefaultMaxFrameBytes)
+	ack := validHelloAck()
+	ack.Attributes["heartbeatIntervalMs"] = json.RawMessage(`5`)
+	socket := newBlockingTunnelSocket()
+	socket.Queue(encodeSocketMessage(t, codec, ack))
+	done := make(chan error, 1)
+	session := NewTunnelSession(testIdentity(), &heartbeatTestState{}, &staticSocketDialer{socket: socket}, codec)
+	session.now = func() time.Time { return time.Unix(100, 0) }
+	data := validOpenConnectionData(t)
+	go func() {
+		done <- session.RunAttempt(context.Background(), *data, HelloConfig{AgentCardSHA256: "sha", MaxConcurrent: 1}, &recordingFrameHandler{})
+	}()
+
+	if _, ok := waitForWrittenFrames(socket, codec, FrameHeartbeat, 1, 250*time.Millisecond); !ok {
+		_ = socket.Close()
+		<-done
+		t.Fatal("session did not start active heartbeat")
+	}
+	_ = socket.Close()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrTunnelDisconnected) {
+			t.Fatalf("session error = %v, want disconnect", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("session did not return after disconnect")
+	}
+	writesAtStop := len(socket.Writes())
+	time.Sleep(20 * time.Millisecond)
+	if len(socket.Writes()) != writesAtStop {
+		t.Fatal("heartbeat ticker continued after disconnect")
+	}
+}
+
 func TestTunnelSessionRejectsDirectionOrSequenceViolation(t *testing.T) {
 	codec := NewTunnelCodec(DefaultMaxFrameBytes)
 	for name, invalid := range map[string]TunnelFrame{
@@ -208,6 +306,89 @@ type fakeTunnelSocket struct {
 	reads  []socketMessage
 	writes []socketMessage
 	closed bool
+}
+
+type blockingTunnelSocket struct {
+	mu        sync.Mutex
+	reads     chan socketMessage
+	writes    []socketMessage
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func newBlockingTunnelSocket() *blockingTunnelSocket {
+	return &blockingTunnelSocket{
+		reads:  make(chan socketMessage, 16),
+		closed: make(chan struct{}),
+	}
+}
+
+func (s *blockingTunnelSocket) Queue(message socketMessage) {
+	s.reads <- message
+}
+
+func (s *blockingTunnelSocket) ReadMessage() (int, []byte, error) {
+	select {
+	case message := <-s.reads:
+		return message.typ, append([]byte(nil), message.data...), nil
+	case <-s.closed:
+		return 0, nil, io.EOF
+	}
+}
+
+func (s *blockingTunnelSocket) WriteMessage(typ int, data []byte) error {
+	select {
+	case <-s.closed:
+		return io.ErrClosedPipe
+	default:
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writes = append(s.writes, socketMessage{typ: typ, data: append([]byte(nil), data...)})
+	return nil
+}
+
+func (s *blockingTunnelSocket) Close() error {
+	s.closeOnce.Do(func() { close(s.closed) })
+	return nil
+}
+
+func (s *blockingTunnelSocket) Writes() []socketMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]socketMessage(nil), s.writes...)
+}
+
+func waitForWrittenFrames(socket *blockingTunnelSocket, codec *TunnelCodec, typ TunnelFrameType, count int, timeout time.Duration) ([]TunnelFrame, bool) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		frames := make([]TunnelFrame, 0, count)
+		for _, message := range socket.Writes() {
+			if message.typ != websocket.TextMessage {
+				continue
+			}
+			frame, err := codec.DecodeText(message.data)
+			if err == nil && frame.Type == typ {
+				frames = append(frames, frame)
+			}
+		}
+		if len(frames) >= count {
+			return frames, true
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return nil, false
+}
+
+type heartbeatTestState struct{}
+
+func (*heartbeatTestState) BeginOpen(OpenConnectionData, time.Time) error { return nil }
+func (*heartbeatTestState) MarkHandshakeStarted() error { return nil }
+func (*heartbeatTestState) AcceptHelloAck(TunnelFrame) error { return nil }
+func (*heartbeatTestState) MarkDisconnected() error { return nil }
+func (*heartbeatTestState) Stop() {}
+func (*heartbeatTestState) Snapshot() ConnectionStateSnapshot {
+	return ConnectionStateSnapshot{Identity: testIdentity(), State: ConnectionStateReady, ConnectionID: "connection-1"}
 }
 
 func (s *fakeTunnelSocket) ReadMessage() (int, []byte, error) {

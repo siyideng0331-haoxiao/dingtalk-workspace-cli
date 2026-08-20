@@ -125,6 +125,35 @@ func (s *TunnelSession) RunAttempt(ctx context.Context, data OpenConnectionData,
 	if err := s.state.AcceptHelloAck(ack); err != nil {
 		return ErrTunnelProtocol
 	}
+	_, _, heartbeatIntervalMs, _, ok := decodeHelloAckAttributes(ack.Attributes)
+	if !ok || heartbeatIntervalMs <= 0 {
+		return ErrTunnelProtocol
+	}
+	heartbeatTicker := time.NewTicker(time.Duration(heartbeatIntervalMs) * time.Millisecond)
+	heartbeatStop := make(chan struct{})
+	var heartbeatWait sync.WaitGroup
+	heartbeatWait.Add(1)
+	go func() {
+		defer heartbeatWait.Done()
+		for {
+			select {
+			case <-heartbeatTicker.C:
+				if err := writer.writeInternal(TunnelFrame{Type: FrameHeartbeat}, false); err != nil {
+					_ = socket.Close()
+					return
+				}
+			case <-ctx.Done():
+				return
+			case <-heartbeatStop:
+				return
+			}
+		}
+	}()
+	defer func() {
+		heartbeatTicker.Stop()
+		close(heartbeatStop)
+		heartbeatWait.Wait()
+	}()
 	inboundConnectionSequence := int64(0)
 	inboundRequests := newRequestSequenceTracker()
 	writer.onRequestComplete = inboundRequests.complete
@@ -159,6 +188,7 @@ func (s *TunnelSession) RunAttempt(ctx context.Context, data OpenConnectionData,
 			if err := writer.writeInternal(TunnelFrame{Type: FrameHeartbeatAck}, false); err != nil {
 				return ErrTunnelDisconnected
 			}
+		case FrameHeartbeatAck:
 		case FrameEndpointRevoke:
 			s.state.Stop()
 			terminal = true
@@ -203,7 +233,7 @@ func acceptNextSequence(previous *int64, next int64) bool {
 
 func allowedInboundFrame(typ TunnelFrameType) bool {
 	switch typ {
-	case FrameRequestStart, FrameRequestChunk, FrameRequestEnd, FrameCancel, FrameError, FrameHeartbeat, FrameEndpointRevoke:
+	case FrameRequestStart, FrameRequestChunk, FrameRequestEnd, FrameCancel, FrameError, FrameHeartbeat, FrameHeartbeatAck, FrameEndpointRevoke:
 		return true
 	default:
 		return false
@@ -286,7 +316,7 @@ func (t *requestSequenceTracker) complete(requestID string) {
 
 func allowedOutboundFrame(typ TunnelFrameType) bool {
 	switch typ {
-	case FrameResponseStart, FrameResponseChunk, FrameResponseEnd, FrameError, FrameHeartbeatAck:
+	case FrameResponseStart, FrameResponseChunk, FrameResponseEnd, FrameError, FrameHeartbeat, FrameHeartbeatAck:
 		return true
 	default:
 		return false
