@@ -796,15 +796,21 @@ saves the same non-sensitive config used by `connect`. If a binding exists, it
 does not call CreateRunner: it GETs the stored Runner, requires exact
 runner/endpoint/local-agent/display-name identity and requires the remote Card
 hash to remain equal to the old stored hash before recomputing the public Card
-from the current local snapshot. An unchanged digest reuses the binding. A
-changed local digest calls the existing agent-card update on that same Runner,
-then requires the response to preserve every identity, public Card URL,
-`ACTIVE` status, and the exact new `sha256:<64 lowercase hex>` digest before
-atomically replacing only the stored digest. Any pre-update remote digest
-drift, invalid response, duplicate candidate, Card URL/origin mismatch, or
-OpenAPI-base mismatch fails closed instead of overwriting an unknown change or
-creating a second binding. The store uses a validated directory scan rather
-than a second persistent index, avoiding index/config divergence.
+from the current local snapshot. It fetches the exact server-returned HTTPS
+public Card without credentials or redirects, requires HTTP 200 JSON bounded
+to 1 MiB, and binds its raw bytes to the server-returned
+`sha256:<64 lowercase hex>` digest. JSON semantic equality, rather than object
+key order or raw-byte equality, decides whether the binding is unchanged. A
+semantic change calls the existing agent-card update on that same Runner, then
+requires the response to preserve every identity, public Card URL, and
+`ACTIVE` status; it re-fetches the public Card, requires semantic equality with
+the desired snapshot and raw-byte equality with the returned digest, and
+atomically saves that server digest. Any pre-update remote digest drift,
+invalid or redirected public Card response, post-update semantic/digest drift,
+duplicate candidate, Card URL/origin mismatch, or OpenAPI-base mismatch fails
+closed instead of overwriting an unknown change or creating a second binding.
+The store uses a validated directory scan rather than a second persistent
+index, avoiding index/config divergence.
 
 Both paths return only a sanitized A2A summary and private in-process connect
 options. The command JSON-encodes that summary before invoking the existing
@@ -939,3 +945,4 @@ Implementation and verification steps:
 | 2026-08-20 | Added the required top-level `version="1.0.0"` to the built-in `test-echo` Card while keeping A2A `protocolVersion="0.3.0"`, and allowed guarded in-place Card updates for an otherwise unchanged stored binding. | The official 0.3.0 Agent Card parser rejects a Card without the distinct agent version; an existing one-command binding must publish the corrected snapshot without duplicate registration, but only after the remote still matches the old stored digest and only when the update response proves the same identity, endpoint, URL, ACTIVE state, and exact new digest. |
 | 2026-08-21 | Replaced the nested `httpAuthSecurityScheme` public Card declaration with the flat discriminated `localRunnerBearer={"type":"http","scheme":"bearer"}` shape and synchronized CLI digest/resume expectations. | The messaging A2A SDK selects security-scheme subtypes through the top-level `type` discriminator and rejects the old nested shape; keeping the CLI rewrite on that shape would also recompute a different digest after OpenAPI publishes the corrected Card and would trigger an erroneous resume PUT. |
 | 2026-08-21 | Added one safe console-visible completion record at the shared tunnel-to-loopback proxy boundary for success, streaming, error, cancellation, rejection, and disconnect paths. | Successful pre-release RPC and SSE traffic was otherwise invisible after the initial configuration summary; fixed normalized metadata provides operational evidence without exposing request IDs, endpoint IDs, query, headers, credentials, bodies, response content, or raw error text, and does not alter tunnel frames. |
+| 2026-08-21 | Changed stored-binding Card recovery to bind the server's raw public-Card digest while using bounded credential-free HTTPS fetches and JSON semantic equality for change detection and post-update verification. | Jackson and Go serialize equivalent object keys in different orders; comparing their raw digests triggered an unnecessary PUT and then rejected the unchanged server digest, so raw hashes remain concurrency evidence while key order is no longer treated as an A2A Card change. |

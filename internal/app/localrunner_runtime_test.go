@@ -252,6 +252,17 @@ func TestProductionLocalRunnerStartLocalReusesStoredBuiltInBindingWithoutCreate(
 	credentials := localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)})
 	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
 		ConfigDir: t.TempDir(), ControlHTTPClient: controlClient,
+		CardHTTPClient: localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Scheme == "http" {
+				return http.DefaultClient.Do(request)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader(snapshot.JSON)),
+				Request:    request,
+			}, nil
+		}),
 		OAuth: staticLocalRunnerOAuth("oauth-token"), Credentials: credentials,
 		OwnerIdentity: testLocalRunnerOwnerIdentity,
 	})
@@ -286,8 +297,266 @@ func TestProductionLocalRunnerStartLocalReusesStoredBuiltInBindingWithoutCreate(
 	}
 }
 
+func TestRecoverStoredLocalAgentCardIgnoresPublicObjectKeyOrder(t *testing.T) {
+	rawCard := json.RawMessage(`{"name":"Stable agent","version":"1.0.0","protocolVersion":"0.3.0","capabilities":{"streaming":true},"skills":[],"url":"http://127.0.0.1:8080/rpc"}`)
+	publicOrigin := "https://pre-deap.dingtalk.com"
+	publicCardURL := publicOrigin + "/v1/a2a/local-runners/endpoint-existing/.well-known/agent-card.json"
+	snapshot, err := localrunner.RewriteAgentCard(rawCard, "endpoint-existing", publicOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverCard := []byte(strings.Replace(string(snapshot.JSON),
+		`"localRunnerBearer":{"scheme":"bearer","type":"http"}`,
+		`"localRunnerBearer":{"type":"http","scheme":"bearer"}`, 1))
+	if bytes.Equal(serverCard, snapshot.JSON) {
+		t.Fatalf("fixture did not change the public Card key order: %s", snapshot.JSON)
+	}
+	var desiredValue any
+	var serverValue any
+	if json.Unmarshal(snapshot.JSON, &desiredValue) != nil || json.Unmarshal(serverCard, &serverValue) != nil {
+		t.Fatal("fixture contains invalid JSON")
+	}
+	desiredCanonical, _ := json.Marshal(desiredValue)
+	serverCanonical, _ := json.Marshal(serverValue)
+	if !bytes.Equal(desiredCanonical, serverCanonical) {
+		t.Fatalf("fixture Cards are not semantically equal:\ndesired=%s\nserver=%s", snapshot.JSON, serverCard)
+	}
+	serverHash := sha256.Sum256(serverCard)
+	serverDigest := fmt.Sprintf("sha256:%x", serverHash[:])
+	stored := localrunner.StoredRunnerConfig{
+		RunnerID: "runner-existing", EndpointID: "endpoint-existing",
+		LocalAgentID: "agent-existing", DisplayName: "Stable agent",
+		AgentCardURL: "http://127.0.0.1:8080/.well-known/agent-card.json", LoopbackBaseURL: "http://127.0.0.1:8080",
+		OpenAPIBase: "https://pre-deap-open-api.dingtalk.com", AgentCardSHA256: serverDigest,
+	}
+	updateCalls := 0
+	controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method == http.MethodPut {
+			updateCalls++
+			return nil, errors.New("semantically equal Card must not be updated")
+		}
+		return localRunnerStatusTestResponse(t, request, localrunner.RunnerStatusData{
+			RunnerID: stored.RunnerID, EndpointID: stored.EndpointID,
+			LocalAgentID: stored.LocalAgentID, DisplayName: stored.DisplayName,
+			Status: localrunner.RunnerStatusActive, AgentCardURL: publicCardURL,
+			AgentCardSHA256: serverDigest,
+		}), nil
+	})
+	publicCardCalls := 0
+	cardClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		publicCardCalls++
+		if request.Method != http.MethodGet || request.URL.String() != publicCardURL || request.Header.Get("Authorization") != "" {
+			t.Fatalf("public Card request = method %s url %s authorization=%t", request.Method, request.URL, request.Header.Get("Authorization") != "")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(serverCard)),
+			Request:    request,
+		}, nil
+	})
+	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+		ConfigDir: t.TempDir(), ControlHTTPClient: controlClient, CardHTTPClient: cardClient,
+		OAuth: staticLocalRunnerOAuth("oauth-token"),
+		Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
+		OwnerIdentity: testLocalRunnerOwnerIdentity,
+	})
+	control, err := runtime.controlClient(stored.OpenAPIBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := runtime.recoverStoredLocalAgentCard(context.Background(), localRunnerExposeOptions{
+		LocalAgentID: stored.LocalAgentID, DisplayName: stored.DisplayName,
+		AgentCardURL: stored.AgentCardURL, OpenAPIBase: stored.OpenAPIBase,
+	}, rawCard, "http://127.0.0.1:8080/rpc", &stored, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updateCalls != 0 || publicCardCalls != 1 {
+		t.Fatalf("recovery calls = update %d public Card GET %d, want 0/1", updateCalls, publicCardCalls)
+	}
+	if created.RunnerID != stored.RunnerID || created.EndpointID != stored.EndpointID || stored.AgentCardSHA256 != serverDigest {
+		t.Fatalf("recovered binding = %#v stored digest=%q", created, stored.AgentCardSHA256)
+	}
+}
+
+func TestRecoverStoredLocalAgentCardRejectsUnsafePublicCardResponses(t *testing.T) {
+	rawCard := json.RawMessage(`{"name":"Stable agent","version":"1.0.0","protocolVersion":"0.3.0","capabilities":{},"skills":[],"url":"http://127.0.0.1:8080/rpc"}`)
+	publicOrigin := "https://pre-deap.dingtalk.com"
+	publicCardURL := publicOrigin + "/v1/a2a/local-runners/endpoint-existing/.well-known/agent-card.json"
+	snapshot, err := localrunner.RewriteAgentCard(rawCard, "endpoint-existing", publicOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digestValue := sha256.Sum256(snapshot.JSON)
+	digest := fmt.Sprintf("sha256:%x", digestValue[:])
+	tests := []struct {
+		name        string
+		cardURL     string
+		status      int
+		contentType string
+		body        []byte
+		finalURL    string
+	}{
+		{name: "non HTTPS URL", cardURL: "http://pre-deap.dingtalk.com/card", status: http.StatusOK, contentType: "application/json", body: snapshot.JSON},
+		{name: "non 200", cardURL: publicCardURL, status: http.StatusBadGateway, contentType: "application/json", body: snapshot.JSON},
+		{name: "non JSON media type", cardURL: publicCardURL, status: http.StatusOK, contentType: "text/plain", body: snapshot.JSON},
+		{name: "redirected final URL", cardURL: publicCardURL, status: http.StatusOK, contentType: "application/json", body: snapshot.JSON, finalURL: "https://other.example.test/card"},
+		{name: "oversized", cardURL: publicCardURL, status: http.StatusOK, contentType: "application/json", body: bytes.Repeat([]byte{'x'}, maxLocalAgentCardBytes+1)},
+		{name: "invalid JSON", cardURL: publicCardURL, status: http.StatusOK, contentType: "application/json", body: []byte(`{"name":`)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stored := localrunner.StoredRunnerConfig{
+				RunnerID: "runner-existing", EndpointID: "endpoint-existing",
+				LocalAgentID: "agent-existing", DisplayName: "Stable agent",
+				AgentCardURL: "http://127.0.0.1:8080/.well-known/agent-card.json", LoopbackBaseURL: "http://127.0.0.1:8080",
+				OpenAPIBase: "https://pre-deap-open-api.dingtalk.com", AgentCardSHA256: digest,
+			}
+			updateCalls := 0
+			controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+				if request.Method == http.MethodPut {
+					updateCalls++
+					return nil, errors.New("unsafe public Card must not be updated")
+				}
+				return localRunnerStatusTestResponse(t, request, localrunner.RunnerStatusData{
+					RunnerID: stored.RunnerID, EndpointID: stored.EndpointID,
+					LocalAgentID: stored.LocalAgentID, DisplayName: stored.DisplayName,
+					Status: localrunner.RunnerStatusActive, AgentCardURL: test.cardURL,
+					AgentCardSHA256: digest,
+				}), nil
+			})
+			cardClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+				finalURL := request.URL
+				if test.finalURL != "" {
+					var parseErr error
+					finalURL, parseErr = url.Parse(test.finalURL)
+					if parseErr != nil {
+						t.Fatal(parseErr)
+					}
+				}
+				return &http.Response{
+					StatusCode: test.status,
+					Header:     http.Header{"Content-Type": []string{test.contentType}},
+					Body:       io.NopCloser(bytes.NewReader(test.body)),
+					Request:    &http.Request{Method: http.MethodGet, URL: finalURL},
+				}, nil
+			})
+			runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+				ConfigDir: t.TempDir(), ControlHTTPClient: controlClient, CardHTTPClient: cardClient,
+				OAuth: staticLocalRunnerOAuth("oauth-token"),
+				Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
+				OwnerIdentity: testLocalRunnerOwnerIdentity,
+			})
+			control, err := runtime.controlClient(stored.OpenAPIBase)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = runtime.recoverStoredLocalAgentCard(context.Background(), localRunnerExposeOptions{
+				LocalAgentID: stored.LocalAgentID, DisplayName: stored.DisplayName,
+				AgentCardURL: stored.AgentCardURL, OpenAPIBase: stored.OpenAPIBase,
+			}, rawCard, "http://127.0.0.1:8080/rpc", &stored, control)
+			if !errors.Is(err, ErrLocalRunnerRuntimeInvalid) {
+				t.Fatalf("recoverStoredLocalAgentCard() error = %v, want ErrLocalRunnerRuntimeInvalid", err)
+			}
+			if updateCalls != 0 {
+				t.Fatalf("UpdateAgentCard calls = %d, want 0", updateCalls)
+			}
+		})
+	}
+}
+
+func TestRecoverStoredLocalAgentCardStoresServerDigestAfterSemanticUpdate(t *testing.T) {
+	rawCard := json.RawMessage(`{"name":"Stable agent","version":"1.0.0","protocolVersion":"0.3.0","capabilities":{},"skills":[],"url":"http://127.0.0.1:8080/rpc"}`)
+	legacyCard := json.RawMessage(`{"name":"Stable agent","protocolVersion":"0.3.0","capabilities":{},"skills":[],"url":"http://127.0.0.1:8080/rpc"}`)
+	publicOrigin := "https://pre-deap.dingtalk.com"
+	publicCardURL := publicOrigin + "/v1/a2a/local-runners/endpoint-existing/.well-known/agent-card.json"
+	legacySnapshot, err := localrunner.RewriteAgentCard(legacyCard, "endpoint-existing", publicOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desiredSnapshot, err := localrunner.RewriteAgentCard(rawCard, "endpoint-existing", publicOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverUpdatedCard := []byte(strings.Replace(string(desiredSnapshot.JSON),
+		`"localRunnerBearer":{"scheme":"bearer","type":"http"}`,
+		`"localRunnerBearer":{"type":"http","scheme":"bearer"}`, 1))
+	if bytes.Equal(serverUpdatedCard, desiredSnapshot.JSON) {
+		t.Fatalf("fixture did not change the updated Card key order: %s", desiredSnapshot.JSON)
+	}
+	legacyHash := sha256.Sum256(legacySnapshot.JSON)
+	legacyDigest := fmt.Sprintf("sha256:%x", legacyHash[:])
+	updatedHash := sha256.Sum256(serverUpdatedCard)
+	updatedDigest := fmt.Sprintf("sha256:%x", updatedHash[:])
+	stored := localrunner.StoredRunnerConfig{
+		RunnerID: "runner-existing", EndpointID: "endpoint-existing",
+		LocalAgentID: "agent-existing", DisplayName: "Stable agent",
+		AgentCardURL: "http://127.0.0.1:8080/.well-known/agent-card.json", LoopbackBaseURL: "http://127.0.0.1:8080",
+		OpenAPIBase: "https://pre-deap-open-api.dingtalk.com", AgentCardSHA256: legacyDigest,
+	}
+	updateCalls := 0
+	controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		status := localrunner.RunnerStatusData{
+			RunnerID: stored.RunnerID, EndpointID: stored.EndpointID,
+			LocalAgentID: stored.LocalAgentID, DisplayName: stored.DisplayName,
+			Status: localrunner.RunnerStatusActive, AgentCardURL: publicCardURL,
+			AgentCardSHA256: legacyDigest,
+		}
+		if request.Method == http.MethodPut {
+			updateCalls++
+			status.AgentCardSHA256 = updatedDigest
+		}
+		return localRunnerStatusTestResponse(t, request, status), nil
+	})
+	publicCardCalls := 0
+	cardClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		publicCardCalls++
+		body := legacySnapshot.JSON
+		if publicCardCalls > 1 {
+			body = serverUpdatedCard
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(body)),
+			Request:    request,
+		}, nil
+	})
+	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+		ConfigDir: t.TempDir(), ControlHTTPClient: controlClient, CardHTTPClient: cardClient,
+		OAuth: staticLocalRunnerOAuth("oauth-token"),
+		Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
+		OwnerIdentity: testLocalRunnerOwnerIdentity,
+	})
+	if err := runtime.configs.Save(stored); err != nil {
+		t.Fatal(err)
+	}
+	control, err := runtime.controlClient(stored.OpenAPIBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := runtime.recoverStoredLocalAgentCard(context.Background(), localRunnerExposeOptions{
+		LocalAgentID: stored.LocalAgentID, DisplayName: stored.DisplayName,
+		AgentCardURL: stored.AgentCardURL, OpenAPIBase: stored.OpenAPIBase,
+	}, rawCard, "http://127.0.0.1:8080/rpc", &stored, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updateCalls != 1 || publicCardCalls != 2 {
+		t.Fatalf("recovery calls = update %d public Card GET %d, want 1/2", updateCalls, publicCardCalls)
+	}
+	if created.RunnerID != stored.RunnerID || created.EndpointID != stored.EndpointID || stored.AgentCardSHA256 != updatedDigest {
+		t.Fatalf("recovered binding = %#v stored digest=%q, want server digest %q", created, stored.AgentCardSHA256, updatedDigest)
+	}
+	loaded, err := runtime.configs.Load(stored.RunnerID)
+	if err != nil || loaded.AgentCardSHA256 != updatedDigest {
+		t.Fatalf("saved digest = %q error=%v, want server digest %q", loaded.AgentCardSHA256, err, updatedDigest)
+	}
+}
+
 func TestProductionLocalRunnerStartLocalUpdatesStoredBuiltInCardWithoutCreate(t *testing.T) {
-	stored, currentDigest := newLocalRunnerStoredCardUpgradeFixture(t)
+	stored, currentDigest, legacyPublicCard, currentPublicCard := newLocalRunnerStoredCardUpgradeFixture(t)
 	createCalls := 0
 	getCalls := 0
 	updateCalls := 0
@@ -332,6 +601,21 @@ func TestProductionLocalRunnerStartLocalUpdatesStoredBuiltInCardWithoutCreate(t 
 	})
 	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
 		ConfigDir: t.TempDir(), ControlHTTPClient: controlClient,
+		CardHTTPClient: localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Scheme == "http" {
+				return http.DefaultClient.Do(request)
+			}
+			body := legacyPublicCard
+			if updateCalls > 0 {
+				body = currentPublicCard
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader(body)),
+				Request:    request,
+			}, nil
+		}),
 		OAuth: staticLocalRunnerOAuth("oauth-token"),
 		Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
 		OwnerIdentity: testLocalRunnerOwnerIdentity,
@@ -373,7 +657,7 @@ func TestProductionLocalRunnerStartLocalRejectsAgentCardUpdateResponseDrift(t *t
 		{name: "digest", mutate: func(value *localrunner.RunnerStatusData) { value.AgentCardSHA256 = "sha256:" + strings.Repeat("c", 64) }},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			stored, currentDigest := newLocalRunnerStoredCardUpgradeFixture(t)
+			stored, currentDigest, legacyPublicCard, currentPublicCard := newLocalRunnerStoredCardUpgradeFixture(t)
 			updateCalls := 0
 			controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 				if request.Method == http.MethodPost {
@@ -399,6 +683,21 @@ func TestProductionLocalRunnerStartLocalRejectsAgentCardUpdateResponseDrift(t *t
 			})
 			runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
 				ConfigDir: t.TempDir(), ControlHTTPClient: controlClient,
+				CardHTTPClient: localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+					if request.URL.Scheme == "http" {
+						return http.DefaultClient.Do(request)
+					}
+					body := legacyPublicCard
+					if updateCalls > 0 {
+						body = currentPublicCard
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(bytes.NewReader(body)),
+						Request:    request,
+					}, nil
+				}),
 				OAuth: staticLocalRunnerOAuth("oauth-token"),
 				Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
 				OwnerIdentity: testLocalRunnerOwnerIdentity,
@@ -895,7 +1194,7 @@ func readLocalRunnerTestCard(t *testing.T, rawURL string) json.RawMessage {
 	return json.RawMessage(raw)
 }
 
-func newLocalRunnerStoredCardUpgradeFixture(t *testing.T) (localrunner.StoredRunnerConfig, string) {
+func newLocalRunnerStoredCardUpgradeFixture(t *testing.T) (localrunner.StoredRunnerConfig, string, []byte, []byte) {
 	t.Helper()
 	agent, err := startLocalRunnerTestEchoAgent()
 	if err != nil {
@@ -927,12 +1226,19 @@ func newLocalRunnerStoredCardUpgradeFixture(t *testing.T) (localrunner.StoredRun
 	if err := agent.Close(); err != nil {
 		t.Fatal(err)
 	}
+	currentPublicCard := []byte(strings.Replace(string(currentSnapshot.JSON),
+		`"localRunnerBearer":{"scheme":"bearer","type":"http"}`,
+		`"localRunnerBearer":{"type":"http","scheme":"bearer"}`, 1))
+	if bytes.Equal(currentPublicCard, currentSnapshot.JSON) {
+		t.Fatalf("fixture did not change the current public Card key order: %s", currentSnapshot.JSON)
+	}
+	currentPublicHash := sha256.Sum256(currentPublicCard)
 	return localrunner.StoredRunnerConfig{
 		RunnerID: "runner-existing", EndpointID: "endpoint-existing",
 		LocalAgentID: "test-echo-20260820", DisplayName: "DWS Test Echo 20260820",
 		AgentCardURL: cardURL, LoopbackBaseURL: strings.TrimSuffix(rpcURL, localRunnerTestEchoRPCPath),
 		OpenAPIBase: "https://pre-deap-open-api.dingtalk.com", AgentCardSHA256: "sha256:" + legacySnapshot.SHA256,
-	}, "sha256:" + currentSnapshot.SHA256
+	}, fmt.Sprintf("sha256:%x", currentPublicHash[:]), legacySnapshot.JSON, currentPublicCard
 }
 
 func localRunnerFlatBearerDigest(t *testing.T, published []byte) string {

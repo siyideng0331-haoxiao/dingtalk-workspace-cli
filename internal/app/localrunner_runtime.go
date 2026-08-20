@@ -1,12 +1,14 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -69,7 +71,12 @@ func newProductionLocalRunnerCommandRuntime(deps localRunnerRuntimeDependencies)
 		deps.ControlHTTPClient = &http.Client{Timeout: config.HTTPTimeout}
 	}
 	if deps.CardHTTPClient == nil {
-		deps.CardHTTPClient = &http.Client{Timeout: config.HTTPTimeout}
+		deps.CardHTTPClient = &http.Client{
+			Timeout: config.HTTPTimeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 	}
 	if deps.ProxyHTTPClient == nil {
 		deps.ProxyHTTPClient = &http.Client{}
@@ -232,6 +239,10 @@ func (r *productionLocalRunnerCommandRuntime) recoverStoredLocalAgentCard(ctx co
 	if view.RunnerID != stored.RunnerID || view.EndpointID != stored.EndpointID || view.LocalAgentID != stored.LocalAgentID || view.DisplayName != stored.DisplayName || view.Status != localrunner.RunnerStatusActive || view.AgentCardSHA256 != stored.AgentCardSHA256 {
 		return nil, ErrLocalRunnerRuntimeInvalid
 	}
+	publicCard, err := r.readPublicAgentCard(ctx, view.AgentCardURL)
+	if err != nil || localRunnerAgentCardDigest(publicCard) != view.AgentCardSHA256 {
+		return nil, ErrLocalRunnerRuntimeInvalid
+	}
 	publicBaseURL, err := localRunnerOrigin(view.AgentCardURL)
 	if err != nil {
 		return nil, ErrLocalRunnerRuntimeInvalid
@@ -240,17 +251,20 @@ func (r *productionLocalRunnerCommandRuntime) recoverStoredLocalAgentCard(ctx co
 	if err != nil {
 		return nil, ErrLocalRunnerRuntimeInvalid
 	}
-	currentDigest := "sha256:" + snapshot.SHA256
-	if currentDigest != stored.AgentCardSHA256 {
+	if !localRunnerAgentCardsSemanticallyEqual(publicCard, snapshot.JSON) {
 		updated, err := control.UpdateAgentCard(ctx, stored.RunnerID, localrunner.UpdateAgentCardRequest{AgentCard: rawCard})
 		if err != nil {
 			return nil, err
 		}
-		if updated.RunnerID != stored.RunnerID || updated.EndpointID != stored.EndpointID || updated.LocalAgentID != stored.LocalAgentID || updated.DisplayName != stored.DisplayName || updated.Status != localrunner.RunnerStatusActive || updated.AgentCardURL != view.AgentCardURL || updated.AgentCardSHA256 != currentDigest {
+		if updated.RunnerID != stored.RunnerID || updated.EndpointID != stored.EndpointID || updated.LocalAgentID != stored.LocalAgentID || updated.DisplayName != stored.DisplayName || updated.Status != localrunner.RunnerStatusActive || updated.AgentCardURL != view.AgentCardURL {
+			return nil, ErrLocalRunnerRuntimeInvalid
+		}
+		updatedPublicCard, err := r.readPublicAgentCard(ctx, updated.AgentCardURL)
+		if err != nil || localRunnerAgentCardDigest(updatedPublicCard) != updated.AgentCardSHA256 || !localRunnerAgentCardsSemanticallyEqual(updatedPublicCard, snapshot.JSON) {
 			return nil, ErrLocalRunnerRuntimeInvalid
 		}
 		nextStored := *stored
-		nextStored.AgentCardSHA256 = currentDigest
+		nextStored.AgentCardSHA256 = updated.AgentCardSHA256
 		if err := r.configs.Save(nextStored); err != nil {
 			return nil, err
 		}
@@ -464,6 +478,69 @@ func (r *productionLocalRunnerCommandRuntime) readLocalAgentCard(ctx context.Con
 		return nil, ErrLocalRunnerRuntimeInvalid
 	}
 	return json.RawMessage(append([]byte(nil), raw...)), nil
+}
+
+func (r *productionLocalRunnerCommandRuntime) readPublicAgentCard(ctx context.Context, rawURL string) (json.RawMessage, error) {
+	if r == nil || r.cardHTTPClient == nil {
+		return nil, ErrLocalRunnerRuntimeInvalid
+	}
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, ErrLocalRunnerRuntimeInvalid
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return nil, ErrLocalRunnerRuntimeInvalid
+	}
+	req.Header.Set("Accept", "application/json")
+	response, err := r.cardHTTPClient.Do(req)
+	if err != nil {
+		return nil, ErrLocalRunnerRuntimeInvalid
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.Request == nil || response.Request.URL == nil || response.Request.URL.String() != parsed.String() {
+		return nil, ErrLocalRunnerRuntimeInvalid
+	}
+	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if err != nil || (mediaType != "application/json" && !(strings.HasPrefix(mediaType, "application/") && strings.HasSuffix(mediaType, "+json"))) {
+		return nil, ErrLocalRunnerRuntimeInvalid
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxLocalAgentCardBytes+1))
+	if err != nil || len(raw) == 0 || len(raw) > maxLocalAgentCardBytes || !localRunnerValidAgentCardJSON(raw) {
+		return nil, ErrLocalRunnerRuntimeInvalid
+	}
+	return json.RawMessage(append([]byte(nil), raw...)), nil
+}
+
+func localRunnerAgentCardDigest(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("sha256:%x", sum[:])
+}
+
+func localRunnerAgentCardsSemanticallyEqual(left, right []byte) bool {
+	leftCanonical, leftOK := localRunnerCanonicalAgentCardJSON(left)
+	rightCanonical, rightOK := localRunnerCanonicalAgentCardJSON(right)
+	return leftOK && rightOK && bytes.Equal(leftCanonical, rightCanonical)
+}
+
+func localRunnerValidAgentCardJSON(raw []byte) bool {
+	_, ok := localRunnerCanonicalAgentCardJSON(raw)
+	return ok
+}
+
+func localRunnerCanonicalAgentCardJSON(raw []byte) ([]byte, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value map[string]any
+	if err := decoder.Decode(&value); err != nil || value == nil {
+		return nil, false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, false
+	}
+	canonical, err := json.Marshal(value)
+	return canonical, err == nil
 }
 
 func localRunnerOrigin(raw string) (string, error) {
