@@ -147,6 +147,23 @@ func TestRootKeepsMainBranchChatCompatibilityCommands(t *testing.T) {
 	mustFindCommand(t, root, "conference", "meeting", "reserve")
 }
 
+func TestChatMessageSendHelpDocumentsStableUserIDAndRobotUID(t *testing.T) {
+	root := NewRootCommand()
+	var output bytes.Buffer
+	root.SetOut(&output)
+	root.SetErr(&output)
+	root.SetArgs([]string{"chat", "message", "send", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("chat message send --help: %v\n%s", err, output.String())
+	}
+	help := output.String()
+	for _, want := range []string{"--user", "稳定 userId/uid", "detail.robotUid", "--open-dingtalk-id"} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("chat message send help missing %q:\n%s", want, help)
+		}
+	}
+}
+
 func TestChatHelpAndSchemaHideRetiredMediaUpload(t *testing.T) {
 	for _, args := range [][]string{
 		{"chat", "--help"},

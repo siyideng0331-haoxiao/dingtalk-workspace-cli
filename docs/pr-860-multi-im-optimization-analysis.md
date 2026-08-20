@@ -1714,3 +1714,9 @@ Intent First
 ```
 
 这条链路可以直接作为通讯录、文档、云盘、知识库等新领域的标准交付模板。最关键的认知是：**Runtime 正确只是起点；只有发现、选择、安全、契约和门禁同时闭环，能力才真正完成产品化。**
+
+## 22. Command Contract Change History
+
+| Date | Change | Reason |
+|---|---|---|
+| 2026-08-21 | Clarified `chat message send` direct-recipient identity domains: `--user` passes a stable userId/uid as `receiverUid`, including a digital employee's `detail.robotUid`; `--open-dingtalk-id` remains the explicit `receiverOpenDingTalkId` compatibility route. The same distinction now drives text, media, file upload/send, dry-run, Help, and Schema. | Live trace `0b51143d17872427328083078e04e7` showed a direct send with only `receiverOpenDingTalkId` was rejected because `receiverUid` was required, while the CLI's mandatory userId-to-openDingTalkId lookup prevented a known numeric robot uid from reaching the backend. Explicit flags must preserve their identifier domains instead of guessing or converting them. |

@@ -407,6 +407,13 @@ func TestChatSchemaSeparatesSendAndReply(t *testing.T) {
 	if !ok || schemaContractString(send["primary_cli_path"]) != "chat message send" {
 		t.Fatalf("send definition = %#v", send)
 	}
+	sendParameters := schemaContractMap(send["parameters"])
+	if got := schemaContractString(sendParameters["user"]["property"]); got != "receiverUid" {
+		t.Fatalf("send --user property = %q, want receiverUid", got)
+	}
+	if got := schemaContractString(sendParameters["open-dingtalk-id"]["property"]); got != "receiverOpenDingTalkId" {
+		t.Fatalf("send --open-dingtalk-id property = %q, want receiverOpenDingTalkId", got)
+	}
 	reply, ok := snapshot.Tools["chat.reply_personal_message"]
 	if !ok || schemaContractString(reply["primary_cli_path"]) != "chat message reply" {
 		t.Fatalf("reply definition = %#v", reply)

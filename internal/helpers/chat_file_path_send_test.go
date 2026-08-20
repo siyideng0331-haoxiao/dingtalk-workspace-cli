@@ -239,6 +239,56 @@ func TestChatMessageSendFilePathUsesOpenDingTalkIDTarget(t *testing.T) {
 	}
 }
 
+func TestChatMessageSendFilePathUsesUserIDTargetWithoutResolution(t *testing.T) {
+	previousDeps, previousPut, previousArgs := deps, httpPutFile, os.Args
+	t.Cleanup(func() {
+		deps = previousDeps
+		httpPutFile = previousPut
+		os.Args = previousArgs
+	})
+
+	filePath := filepath.Join(t.TempDir(), "report.pdf")
+	payload := []byte("pdf payload")
+	if err := os.WriteFile(filePath, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	caller := &chatFilePathCaller{}
+	commandArgs := []string{
+		"message", "send",
+		"--user=6871365508",
+		"--msg-type=file",
+		"--file-path=" + filePath,
+	}
+	os.Args = append([]string{"dws", "chat"}, commandArgs...)
+	httpPutFile = func(_ context.Context, _ string, _ map[string]string, _ string, _ int64) error {
+		caller.sequence = append(caller.sequence, "HTTP PUT")
+		return nil
+	}
+
+	if err := runChatCoverageCommand(t, caller, commandArgs...); err != nil {
+		t.Fatalf("chat message send --user --file-path: %v", err)
+	}
+	if len(caller.calls) != 3 {
+		t.Fatalf("tool calls = %#v, want init, commit, send", caller.calls)
+	}
+	for _, index := range []int{0, 1} {
+		if caller.calls[index].args["userId"] != "6871365508" {
+			t.Fatalf("upload target call %d = %#v", index, caller.calls[index])
+		}
+		if _, leaked := caller.calls[index].args["openDingTalkId"]; leaked {
+			t.Fatalf("upload target call %d changed identifier domain: %#v", index, caller.calls[index])
+		}
+	}
+	send := caller.calls[2]
+	if send.server != "chat" || send.tool != "send_personal_message" || send.args["receiverUid"] != "6871365508" {
+		t.Fatalf("send user target call = %#v", send)
+	}
+	if _, leaked := send.args["receiverOpenDingTalkId"]; leaked {
+		t.Fatalf("send user target changed identifier domain: %#v", send.args)
+	}
+}
+
 func TestChatMessageSendFilePathRequiresFileMessageType(t *testing.T) {
 	previousDeps := deps
 	t.Cleanup(func() { deps = previousDeps })

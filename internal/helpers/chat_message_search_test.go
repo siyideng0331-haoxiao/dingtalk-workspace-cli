@@ -746,20 +746,30 @@ func TestCrossPlatformCoverageChatAuditUsesUserIDs(t *testing.T) {
 	}
 }
 
-func TestCrossPlatformCoverageChatSendResolvesUserBeforeDispatch(t *testing.T) {
-	caller := &chatChangedContractCaller{resolveUsers: true}
-	err := executeChatChangedContract(t, caller, "message", "send", "--user", "123", "--text", "hello")
-	if err != nil {
-		t.Fatal(err)
+func TestCrossPlatformCoverageChatSendPassesUserDirectlyAsReceiverUID(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "text", args: []string{"message", "send", "--user", "6871365508", "--text", "hello"}},
+		{name: "media", args: []string{"message", "send", "--user", "6871365508", "--msg-type", "image", "--media-id", "@media"}},
 	}
-	if len(caller.calls) != 2 || caller.calls[1].toolName != "send_personal_message" {
-		t.Fatalf("calls = %#v", caller.calls)
-	}
-	if got := caller.calls[1].args["receiverOpenDingTalkId"]; got != "open-123" {
-		t.Fatalf("receiverOpenDingTalkId = %#v, args = %#v", got, caller.calls[1].args)
-	}
-	if _, leaked := caller.calls[1].args["receiverUid"]; leaked {
-		t.Fatalf("resolved send must not include receiverUid: %#v", caller.calls[1].args)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			caller := &chatChangedContractCaller{resolveUsers: true}
+			if err := executeChatChangedContract(t, caller, test.args...); err != nil {
+				t.Fatal(err)
+			}
+			if len(caller.calls) != 1 || caller.calls[0].toolName != "send_personal_message" {
+				t.Fatalf("calls = %#v", caller.calls)
+			}
+			if got := caller.calls[0].args["receiverUid"]; got != "6871365508" {
+				t.Fatalf("receiverUid = %#v, args = %#v", got, caller.calls[0].args)
+			}
+			if _, leaked := caller.calls[0].args["receiverOpenDingTalkId"]; leaked {
+				t.Fatalf("--user send must not include receiverOpenDingTalkId: %#v", caller.calls[0].args)
+			}
+		})
 	}
 }
 
@@ -974,15 +984,18 @@ func TestCrossPlatformCoverageChatCurrentUserSendAndReplyMentions(t *testing.T) 
 	}
 }
 
-func TestCrossPlatformCoverageChatSendFailsClosedWhenUserCannotResolve(t *testing.T) {
+func TestCrossPlatformCoverageChatSendPreservesExplicitOpenDingTalkIDRoute(t *testing.T) {
 	caller := &chatChangedContractCaller{}
-	err := executeChatChangedContract(t, caller, "message", "send", "--user", "123", "--text", "hello")
-	if err == nil || !strings.Contains(err.Error(), "pass --open-dingtalk-id instead") {
-		t.Fatalf("error = %v, want explicit resolution failure", err)
+	if err := executeChatChangedContract(t, caller, "message", "send", "--open-dingtalk-id", "D-recipient", "--text", "hello"); err != nil {
+		t.Fatal(err)
 	}
-	for _, call := range caller.calls {
-		if call.toolName == "send_personal_message" {
-			t.Fatalf("unresolved user must not be dispatched: %#v", caller.calls)
-		}
+	if len(caller.calls) != 1 || caller.calls[0].toolName != "send_personal_message" {
+		t.Fatalf("calls = %#v", caller.calls)
+	}
+	if got := caller.calls[0].args["receiverOpenDingTalkId"]; got != "D-recipient" {
+		t.Fatalf("receiverOpenDingTalkId = %#v, args = %#v", got, caller.calls[0].args)
+	}
+	if _, leaked := caller.calls[0].args["receiverUid"]; leaked {
+		t.Fatalf("--open-dingtalk-id send must not include receiverUid: %#v", caller.calls[0].args)
 	}
 }

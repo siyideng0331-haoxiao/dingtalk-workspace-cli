@@ -1390,20 +1390,8 @@ func stringFromJSONScalar(value any) string {
 
 func buildConversationTargetArgs(cmd *cobra.Command) (map[string]any, error) {
 	groupID := flagOrFallback(cmd, "group", "conversation-id", "id", "chat")
-	rawOpenDingTalkID, _ := cmd.Flags().GetString("open-dingtalk-id")
-	rawUserID := flagOrFallback(cmd, "user", "userId")
-
-	// All three params are passed through to the server; the server decides which to use.
-	userID := rawUserID
-	openDingTalkID := rawOpenDingTalkID
-	if openDingTalkID != "" && isNumericUserID(openDingTalkID) {
-		userID = openDingTalkID
-		openDingTalkID = ""
-	}
-	if userID != "" && !isNumericUserID(userID) {
-		openDingTalkID = userID
-		userID = ""
-	}
+	openDingTalkID, _ := cmd.Flags().GetString("open-dingtalk-id")
+	userID := flagOrFallback(cmd, "user", "userId")
 
 	toolArgs := map[string]any{}
 	if groupID != "" {
@@ -1416,6 +1404,16 @@ func buildConversationTargetArgs(cmd *cobra.Command) (map[string]any, error) {
 		toolArgs["openDingTalkId"] = openDingTalkID
 	}
 	return toolArgs, nil
+}
+
+func putChatMessageTarget(params map[string]any, groupID, userID, openDingTalkID string) {
+	if groupID != "" {
+		params["openConversationId"] = groupID
+	} else if userID != "" {
+		params["receiverUid"] = userID
+	} else {
+		params["receiverOpenDingTalkId"] = openDingTalkID
+	}
 }
 
 var chatValidGrantTypes = map[string]bool{
@@ -2649,7 +2647,7 @@ func newChatCommand() *cobra.Command {
 
 目标选择（三选一，必填）：
   --group              群聊 openconversation_id
-  --user               单聊接收人 userId
+  --user               单聊接收人稳定 userId/uid（数字员工使用 detail.robotUid）
   --open-dingtalk-id   单聊接收人 openDingTalkId
 
 纯文本 / Markdown 消息（默认）：
@@ -2668,7 +2666,7 @@ func newChatCommand() *cobra.Command {
   仅当上游已经提供有效 mediaId 时，使用 --msg-type image --media-id。
   当前 CLI 不提供本地文件到 mediaId 的上传能力。`,
 		Example: `  dws chat message send --group <openconversation_id> "hello"
-  dws chat message send --user <userId> "请查收"
+  dws chat message send --user <userId-or-uid> "请查收"
   dws chat message send --open-dingtalk-id <openDingTalkId> "请查收"
   dws chat message send --group <openconversation_id> --title "周报提醒" "请大家本周五前提交周报"
   # 发送本地图片或文件（图片会作为可下载的 file 附件发送）
@@ -2703,27 +2701,8 @@ func newChatCommand() *cobra.Command {
 			if specified == 0 {
 				return fmt.Errorf("--group, --user or --open-dingtalk-id is required")
 			}
-			if userID != "" && isOpenDingTalkID(userID) {
-				openDingTalkID = userID
-				userID = ""
-			}
-			// 数字 userId 尝试 lookup 转换为 openDingTalkId，让所有消息类型（文本/媒体）都走 openDingTalkId 路径。
-			// 真实后端的 send_personal_message 单聊路径稳定接受 receiverOpenDingTalkId；
-			// userId/uid 直传会被服务端判定为空，因此解析失败时直接返回明确错误。
-			if userID != "" {
-				resolved, err := resolveOpenDingTalkID(cmd.Context(), userID)
-				if err != nil {
-					return fmt.Errorf("cannot resolve --user %q to openDingTalkId: %w; pass --open-dingtalk-id instead", userID, err)
-				} else {
-					if commandBoolFlag(cmd, "debug") || commandBoolFlag(cmd, "verbose") {
-						fmt.Fprintf(os.Stderr, "[debug] resolved userID=%q to openDingTalkId=%q\n", userID, resolved)
-					}
-					openDingTalkID = resolved
-					userID = ""
-				}
-			}
 			if commandBoolFlag(cmd, "debug") || commandBoolFlag(cmd, "verbose") {
-				fmt.Fprintf(os.Stderr, "[debug] message send after normalization: groupID=%q userID=%q openDingTalkID=%q\n", groupID, userID, openDingTalkID)
+				fmt.Fprintf(os.Stderr, "[debug] message send target: groupID=%q userID=%q openDingTalkID=%q\n", groupID, userID, openDingTalkID)
 			}
 
 			mediaId, _ := cmd.Flags().GetString("media-id")
@@ -2818,11 +2797,7 @@ func newChatCommand() *cobra.Command {
 					"content":  contentJSON,
 					"clawType": clawType,
 				}
-				if groupID != "" {
-					params["openConversationId"] = groupID
-				} else {
-					params["receiverOpenDingTalkId"] = openDingTalkID
-				}
+				putChatMessageTarget(params, groupID, userID, openDingTalkID)
 				if msgUuid != "" {
 					params["uuid"] = msgUuid
 				}
@@ -2858,14 +2833,15 @@ func newChatCommand() *cobra.Command {
 				}
 				return callMCPTool("send_personal_message", newParams)
 			}
-			// 单聊：统一走 openDingTalkId
+			// 单聊严格保留显式 flag 的标识域：--user 使用 receiverUid，
+			// --open-dingtalk-id 使用 receiverOpenDingTalkId。
 			directContentJSON, _ := marshalJSONRaw(map[string]string{"title": title, "text": text})
 			newDirectParams := map[string]any{
-				"receiverOpenDingTalkId": openDingTalkID,
-				"msgType":                "markdown",
-				"content":                string(directContentJSON),
-				"clawType":               clawType,
+				"msgType":  "markdown",
+				"content":  string(directContentJSON),
+				"clawType": clawType,
 			}
+			putChatMessageTarget(newDirectParams, groupID, userID, openDingTalkID)
 			if msgUuid != "" {
 				newDirectParams["uuid"] = msgUuid
 			}
@@ -2902,6 +2878,7 @@ func newChatCommand() *cobra.Command {
 				{Name: "at-open-dingtalk-ids", Property: "atOpenDingTalkIds"},
 				{Name: "group", Property: "openConversationId"},
 				{Name: "open-dingtalk-id", Property: "receiverOpenDingTalkId"},
+				{Name: "user", Property: "receiverUid"},
 			},
 		},
 	})
@@ -4200,7 +4177,7 @@ chat message edit 或 chat message recall 的 --msg-id 和 --conversation-id。
 	_ = chatMessageListDirectCmd.Flags().MarkHidden("size")
 
 	chatMessageSendCmd.Flags().String("group", "", "群聊 openconversation_id（群聊时必填）")
-	chatMessageSendCmd.Flags().String("user", "", "单聊接收人 userId（单聊时与 --open-dingtalk-id 二选一）")
+	chatMessageSendCmd.Flags().String("user", "", "单聊接收人稳定 userId/uid（数字员工使用 detail.robotUid；与 --open-dingtalk-id 二选一）")
 	chatMessageSendCmd.Flags().String("open-dingtalk-id", "", "单聊接收人 openDingTalkId（单聊时与 --user 二选一）")
 	chatMessageSendCmd.Flags().String("title", "", "消息标题，显示在消息列表（可选，未指定时使用消息内容）")
 	// 别名注册: --text/--content/--body/--message/--markdown → 位置参数
