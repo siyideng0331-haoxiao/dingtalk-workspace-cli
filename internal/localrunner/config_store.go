@@ -40,11 +40,16 @@ func (c StoredRunnerConfig) Validate() error {
 	if !validLoopbackHTTPURL(c.AgentCardURL) || !validLoopbackOrigin(c.LoopbackBaseURL) || !validOpenAPIBase(c.OpenAPIBase) {
 		return ErrRunnerConfigInvalid
 	}
-	if len(c.AgentCardSHA256) != 64 {
+	const agentCardSHA256Prefix = "sha256:"
+	if !strings.HasPrefix(c.AgentCardSHA256, agentCardSHA256Prefix) {
 		return ErrRunnerConfigInvalid
 	}
-	decoded, err := hex.DecodeString(c.AgentCardSHA256)
-	if err != nil || len(decoded) != sha256.Size || c.AgentCardSHA256 != strings.ToLower(c.AgentCardSHA256) {
+	hexDigest := strings.TrimPrefix(c.AgentCardSHA256, agentCardSHA256Prefix)
+	if len(hexDigest) != sha256.Size*2 {
+		return ErrRunnerConfigInvalid
+	}
+	decoded, err := hex.DecodeString(hexDigest)
+	if err != nil || len(decoded) != sha256.Size || hexDigest != strings.ToLower(hexDigest) {
 		return ErrRunnerConfigInvalid
 	}
 	return nil

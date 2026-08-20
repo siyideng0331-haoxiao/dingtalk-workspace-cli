@@ -48,6 +48,7 @@ func TestEndpointBearerKeyringStoresLoadsAndRemovesWithoutExposingAccountMateria
 func TestRunnerConfigStorePersistsOnlyNonSensitiveFields(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "local-runners")
 	store := NewRunnerConfigStore(root)
+	agentCardSHA256 := "sha256:" + strings.Repeat("a", 64)
 	config := StoredRunnerConfig{
 		RunnerID:        "runner-1",
 		EndpointID:      "endpoint-1",
@@ -56,7 +57,7 @@ func TestRunnerConfigStorePersistsOnlyNonSensitiveFields(t *testing.T) {
 		AgentCardURL:    "http://127.0.0.1:8080/card",
 		LoopbackBaseURL: "http://127.0.0.1:8080",
 		OpenAPIBase:     "https://api.dingtalk.com",
-		AgentCardSHA256: strings.Repeat("a", 64),
+		AgentCardSHA256: agentCardSHA256,
 	}
 	if err := store.Save(config); err != nil {
 		t.Fatal(err)
@@ -67,6 +68,9 @@ func TestRunnerConfigStorePersistsOnlyNonSensitiveFields(t *testing.T) {
 	}
 	if *loaded != config {
 		t.Fatalf("loaded config = %#v, want %#v", loaded, config)
+	}
+	if loaded.AgentCardSHA256 != agentCardSHA256 {
+		t.Fatalf("loaded Agent Card digest = %q, want %q", loaded.AgentCardSHA256, agentCardSHA256)
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != 1 {
@@ -93,6 +97,34 @@ func TestRunnerConfigStorePersistsOnlyNonSensitiveFields(t *testing.T) {
 	}
 	if _, err := store.Load("runner-1"); !errors.Is(err, ErrRunnerConfigNotFound) {
 		t.Fatalf("load after delete error = %v", err)
+	}
+}
+
+func TestRunnerConfigRejectsNonContractAgentCardSHA256(t *testing.T) {
+	valid := StoredRunnerConfig{
+		RunnerID:        "runner-1",
+		EndpointID:      "endpoint-1",
+		LocalAgentID:    "agent-1",
+		DisplayName:     "Local agent",
+		AgentCardURL:    "http://127.0.0.1:8080/card",
+		LoopbackBaseURL: "http://127.0.0.1:8080",
+		OpenAPIBase:     "https://api.dingtalk.com",
+		AgentCardSHA256: "sha256:" + strings.Repeat("a", 64),
+	}
+	for name, digest := range map[string]string{
+		"bare hex":     strings.Repeat("a", 64),
+		"wrong prefix": "sha-256:" + strings.Repeat("a", 64),
+		"wrong length": "sha256:" + strings.Repeat("a", 63),
+		"uppercase":    "sha256:" + strings.Repeat("A", 64),
+		"non hex":      "sha256:" + strings.Repeat("g", 64),
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := valid
+			candidate.AgentCardSHA256 = digest
+			if err := candidate.Validate(); !errors.Is(err, ErrRunnerConfigInvalid) {
+				t.Fatalf("Validate() error = %v, want ErrRunnerConfigInvalid", err)
+			}
+		})
 	}
 }
 

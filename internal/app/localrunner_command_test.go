@@ -346,7 +346,7 @@ func (r *recordingLocalRunnerRuntime) Expose(_ context.Context, options localRun
 func (r *recordingLocalRunnerRuntime) Status(context.Context, string) (*localRunnerStatusResult, error) {
 	r.lastCall = "status"
 	return &localRunnerStatusResult{
-		Runner: &localrunner.RunnerStatusData{RunnerID: "runner-1", EndpointID: "endpoint-1", LocalAgentID: "agent-1", DisplayName: "Local agent", Status: localrunner.RunnerStatusActive, AgentCardURL: "https://api.example.test/card", AgentCardSHA256: "abc123"},
+		Runner: &localrunner.RunnerStatusData{RunnerID: "runner-1", EndpointID: "endpoint-1", LocalAgentID: "agent-1", DisplayName: "Local agent", Status: localrunner.RunnerStatusActive, AgentCardURL: "https://api.example.test/card", AgentCardSHA256: "sha256:" + strings.Repeat("a", 64)},
 		Connection: &localrunner.ConnectionStatusData{RunnerID: "runner-1", EndpointID: "endpoint-1"},
 	}, nil
 }
@@ -396,7 +396,7 @@ func testLocalRunnerStartResult() *localRunnerStartLocalResult {
 		},
 		ConnectOptions: localRunnerConnectOptions{
 			RunnerID: "runner-1", EndpointID: "endpoint-1", TargetURL: "http://127.0.0.1:8080/rpc",
-			AgentCardSHA256: strings.Repeat("a", 64), MaxConcurrent: 4, Streaming: true,
+			AgentCardSHA256: "sha256:" + strings.Repeat("a", 64), MaxConcurrent: 4, Streaming: true,
 		},
 	}
 }

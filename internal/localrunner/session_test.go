@@ -34,6 +34,7 @@ func TestWSSDialAdapterUsesTicketOnlyInAuthorizationAndConsumesOnFailure(t *test
 }
 
 func TestTunnelSessionSendsHelloAcceptsAckAndAnswersHeartbeat(t *testing.T) {
+	agentCardSHA256 := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	codec := NewTunnelCodec(DefaultMaxFrameBytes)
 	ack := validHelloAck()
 	ack.Sequence = 0
@@ -49,7 +50,7 @@ func TestTunnelSessionSendsHelloAcceptsAckAndAnswersHeartbeat(t *testing.T) {
 	session := NewTunnelSession(testIdentity(), state, &staticSocketDialer{socket: socket}, codec)
 	session.now = func() time.Time { return time.Unix(100, 0) }
 	err := session.RunAttempt(context.Background(), *data, HelloConfig{
-		AgentCardSHA256: "abc123",
+		AgentCardSHA256: agentCardSHA256,
 		MaxConcurrent:   4,
 		Streaming:       true,
 	}, handler)
@@ -61,7 +62,7 @@ func TestTunnelSessionSendsHelloAcceptsAckAndAnswersHeartbeat(t *testing.T) {
 		t.Fatalf("writes = %d", len(writes))
 	}
 	hello, err := codec.DecodeText(writes[0].data)
-	if err != nil || hello.Type != FrameHello || string(hello.Attributes["agentCardSha256"]) != `"abc123"` || string(hello.Attributes["maxConcurrent"]) != `4` || string(hello.Attributes["streaming"]) != `true` {
+	if err != nil || hello.Type != FrameHello || string(hello.Attributes["agentCardSha256"]) != `"`+agentCardSHA256+`"` || string(hello.Attributes["maxConcurrent"]) != `4` || string(hello.Attributes["streaming"]) != `true` {
 		t.Fatalf("hello = %#v, error = %v", hello, err)
 	}
 	heartbeatAck, err := codec.DecodeText(writes[1].data)
