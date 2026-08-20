@@ -910,6 +910,79 @@ Implementation and verification steps:
   `internal/localrunner` regression, independent temporary-output build, and
   tracked/no-index diff checks without a formatter.
 
+### 10.10 In-process OpenCode project A2A agent
+
+Extend the same long-running entry point with the exact built-in reference:
+
+```text
+dws deap runtime start-local opencode --workdir <project> [--model <provider/model>]
+```
+
+`--workdir` is required only for `opencode`. The command resolves a relative
+value against the current directory, cleans it, requires an existing directory,
+and passes only the absolute value into the runtime. Empty directories are
+valid. DWS starts `opencode serve` with that directory as its process working
+directory, so OpenCode remains responsible for its normal `AGENTS.md`, skill,
+and project discovery. `--model` is optional and is forwarded to the existing
+OpenCode message API; an omitted value preserves OpenCode's default-model
+selection. The existing `test-echo` and lexical-loopback Card URL forms remain
+unchanged and reject these OpenCode-only flags.
+
+`internal/helpers/opencode_local.go` is a narrow façade over the existing
+`opencodeForwarder`, `opencodeServer`, HTTP health/session/message client, and
+process cleanup. It accepts only an already-normalized absolute directory,
+eagerly starts and health-checks the existing server, keeps a private in-memory
+context-to-session map, returns the final unbranded text, and exposes one
+idempotent close. It does not introduce a second OpenCode HTTP client or persist
+session IDs, prompts, server passwords, response bodies, or environment.
+
+`internal/app/localrunner_opencode_agent.go` owns a separate bounded loopback
+A2A surface and does not change the `test-echo` implementation. Its Card is A2A
+`protocolVersion="0.3.0"`, agent `version="1.0.0"`, streaming-capable, text-only,
+and contains neither the project path nor an authentication declaration. It
+accepts only JSON-RPC 2.0 `message/send` and `message/stream` requests with user
+Message text parts. Ordered text parts are joined with one newline. A nonblank
+`contextId` is the stable OpenCode session key; a missing context uses a stable
+adapter-instance default that cannot cross another process/endpoint instance.
+Replies use a new agent message ID and preserve the selected context. Stream
+mode emits exactly one final SSE `data:` event because the existing OpenCode
+HTTP API supplies a final response rather than token deltas.
+
+Invalid requests and unsupported parts use static JSON-RPC errors. Cancellation,
+deadline, and other OpenCode failures map to distinct static categories without
+including prompts, response bodies, server credentials, environment, headers,
+or raw errors. The adapter limits request bodies, binds only loopback, exposes
+only the Card and RPC paths, and closes HTTP ingress plus the DWS-owned OpenCode
+child exactly once on registration failure, Connect return, or context-driven
+command exit.
+
+The default local agent ID is `opencode-<first 16 lowercase sha256 hex>` of the
+normalized absolute workdir, independent of the random loopback port. An
+explicit ID remains allowed. Stored config adds only
+`agentKind="opencode"` and the absolute `workDir`; model and all credentials are
+not persisted. Resume first requires the same kind/workdir and then reuses the
+existing strict runner/endpoint/origin/status/raw-digest/public-Card semantic
+checks. A matching binding reopens the stored loopback origin without Create;
+any kind/workdir or existing remote drift fails closed before an unknown project
+can be attached. Control OAuth, endpoint-bearer compatibility storage, WSS
+ticket use, tunnel frames, Relay Card normalization, and unauthenticated public
+RPC semantics are unchanged.
+
+Implementation and verification steps:
+
+- [x] Add helper façade RED/GREEN coverage for context session isolation, raw
+  replies, safe errors, strict workdir validation, and existing forwarder
+  regressions.
+- [x] Add real-loopback adapter RED/GREEN coverage for Card, send, one final SSE
+  event, text-only validation, context mapping, cancellation/timeout/error
+  redaction, and one-time cleanup.
+- [x] Add command/config/runtime RED/GREEN coverage for Help/Schema flags,
+  relative normalization, empty-directory startup, stable ID, registration
+  cleanup, stored kind/workdir drift rejection, and no-create/no-update resume.
+- [ ] Run final focused, race, full related-package, Schema drift, independent
+  build, and Git diff gates without a formatter; record exact evidence in the
+  delivery report.
+
 ## 11. Protocol and Plan Change History
 
 | Date | Change | Reason |
@@ -948,3 +1021,4 @@ Implementation and verification steps:
 | 2026-08-21 | Added one safe console-visible completion record at the shared tunnel-to-loopback proxy boundary for success, streaming, error, cancellation, rejection, and disconnect paths. | Successful pre-release RPC and SSE traffic was otherwise invisible after the initial configuration summary; fixed normalized metadata provides operational evidence without exposing request IDs, endpoint IDs, query, headers, credentials, bodies, response content, or raw error text, and does not alter tunnel frames. |
 | 2026-08-21 | Changed stored-binding Card recovery to bind the server's raw public-Card digest while using bounded credential-free HTTPS fetches and JSON semantic equality for change detection and post-update verification. | Jackson and Go serialize equivalent object keys in different orders; comparing their raw digests triggered an unnecessary PUT and then rejected the unchanged server digest, so raw hashes remain concurrency evidence while key order is no longer treated as an A2A Card change. |
 | 2026-08-21 | Removed CLI-authored `localRunnerBearer`, top-level authentication/security declarations, each `skills[*].security` override, and the bearer/keyring block from the published-Card expectation and `start-local` summary while retaining business `metadata.security` and redacted legacy endpoint-bearer response storage compatibility. | The Relay and the existing digital-employee A2A chain are now explicitly decoupled: public Card/RPC is unauthenticated at both Card and AgentSkill levels, WSS keeps OAuth plus its connection ticket, and a Relay endpoint bearer must not be presented as a local Agent startup requirement or exported configuration. |
+| 2026-08-21 | Added `start-local opencode --workdir <project>` with an in-process A2A 0.3 adapter over the existing OpenCode serve/session/message lifecycle, stable workdir identity, optional model override, and guarded stored-binding recovery. | Users need one DWS command to expose a real project reasoning agent rather than an echo or separately managed HTTP service; the thin façade keeps OpenCode discovery and cleanup in the mature implementation while leaving Relay, control OAuth, WSS tickets, tunnel frames, and public RPC authentication semantics unchanged. |
