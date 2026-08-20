@@ -63,6 +63,30 @@ func TestLocalRunnerCommandSkeletonDelegatesWithoutSecretOutput(t *testing.T) {
 	}
 }
 
+func TestMergedDEAPRootKeepsLocalRunnerAndManagePublish(t *testing.T) {
+	root := NewRootCommand()
+	deapCommands := 0
+	for _, command := range root.Commands() {
+		if command.Name() == "deap" {
+			deapCommands++
+		}
+	}
+	if deapCommands != 1 {
+		t.Fatalf("top-level deap commands = %d, want 1", deapCommands)
+	}
+	for _, path := range [][]string{
+		{"deap", "local-runner", "expose"},
+		{"deap", "runtime", "start-local"},
+		{"deap", "manage", "publish"},
+		{"deap", "skill", "query"},
+	} {
+		command, remaining, err := root.Find(path)
+		if err != nil || len(remaining) != 0 || command == nil {
+			t.Fatalf("command %v resolution = command %v remaining %v error %v", path, command, remaining, err)
+		}
+	}
+}
+
 func TestLocalRunnerExposeUsesFrozenLowerCamelCaseJSON(t *testing.T) {
 	runtime := &recordingLocalRunnerRuntime{}
 	testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })

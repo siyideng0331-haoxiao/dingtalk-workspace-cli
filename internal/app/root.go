@@ -462,6 +462,7 @@ func newRootCommandWithEngine(rootCtx context.Context, engine *pipeline.Engine, 
 	patCaller := newRecordingToolCaller(newToolCallerAdapter(runner, flags))
 	mcpCmd.AddCommand(newMCPURLGroup(patCaller))
 
+	localRunnerDEAP := newDEAPCommand()
 	utilityCommands := []*cobra.Command{
 		newAuthCommand(patCaller),
 		newProfileCommand(),
@@ -474,7 +475,6 @@ func newRootCommandWithEngine(rootCtx context.Context, engine *pipeline.Engine, 
 		newRecoveryCommand(),
 		newEventCommand(),
 		newAuditCommand(),
-		newDEAPCommand(),
 		newCompletionCommand(root),
 		newUpgradeCommand(),
 		newVersionCommand(),
@@ -485,14 +485,16 @@ func newRootCommandWithEngine(rootCtx context.Context, engine *pipeline.Engine, 
 	}
 	root.AddCommand(utilityCommands...)
 
+	var publicCommands []*cobra.Command
 	if declarationOnly {
 		// Schema / surface assembly: mount the reviewed tree only. Do not
 		// injectStaticServers or InitDeps — those mutate process globals and
 		// would clobber a live runtime's caller and plugin endpoints.
-		root.AddCommand(mountLegacyPublicCommands(runner, loadRuntimeExtensions)...)
+		publicCommands = mountLegacyPublicCommands(runner, loadRuntimeExtensions)
 	} else {
-		root.AddCommand(newLegacyPublicCommands(runner, patCaller, loadRuntimeExtensions)...)
+		publicCommands = newLegacyPublicCommands(runner, patCaller, loadRuntimeExtensions)
 	}
+	root.AddCommand(mergeTopLevelCommands(append(publicCommands, localRunnerDEAP))...)
 
 	// PAT authorization commands (open-source core)
 	pat.RegisterCommands(root, patCaller)
