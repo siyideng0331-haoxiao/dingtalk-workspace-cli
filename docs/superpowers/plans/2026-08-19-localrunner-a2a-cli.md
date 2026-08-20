@@ -788,16 +788,26 @@ exactly one required positional loopback Card URL plus optional
 derives a stable `local-<sha256-prefix>` ID from the normalized Card URL and
 uses the validated Card's non-blank `name`.
 
-The runtime preparation stage reads and validates the Card once, creates the
-Runner/Endpoint through the existing control client, transfers the one-time
-endpoint bearer directly to the system keyring, and saves the same
-non-sensitive config used by `connect`. It returns only a sanitized A2A summary
-and private in-process connect options. The command JSON-encodes that summary
-before invoking the existing blocking `Connect` path, so users can copy the
-public configuration while the WSS/proxy stays active. The summary is exactly
-lowerCamelCase and includes `type="A2A"`, public `agentCardUrl`, credential-free
-Bearer metadata (`system-keyring`, never exported), and the singular
-Runner/Endpoint with pre-connection `CONNECTING` status.
+The runtime preparation stage reads and validates the Card once, then performs
+a unique validated config lookup by `localAgentId`. If no stored binding
+exists, it creates the Runner/Endpoint through the existing control client,
+transfers the one-time endpoint bearer directly to the system keyring, and
+saves the same non-sensitive config used by `connect`. If a binding exists, it
+does not call CreateRunner: it GETs the stored Runner, requires exact
+runner/endpoint/local-agent/display-name/hash identity, recomputes the public
+Card hash from the current local Card, and requires the requested Card URL,
+loopback origin, and OpenAPI base to match the stored config. Any invalid,
+duplicate, or mismatched candidate fails closed instead of creating a second
+binding. The store uses a validated directory scan rather than a second
+persistent index, avoiding index/config divergence.
+
+Both paths return only a sanitized A2A summary and private in-process connect
+options. The command JSON-encodes that summary before invoking the existing
+blocking `Connect` path, so users can copy the public configuration while the
+WSS/proxy stays active. The summary is exactly lowerCamelCase and includes
+`type="A2A"`, public `agentCardUrl`, credential-free Bearer metadata
+(`system-keyring`, never exported), and the singular Runner/Endpoint with
+pre-connection `CONNECTING` status.
 
 No failure after registration implicitly calls `Revoke`: a failed connection
 returns its stable error while config and keyring state remain available for
@@ -835,8 +845,10 @@ reference `test-echo` starts a self-contained acceptance agent inside the same
 dws process. No Python, child process, local manifest, or general agent-ID
 resolver is introduced in this phase.
 
-`internal/app/localrunner_echo_agent.go` owns one bounded HTTP server created by
-`net.Listen("tcp", "127.0.0.1:0")`. It exposes only:
+`internal/app/localrunner_echo_agent.go` owns one bounded HTTP server. A first
+registration uses `net.Listen("tcp", "127.0.0.1:0")`; recovery of a stored
+`test-echo` binding reopens its exact validated loopback origin so the persisted
+Card URL and proxy target remain unchanged. It exposes only:
 
 - `GET /.well-known/agent-card.json`, returning a dynamic v0.3.0 Card whose
   callable JSON-RPC URL is the server's exact loopback `/rpc` URL;
@@ -908,3 +920,4 @@ Implementation and verification steps:
 | 2026-08-20 | Corrected persisted and HELLO `agentCardSha256` handling to require and preserve the frozen `sha256:<64 lowercase hex>` representation rather than a bare 64-character digest. | OpenAPI returns and compares the prefixed digest; accepting only bare hex caused `start-local` to fail locally after successful registration, while stripping or rebuilding the prefix would risk handshake identity drift. |
 | 2026-08-20 | Superseded the control-header portion of the Studio migration: LocalRunner control calls now send only the DWS user OAuth bearer and omit optional `X-Dingtalk-Corp-Id` / `X-Dingtalk-User-Id` caller cross-check headers. | Pre-release traces proved bearer verification, trusted identity resolution, employee lookup, and corp conversion succeeded while both create attempts failed `dingtalk_user_header_mismatch`; CLI `TokenData.UserID` and Studio's trusted numeric `uid` have different semantics, so the client must not send an optional exact-match claim it cannot prove. |
 | 2026-08-20 | Made the CLI actively send connection-scoped `heartbeat` frames every `heartbeatIntervalMs=15000` after `hello_ack`, accept sequenced `heartbeat_ack`, and stop the ticker with the WSS attempt lifecycle. | Pre-release evidence showed the server renews its 45-second lease only when it receives a client heartbeat; the prior passive-only client let the lease expire, made public RPC report offline, and then reconnected despite an otherwise healthy socket. |
+| 2026-08-20 | Made `start-local` recover one unique valid `StoredRunnerConfig` by `localAgentId`, validate it against the current Card and authenticated Runner view, and skip CreateRunner; stored `test-echo` bindings reopen their original loopback origin. | Re-running the one-command UX previously attempted a duplicate registration and received `binding already exists`; idempotent recovery must reuse the existing one-to-one binding while failing closed on identity, target, Card, hash, origin, or control-base drift. |

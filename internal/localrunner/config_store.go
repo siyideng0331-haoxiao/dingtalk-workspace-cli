@@ -88,13 +88,50 @@ func (s *RunnerConfigStore) Load(runnerID string) (*StoredRunnerConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: load", ErrRunnerConfigInvalid)
 	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	var value StoredRunnerConfig
-	if err := decoder.Decode(&value); err != nil || decoder.Decode(&struct{}{}) != io.EOF || value.Validate() != nil || value.RunnerID != strings.TrimSpace(runnerID) {
+	value, err := decodeStoredRunnerConfig(raw)
+	if err != nil || value.RunnerID != strings.TrimSpace(runnerID) {
 		return nil, ErrRunnerConfigInvalid
 	}
-	return &value, nil
+	return value, nil
+}
+
+func (s *RunnerConfigStore) FindByLocalAgentID(localAgentID string) (*StoredRunnerConfig, error) {
+	localAgentID = strings.TrimSpace(localAgentID)
+	if s == nil || strings.TrimSpace(s.root) == "" || s.root == "." || localAgentID == "" {
+		return nil, ErrRunnerConfigInvalid
+	}
+	entries, err := os.ReadDir(s.root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ErrRunnerConfigNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: find", ErrRunnerConfigInvalid)
+	}
+	var found *StoredRunnerConfig
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(s.root, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("%w: find", ErrRunnerConfigInvalid)
+		}
+		value, err := decodeStoredRunnerConfig(raw)
+		if err != nil || filepath.Base(s.path(value.RunnerID)) != entry.Name() {
+			return nil, ErrRunnerConfigInvalid
+		}
+		if strings.TrimSpace(value.LocalAgentID) != localAgentID {
+			continue
+		}
+		if value.LocalAgentID != localAgentID || found != nil {
+			return nil, ErrRunnerConfigInvalid
+		}
+		found = value
+	}
+	if found == nil {
+		return nil, ErrRunnerConfigNotFound
+	}
+	return found, nil
 }
 
 func (s *RunnerConfigStore) Delete(runnerID string) error {
@@ -111,6 +148,16 @@ func (s *RunnerConfigStore) Delete(runnerID string) error {
 func (s *RunnerConfigStore) path(runnerID string) string {
 	digest := sha256.Sum256([]byte(strings.TrimSpace(runnerID)))
 	return filepath.Join(s.root, fmt.Sprintf("%x.json", digest))
+}
+
+func decodeStoredRunnerConfig(raw []byte) (*StoredRunnerConfig, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var value StoredRunnerConfig
+	if err := decoder.Decode(&value); err != nil || decoder.Decode(&struct{}{}) != io.EOF || value.Validate() != nil {
+		return nil, ErrRunnerConfigInvalid
+	}
+	return &value, nil
 }
 
 func validLoopbackOrigin(raw string) bool {

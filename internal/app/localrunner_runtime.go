@@ -124,9 +124,26 @@ func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, op
 	agentRef := strings.TrimSpace(options.AgentRef)
 	agentCardURL := agentRef
 	identitySeed := agentRef
+	var stored *localrunner.StoredRunnerConfig
 	var closeAgent func() error
 	if agentRef == localRunnerTestEchoRef {
-		agent, err := localRunnerTestEchoAgentStarter()
+		storedLocalAgentID := strings.TrimSpace(options.LocalAgentID)
+		if storedLocalAgentID == "" {
+			storedLocalAgentID = localRunnerTestEchoRef
+		}
+		candidate, findErr := r.configs.FindByLocalAgentID(storedLocalAgentID)
+		if findErr == nil {
+			stored = candidate
+		} else if !errors.Is(findErr, localrunner.ErrRunnerConfigNotFound) {
+			return nil, findErr
+		}
+		var agent *localRunnerBuiltInAgent
+		var err error
+		if stored != nil {
+			agent, err = localRunnerTestEchoAgentRestarter(stored.LoopbackBaseURL)
+		} else {
+			agent, err = localRunnerTestEchoAgentStarter()
+		}
 		if err != nil {
 			return nil, ErrLocalRunnerRuntimeInvalid
 		}
@@ -149,26 +166,39 @@ func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, op
 	if err != nil {
 		return nil, err
 	}
+	if stored == nil {
+		candidate, findErr := r.configs.FindByLocalAgentID(localAgentID)
+		if findErr == nil {
+			stored = candidate
+		} else if !errors.Is(findErr, localrunner.ErrRunnerConfigNotFound) {
+			return nil, findErr
+		}
+	}
 	control, err := r.controlClient(options.OpenAPIBase)
 	if err != nil {
 		return nil, err
 	}
-	created, err := r.exposeLocalAgentCard(ctx, localRunnerExposeOptions{
+	exposeOptions := localRunnerExposeOptions{
 		LocalAgentID: localAgentID,
 		DisplayName:  displayName,
 		AgentCardURL: agentCardURL,
 		OpenAPIBase:  options.OpenAPIBase,
-	}, rawCard, control)
-	if err != nil {
-		return nil, err
-	}
-	stored, err := r.configs.Load(created.RunnerID)
-	if err != nil {
-		return nil, err
 	}
 	targetURL, err := localrunner.LocalAgentCardTarget(rawCard)
 	if err != nil {
 		return nil, localrunner.ErrInvalidAgentCard
+	}
+	var created *localrunner.CreatedRunner
+	if stored != nil {
+		created, err = r.recoverStoredLocalAgentCard(ctx, exposeOptions, rawCard, targetURL, stored, control)
+	} else {
+		created, err = r.exposeLocalAgentCard(ctx, exposeOptions, rawCard, control)
+		if err == nil {
+			stored, err = r.configs.Load(created.RunnerID)
+		}
+	}
+	if err != nil {
+		return nil, err
 	}
 	result := &localRunnerStartLocalResult{
 		Summary: localRunnerA2AConfiguration{
@@ -189,6 +219,31 @@ func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, op
 	}
 	keepAgent = true
 	return result, nil
+}
+
+func (r *productionLocalRunnerCommandRuntime) recoverStoredLocalAgentCard(ctx context.Context, options localRunnerExposeOptions, rawCard json.RawMessage, targetURL string, stored *localrunner.StoredRunnerConfig, control *localrunner.HTTPControlClient) (*localrunner.CreatedRunner, error) {
+	if r == nil || stored == nil || control == nil || stored.Validate() != nil || strings.TrimSpace(options.LocalAgentID) != stored.LocalAgentID || strings.TrimSpace(options.DisplayName) != stored.DisplayName || strings.TrimSpace(options.AgentCardURL) != stored.AgentCardURL || strings.TrimRight(strings.TrimSpace(options.OpenAPIBase), "/") != stored.OpenAPIBase || !sameLocalRunnerOrigin(stored.LoopbackBaseURL, targetURL) {
+		return nil, ErrLocalRunnerRuntimeInvalid
+	}
+	view, err := control.GetRunner(ctx, stored.RunnerID)
+	if err != nil {
+		return nil, err
+	}
+	if view.RunnerID != stored.RunnerID || view.EndpointID != stored.EndpointID || view.LocalAgentID != stored.LocalAgentID || view.DisplayName != stored.DisplayName || view.Status != localrunner.RunnerStatusActive || view.AgentCardSHA256 != stored.AgentCardSHA256 {
+		return nil, ErrLocalRunnerRuntimeInvalid
+	}
+	publicBaseURL, err := localRunnerOrigin(view.AgentCardURL)
+	if err != nil {
+		return nil, ErrLocalRunnerRuntimeInvalid
+	}
+	snapshot, err := localrunner.RewriteAgentCard(rawCard, stored.EndpointID, publicBaseURL)
+	if err != nil || "sha256:"+snapshot.SHA256 != stored.AgentCardSHA256 {
+		return nil, ErrLocalRunnerRuntimeInvalid
+	}
+	return &localrunner.CreatedRunner{
+		RunnerID: stored.RunnerID, EndpointID: stored.EndpointID,
+		AgentCardURL: view.AgentCardURL, Status: localrunner.RunnerStatusActive,
+	}, nil
 }
 
 func (r *productionLocalRunnerCommandRuntime) exposeLocalAgentCard(ctx context.Context, options localRunnerExposeOptions, rawCard json.RawMessage, control *localrunner.HTTPControlClient) (*localrunner.CreatedRunner, error) {

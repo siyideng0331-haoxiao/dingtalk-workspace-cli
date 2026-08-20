@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ const (
 )
 
 var localRunnerTestEchoAgentStarter = startLocalRunnerTestEchoAgent
+var localRunnerTestEchoAgentRestarter = startLocalRunnerTestEchoAgentAt
 
 type localRunnerBuiltInAgent struct {
 	cardURL   string
@@ -33,7 +35,24 @@ type localRunnerBuiltInAgent struct {
 }
 
 func startLocalRunnerTestEchoAgent() (*localRunnerBuiltInAgent, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	return startLocalRunnerTestEchoAgentOn("127.0.0.1:0")
+}
+
+func startLocalRunnerTestEchoAgentAt(rawOrigin string) (*localRunnerBuiltInAgent, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawOrigin))
+	if err != nil || parsed.Scheme != "http" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return nil, errors.New("invalid_local_runner_test_echo_origin")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	ip := net.ParseIP(host)
+	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return nil, errors.New("invalid_local_runner_test_echo_origin")
+	}
+	return startLocalRunnerTestEchoAgentOn(parsed.Host)
+}
+
+func startLocalRunnerTestEchoAgentOn(listenAddress string) (*localRunnerBuiltInAgent, error) {
+	listener, err := net.Listen("tcp", listenAddress)
 	if err != nil {
 		return nil, err
 	}

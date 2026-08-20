@@ -211,6 +211,150 @@ func TestProductionLocalRunnerStartLocalPreparesOneCardReadAndSanitizedConnect(t
 	}
 }
 
+func TestProductionLocalRunnerStartLocalReusesStoredBuiltInBindingWithoutCreate(t *testing.T) {
+	previousAgent, err := startLocalRunnerTestEchoAgent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousCardURL := previousAgent.CardURL()
+	previousRPCURL := previousAgent.RPCURL()
+	rawCard := readLocalRunnerTestCard(t, previousCardURL)
+	snapshot, err := localrunner.RewriteAgentCard(rawCard, "endpoint-existing", "https://pre-deap.dingtalk.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := previousAgent.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stored := localrunner.StoredRunnerConfig{
+		RunnerID: "runner-existing", EndpointID: "endpoint-existing",
+		LocalAgentID: "test-echo-20260820", DisplayName: "DWS Test Echo 20260820",
+		AgentCardURL: previousCardURL, LoopbackBaseURL: strings.TrimSuffix(previousRPCURL, localRunnerTestEchoRPCPath),
+		OpenAPIBase: "https://pre-deap-open-api.dingtalk.com", AgentCardSHA256: "sha256:" + snapshot.SHA256,
+	}
+	createCalls := 0
+	getCalls := 0
+	controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method == http.MethodPost {
+			createCalls++
+			return nil, errors.New("create must not be called for stored binding")
+		}
+		getCalls++
+		body := `{"success":true,"data":{"runnerId":"runner-existing","endpointId":"endpoint-existing","localAgentId":"test-echo-20260820","displayName":"DWS Test Echo 20260820","status":"ACTIVE","agentCardUrl":"https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-existing/.well-known/agent-card.json","agentCardSha256":"` + stored.AgentCardSHA256 + `","connected":false,"lastHeartbeatAtEpochSecond":null}}`
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+	})
+	credentials := localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)})
+	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+		ConfigDir: t.TempDir(), ControlHTTPClient: controlClient,
+		OAuth: staticLocalRunnerOAuth("oauth-token"), Credentials: credentials,
+		OwnerIdentity: testLocalRunnerOwnerIdentity,
+	})
+	if err := runtime.configs.Save(stored); err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.StoreEndpointBearer(context.Background(), stored.RunnerID, stored.EndpointID, []byte("existing-endpoint-secret")); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
+		AgentRef: localRunnerTestEchoRef, LocalAgentID: stored.LocalAgentID, DisplayName: stored.DisplayName,
+		OpenAPIBase: stored.OpenAPIBase, MaxConcurrent: 3, Streaming: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Close()
+	if createCalls != 0 || getCalls != 1 {
+		t.Fatalf("control calls = create %d get %d, want 0/1", createCalls, getCalls)
+	}
+	if result.Summary.LocalRunner.RunnerID != stored.RunnerID || result.Summary.LocalRunner.EndpointID != stored.EndpointID || result.ConnectOptions.RunnerID != stored.RunnerID || result.ConnectOptions.EndpointID != stored.EndpointID {
+		t.Fatalf("recovered binding = summary %#v connect %#v", result.Summary.LocalRunner, result.ConnectOptions)
+	}
+	if result.ConnectOptions.TargetURL != previousRPCURL || result.ConnectOptions.AgentCardSHA256 != stored.AgentCardSHA256 {
+		t.Fatalf("recovered connect options = %#v", result.ConnectOptions)
+	}
+	response := postLocalRunnerTestEcho(t, result.ConnectOptions.TargetURL, []byte(`{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"kind":"message","role":"user","messageId":"m","parts":[{"kind":"text","text":"recovered"}]}}}`))
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("recovered built-in RPC status = %d", response.StatusCode)
+	}
+}
+
+func TestProductionLocalRunnerStartLocalRejectsStoredBindingDriftWithoutCreate(t *testing.T) {
+	var localAgent *httptest.Server
+	localAgent = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"name":"Stable agent","protocolVersion":"1.0","capabilities":{},"skills":[],"url":"` + localAgent.URL + `/rpc"}`))
+	}))
+	defer localAgent.Close()
+	cardURL := localAgent.URL + "/card"
+	rawCard := readLocalRunnerTestCard(t, cardURL)
+	snapshot, err := localrunner.RewriteAgentCard(rawCard, "endpoint-existing", "https://pre-deap.dingtalk.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := localrunner.StoredRunnerConfig{
+		RunnerID: "runner-existing", EndpointID: "endpoint-existing",
+		LocalAgentID: "agent-existing", DisplayName: "Stable agent",
+		AgentCardURL: cardURL, LoopbackBaseURL: localAgent.URL,
+		OpenAPIBase: "https://pre-deap-open-api.dingtalk.com", AgentCardSHA256: "sha256:" + snapshot.SHA256,
+	}
+	for _, testCase := range []struct {
+		name             string
+		mutateConfig     func(*localrunner.StoredRunnerConfig)
+		openAPIBase      string
+		viewLocalAgentID string
+	}{
+		{name: "server local agent identity", viewLocalAgentID: "other-agent"},
+		{name: "target origin", mutateConfig: func(value *localrunner.StoredRunnerConfig) { value.LoopbackBaseURL = "http://127.0.0.1:1" }},
+		{name: "agent card location", mutateConfig: func(value *localrunner.StoredRunnerConfig) { value.AgentCardURL = localAgent.URL + "/other-card" }},
+		{name: "agent card hash", mutateConfig: func(value *localrunner.StoredRunnerConfig) { value.AgentCardSHA256 = "sha256:" + strings.Repeat("b", 64) }},
+		{name: "OpenAPI base", openAPIBase: "https://other-open-api.example.test"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stored := base
+			if testCase.mutateConfig != nil {
+				testCase.mutateConfig(&stored)
+			}
+			viewLocalAgentID := base.LocalAgentID
+			if testCase.viewLocalAgentID != "" {
+				viewLocalAgentID = testCase.viewLocalAgentID
+			}
+			openAPIBase := base.OpenAPIBase
+			if testCase.openAPIBase != "" {
+				openAPIBase = testCase.openAPIBase
+			}
+			createCalls := 0
+			controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+				if request.Method == http.MethodPost {
+					createCalls++
+					return nil, errors.New("create must not be called for stored binding drift")
+				}
+				body := `{"success":true,"data":{"runnerId":"runner-existing","endpointId":"endpoint-existing","localAgentId":"` + viewLocalAgentID + `","displayName":"Stable agent","status":"ACTIVE","agentCardUrl":"https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-existing/.well-known/agent-card.json","agentCardSha256":"` + stored.AgentCardSHA256 + `","connected":false,"lastHeartbeatAtEpochSecond":null}}`
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+			})
+			runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+				ConfigDir: t.TempDir(), ControlHTTPClient: controlClient, CardHTTPClient: localAgent.Client(),
+				OAuth: staticLocalRunnerOAuth("oauth-token"),
+				Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
+				OwnerIdentity: testLocalRunnerOwnerIdentity,
+			})
+			if err := runtime.configs.Save(stored); err != nil {
+				t.Fatal(err)
+			}
+			_, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
+				AgentRef: cardURL, LocalAgentID: base.LocalAgentID, DisplayName: base.DisplayName,
+				OpenAPIBase: openAPIBase, MaxConcurrent: 1, Streaming: true,
+			})
+			if !errors.Is(err, ErrLocalRunnerRuntimeInvalid) {
+				t.Fatalf("StartLocal() error = %v, want ErrLocalRunnerRuntimeInvalid", err)
+			}
+			if createCalls != 0 {
+				t.Fatalf("CreateRunner calls = %d, want 0", createCalls)
+			}
+		})
+	}
+}
+
 func TestProductionLocalRunnerStartLocalRunsBuiltInEchoAndClosesIt(t *testing.T) {
 	agentCardSHA256 := "sha256:" + strings.Repeat("a", 64)
 	var createRequest localrunner.CreateRunnerRequest
@@ -580,6 +724,20 @@ func TestLocalRunnerCommandsCompleteLocalControlWSSAndSSELifecycle(t *testing.T)
 
 func localAgentURL(r *http.Request) string {
 	return "http://" + r.Host
+}
+
+func readLocalRunnerTestCard(t *testing.T, rawURL string) json.RawMessage {
+	t.Helper()
+	response, err := http.Get(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("read Agent Card status=%d error=%v", response.StatusCode, err)
+	}
+	return json.RawMessage(raw)
 }
 
 func localRunnerRequestStartAttributes() (map[string]json.RawMessage, error) {
