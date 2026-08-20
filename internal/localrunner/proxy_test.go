@@ -3,9 +3,13 @@ package localrunner
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -144,6 +148,145 @@ func TestLocalA2AProxyCancelIsIdempotentAndCleansInflight(t *testing.T) {
 	}
 }
 
+func TestLocalA2AProxyLogsSafeCompletedRequestMetadata(t *testing.T) {
+	responsePayload := []byte("response-body-secret")
+	logs := captureLocalProxyConsole(t, func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			_, _ = io.ReadAll(request.Body)
+			w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write(responsePayload)
+		}))
+		defer server.Close()
+
+		proxy, err := NewLocalA2AProxy(LocalA2AProxyConfig{
+			TargetURL: server.URL + "/local-rpc", HTTPClient: server.Client(),
+			Authorization: staticLocalAuthorization("Bearer local-authorization-secret"), MaxConcurrent: 1,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		writer := newRecordingProxyWriter()
+		requestPayload := []byte("request-body-secret")
+		start := validRequestStartFrame("request-sensitive-id", int64(len(requestPayload)))
+		start.Attributes["path"] = json.RawMessage(`"/v1/a2a/local-runners/endpoint-sensitive/rpc"`)
+		start.Attributes["query"] = json.RawMessage(`"sensitive-query=true"`)
+		start.Attributes["headers"] = json.RawMessage(`{"authorization":["Bearer tunnel-secret"],"x-test":["sensitive-header-value"]}`)
+		if err := proxy.HandleFrame(context.Background(), start, writer); err != nil {
+			t.Fatal(err)
+		}
+		chunk := validFrame(FrameRequestChunk)
+		chunk.RequestID = start.RequestID
+		chunk.Payload = requestPayload
+		if err := proxy.HandleFrame(context.Background(), chunk, writer); err != nil {
+			t.Fatal(err)
+		}
+		end := validFrame(FrameRequestEnd)
+		end.RequestID = start.RequestID
+		if err := proxy.HandleFrame(context.Background(), end, writer); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-writer.responseEnd:
+		case <-time.After(2 * time.Second):
+			t.Fatal("response did not finish")
+		}
+		waitForLocalProxyIdle(t, proxy)
+	})
+
+	for _, want := range []string{
+		"msg=localrunner.request.completed", "method=POST",
+		"path=/v1/a2a/local-runners/{endpointId}/rpc", "status=202",
+		fmt.Sprintf("responseBytes=%d", len(responsePayload)), "latencyMs=", "streaming=true",
+		"outcome=completed", `errorCategory=""`, "requestIdHash=",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("completion log missing %q: %s", want, logs)
+		}
+	}
+	for _, secret := range []string{
+		"request-sensitive-id", "endpoint-sensitive", "sensitive-query", "sensitive-header-value",
+		"tunnel-secret", "local-authorization-secret", "request-body-secret", "response-body-secret",
+		"authorization", "headers", "query",
+	} {
+		if strings.Contains(strings.ToLower(logs), strings.ToLower(secret)) {
+			t.Fatalf("completion log exposed forbidden value %q: %s", secret, logs)
+		}
+	}
+}
+
+func TestLocalA2AProxyLogsErrorsAndCancellationWithoutDetails(t *testing.T) {
+	t.Run("request error", func(t *testing.T) {
+		logs := captureLocalProxyConsole(t, func() {
+			proxy, err := NewLocalA2AProxy(LocalA2AProxyConfig{
+				TargetURL: "http://127.0.0.1:8080/rpc", HTTPClient: failingProxyDoer{}, MaxConcurrent: 1,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			writer := newRecordingProxyWriter()
+			start := validRequestStartFrame("request-error-secret", 0)
+			if err := proxy.HandleFrame(context.Background(), start, writer); err != nil {
+				t.Fatal(err)
+			}
+			end := validFrame(FrameRequestEnd)
+			end.RequestID = start.RequestID
+			if err := proxy.HandleFrame(context.Background(), end, writer); err != nil {
+				t.Fatal(err)
+			}
+			waitForLocalProxyIdle(t, proxy)
+		})
+		for _, want := range []string{"outcome=error", "errorCategory=local_request_failed", "status=0", "responseBytes=0", "streaming=false"} {
+			if !strings.Contains(logs, want) {
+				t.Fatalf("error completion log missing %q: %s", want, logs)
+			}
+		}
+		if strings.Contains(logs, "upstream-sensitive-error") || strings.Contains(logs, "request-error-secret") {
+			t.Fatalf("error completion log exposed detail: %s", logs)
+		}
+	})
+
+	t.Run("canceled", func(t *testing.T) {
+		logs := captureLocalProxyConsole(t, func() {
+			started := make(chan struct{})
+			proxy, err := NewLocalA2AProxy(LocalA2AProxyConfig{
+				TargetURL: "http://127.0.0.1:8080/rpc", HTTPClient: cancelAwareDoer{started: started}, MaxConcurrent: 1,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			writer := newRecordingProxyWriter()
+			start := validRequestStartFrame("request-cancel-secret", 0)
+			if err := proxy.HandleFrame(context.Background(), start, writer); err != nil {
+				t.Fatal(err)
+			}
+			end := validFrame(FrameRequestEnd)
+			end.RequestID = start.RequestID
+			if err := proxy.HandleFrame(context.Background(), end, writer); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("local request did not start")
+			}
+			cancel := validFrame(FrameCancel)
+			cancel.RequestID = start.RequestID
+			if err := proxy.HandleFrame(context.Background(), cancel, writer); err != nil {
+				t.Fatal(err)
+			}
+		})
+		for _, want := range []string{"outcome=canceled", "errorCategory=canceled", "status=0", "responseBytes=0", "streaming=false"} {
+			if !strings.Contains(logs, want) {
+				t.Fatalf("cancel completion log missing %q: %s", want, logs)
+			}
+		}
+		if strings.Contains(logs, "request-cancel-secret") {
+			t.Fatalf("cancel completion log exposed request id: %s", logs)
+		}
+	})
+}
+
 type cancelAwareDoer struct {
 	started chan struct{}
 }
@@ -152,6 +295,48 @@ func (d cancelAwareDoer) Do(request *http.Request) (*http.Response, error) {
 	close(d.started)
 	<-request.Context().Done()
 	return nil, request.Context().Err()
+}
+
+type failingProxyDoer struct{}
+
+func (failingProxyDoer) Do(*http.Request) (*http.Response, error) {
+	return nil, errors.New("upstream-sensitive-error")
+}
+
+func captureLocalProxyConsole(t *testing.T, run func()) string {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := os.Stderr
+	os.Stderr = writer
+	defer func() {
+		os.Stderr = previous
+		_ = writer.Close()
+		_ = reader.Close()
+	}()
+	run()
+	os.Stderr = previous
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func waitForLocalProxyIdle(t *testing.T, proxy *LocalA2AProxy) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for proxy.InflightCount() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("proxy still has %d inflight request(s)", proxy.InflightCount())
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func validRequestStartFrame(requestID string, contentLength int64) TunnelFrame {

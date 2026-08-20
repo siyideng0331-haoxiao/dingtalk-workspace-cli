@@ -868,6 +868,15 @@ rejected with a bounded static response. The handler has no logger and never
 prints request bodies, credentials, headers, or response content. The request
 body limit is independent of the tunnel's larger generic proxy bound.
 
+The tunnel-to-loopback proxy emits exactly one console-visible
+`localrunner.request.completed` record for every accepted or rejected request.
+It contains only a one-way request-ID hash, normalized method, fixed path
+template, HTTP status, response byte count, elapsed milliseconds, streaming
+flag, outcome, and a static error category. It never includes a raw request ID,
+endpoint ID, query, header name or value, credential, body, response content,
+or raw error text. Cancellation, protocol failure, capacity rejection, and
+disconnect use the same completion record without changing tunnel frames.
+
 `productionLocalRunnerCommandRuntime.StartLocal` resolves `test-echo` before
 the existing Card-read/create/keyring/config path. The built-in reference,
 rather than its random Card URL, is the deterministic default identity seed;
@@ -929,3 +938,4 @@ Implementation and verification steps:
 | 2026-08-20 | Made `start-local` recover one unique valid `StoredRunnerConfig` by `localAgentId`, validate it against the current Card and authenticated Runner view, and skip CreateRunner; stored `test-echo` bindings reopen their original loopback origin. | Re-running the one-command UX previously attempted a duplicate registration and received `binding already exists`; idempotent recovery must reuse the existing one-to-one binding while failing closed on identity, target, Card, hash, origin, or control-base drift. |
 | 2026-08-20 | Added the required top-level `version="1.0.0"` to the built-in `test-echo` Card while keeping A2A `protocolVersion="0.3.0"`, and allowed guarded in-place Card updates for an otherwise unchanged stored binding. | The official 0.3.0 Agent Card parser rejects a Card without the distinct agent version; an existing one-command binding must publish the corrected snapshot without duplicate registration, but only after the remote still matches the old stored digest and only when the update response proves the same identity, endpoint, URL, ACTIVE state, and exact new digest. |
 | 2026-08-21 | Replaced the nested `httpAuthSecurityScheme` public Card declaration with the flat discriminated `localRunnerBearer={"type":"http","scheme":"bearer"}` shape and synchronized CLI digest/resume expectations. | The messaging A2A SDK selects security-scheme subtypes through the top-level `type` discriminator and rejects the old nested shape; keeping the CLI rewrite on that shape would also recompute a different digest after OpenAPI publishes the corrected Card and would trigger an erroneous resume PUT. |
+| 2026-08-21 | Added one safe console-visible completion record at the shared tunnel-to-loopback proxy boundary for success, streaming, error, cancellation, rejection, and disconnect paths. | Successful pre-release RPC and SSE traffic was otherwise invisible after the initial configuration summary; fixed normalized metadata provides operational evidence without exposing request IDs, endpoint IDs, query, headers, credentials, bodies, response content, or raw error text, and does not alter tunnel frames. |

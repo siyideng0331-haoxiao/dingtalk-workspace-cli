@@ -2,11 +2,15 @@ package localrunner
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +38,7 @@ type LocalA2AProxy struct {
 	authorization LocalAuthorizationProvider
 	maxConcurrent int
 	maxBodyBytes  int64
+	logger        *slog.Logger
 	mu            sync.Mutex
 	inflight      map[string]*localProxyRequest
 }
@@ -45,6 +50,11 @@ type localProxyRequest struct {
 	writer          TunnelFrameWriter
 	contentLength   int64
 	receivedBytes   int64
+	requestIDHash   string
+	method          string
+	path            string
+	startedAt       time.Time
+	completed       bool
 }
 
 func NewLocalA2AProxy(config LocalA2AProxyConfig) (*LocalA2AProxy, error) {
@@ -66,6 +76,7 @@ func NewLocalA2AProxy(config LocalA2AProxyConfig) (*LocalA2AProxy, error) {
 		authorization: config.Authorization,
 		maxConcurrent: maxConcurrent,
 		maxBodyBytes:  maxBodyBytes,
+		logger:        slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})),
 		inflight:      make(map[string]*localProxyRequest),
 	}, nil
 }
@@ -95,6 +106,12 @@ func (p *LocalA2AProxy) start(parent context.Context, frame TunnelFrame, writer 
 	attributes, err := DecodeRequestStartAttributes(frame.Attributes)
 	if err != nil || attributes.ContentLength > p.maxBodyBytes {
 		_ = writer.WriteFrame(parent, proxyErrorFrame(frame.RequestID, "frame_malformed", "Tunnel request metadata is invalid", false))
+		p.logCompleted(&localProxyRequest{
+			requestIDHash: safeProxyRequestIDHash(frame.RequestID),
+			method:        "OTHER",
+			path:          "/other",
+			startedAt:     time.Now(),
+		}, 0, 0, false, "error", "frame_malformed")
 		return nil
 	}
 	requestContext, cancel := context.WithDeadline(parent, time.UnixMilli(attributes.DeadlineEpochMs))
@@ -105,6 +122,10 @@ func (p *LocalA2AProxy) start(parent context.Context, frame TunnelFrame, writer 
 		bodyWriter:    bodyWriter,
 		writer:        writer,
 		contentLength: attributes.ContentLength,
+		requestIDHash: safeProxyRequestIDHash(frame.RequestID),
+		method:        safeProxyLogMethod(attributes.Method),
+		path:          safeProxyLogPath(attributes.Path),
+		startedAt:     time.Now(),
 	}
 	p.mu.Lock()
 	if len(p.inflight) >= p.maxConcurrent || p.inflight[frame.RequestID] != nil {
@@ -113,6 +134,7 @@ func (p *LocalA2AProxy) start(parent context.Context, frame TunnelFrame, writer 
 		_ = bodyReader.Close()
 		_ = bodyWriter.Close()
 		_ = writer.WriteFrame(parent, proxyErrorFrame(frame.RequestID, "session_conflict", "Local runner request capacity is unavailable", true))
+		p.logCompleted(request, 0, 0, false, "error", "session_conflict")
 		return nil
 	}
 	p.inflight[frame.RequestID] = request
@@ -171,20 +193,38 @@ func (p *LocalA2AProxy) cancelRequest(requestID string, attributes map[string]js
 	if request == nil {
 		return nil
 	}
+	p.logCompleted(request, 0, 0, false, "canceled", "canceled")
 	request.cancel()
 	_ = request.bodyWriter.CloseWithError(context.Canceled)
 	return nil
 }
 
 func (p *LocalA2AProxy) execute(requestID string, inflight *localProxyRequest, attributes *RequestStartAttributes, body io.ReadCloser) {
-	defer body.Close()
-	defer inflight.cancel()
 	defer p.removeIfSame(requestID, inflight)
+	defer inflight.cancel()
+	defer body.Close()
+	status := 0
+	var responseBytes int64
+	streaming := false
+	outcome := "error"
+	errorCategory := "local_request_failed"
+	defer func() {
+		if inflight.ctx.Err() != nil && outcome != "completed" {
+			outcome = "canceled"
+			errorCategory = "canceled"
+			if errors.Is(inflight.ctx.Err(), context.DeadlineExceeded) {
+				outcome = "error"
+				errorCategory = "deadline_exceeded"
+			}
+		}
+		p.logCompleted(inflight, status, responseBytes, streaming, outcome, errorCategory)
+	}()
 
 	target := *p.target
 	target.RawQuery = attributes.Query
 	req, err := http.NewRequestWithContext(inflight.ctx, attributes.Method, target.String(), body)
 	if err != nil {
+		errorCategory = "frame_malformed"
 		p.writeProxyErrorIfActive(requestID, inflight, "frame_malformed", "Local A2A request could not be created", false)
 		return
 	}
@@ -196,6 +236,7 @@ func (p *LocalA2AProxy) execute(requestID string, inflight *localProxyRequest, a
 	}
 	if p.authorization != nil {
 		if err := p.authorization.ApplyLocalAuthorization(inflight.ctx, req.Header); err != nil {
+			errorCategory = "local_authorization_failed"
 			p.writeProxyErrorIfActive(requestID, inflight, "local_authorization_failed", "Local authorization is unavailable", false)
 			return
 		}
@@ -208,26 +249,39 @@ func (p *LocalA2AProxy) execute(requestID string, inflight *localProxyRequest, a
 		return
 	}
 	defer response.Body.Close()
+	status = response.StatusCode
+	streaming = proxyResponseIsStreaming(response.Header)
 	responseAttributes, err := EncodeResponseStartAttributes(response.StatusCode, response.Header)
-	if err != nil || !p.writeIfActive(requestID, inflight, TunnelFrame{Type: FrameResponseStart, RequestID: requestID, Attributes: responseAttributes}) {
+	if err != nil {
+		errorCategory = "local_response_invalid"
+		return
+	}
+	if !p.writeIfActive(requestID, inflight, TunnelFrame{Type: FrameResponseStart, RequestID: requestID, Attributes: responseAttributes}) {
+		errorCategory = "tunnel_write_failed"
 		return
 	}
 	buffer := make([]byte, 32<<10)
-	var responseBytes int64
 	for {
 		count, readErr := response.Body.Read(buffer)
 		if count > 0 {
 			responseBytes += int64(count)
 			if responseBytes > p.maxBodyBytes {
+				errorCategory = "frame_too_large"
 				p.writeProxyErrorIfActive(requestID, inflight, "frame_too_large", "Local A2A response exceeds its limit", false)
 				return
 			}
 			if !p.writeIfActive(requestID, inflight, TunnelFrame{Type: FrameResponseChunk, RequestID: requestID, Payload: append([]byte(nil), buffer[:count]...)}) {
+				errorCategory = "tunnel_write_failed"
 				return
 			}
 		}
 		if readErr == io.EOF {
-			p.writeIfActive(requestID, inflight, TunnelFrame{Type: FrameResponseEnd, RequestID: requestID})
+			if p.writeIfActive(requestID, inflight, TunnelFrame{Type: FrameResponseEnd, RequestID: requestID}) {
+				outcome = "completed"
+				errorCategory = ""
+			} else {
+				errorCategory = "tunnel_write_failed"
+			}
 			return
 		}
 		if readErr != nil {
@@ -269,6 +323,7 @@ func (p *LocalA2AProxy) failWithFrame(requestID string, request *localProxyReque
 	p.writeProxyErrorIfActive(requestID, request, code, message, retryable)
 	removed := p.removeIfSame(requestID, request)
 	if removed {
+		p.logCompleted(request, 0, 0, false, "error", code)
 		request.cancel()
 		_ = request.bodyWriter.CloseWithError(ErrTunnelProtocol)
 	}
@@ -277,6 +332,7 @@ func (p *LocalA2AProxy) failWithFrame(requestID string, request *localProxyReque
 func (p *LocalA2AProxy) FailRequest(requestID string, _ error) {
 	request := p.remove(requestID)
 	if request != nil {
+		p.logCompleted(request, 0, 0, false, "error", "tunnel_protocol")
 		request.cancel()
 		_ = request.bodyWriter.CloseWithError(ErrTunnelProtocol)
 	}
@@ -291,6 +347,7 @@ func (p *LocalA2AProxy) FailAll(_ error) {
 	p.inflight = make(map[string]*localProxyRequest)
 	p.mu.Unlock()
 	for _, request := range requests {
+		p.logCompleted(request, 0, 0, false, "error", "tunnel_disconnected")
 		request.cancel()
 		_ = request.bodyWriter.CloseWithError(ErrTunnelDisconnected)
 	}
@@ -330,4 +387,66 @@ func (p *LocalA2AProxy) removeIfSame(requestID string, request *localProxyReques
 	}
 	delete(p.inflight, requestID)
 	return true
+}
+
+func (p *LocalA2AProxy) logCompleted(request *localProxyRequest, status int, responseBytes int64, streaming bool, outcome, errorCategory string) {
+	p.mu.Lock()
+	if request.completed {
+		p.mu.Unlock()
+		return
+	}
+	request.completed = true
+	p.mu.Unlock()
+	latency := time.Since(request.startedAt).Milliseconds()
+	if latency < 0 {
+		latency = 0
+	}
+	p.logger.Info("localrunner.request.completed",
+		"requestIdHash", request.requestIDHash,
+		"method", request.method,
+		"path", request.path,
+		"status", status,
+		"responseBytes", responseBytes,
+		"latencyMs", latency,
+		"streaming", streaming,
+		"outcome", outcome,
+		"errorCategory", errorCategory,
+	)
+}
+
+func safeProxyRequestIDHash(requestID string) string {
+	digest := sha256.Sum256([]byte(requestID))
+	return fmt.Sprintf("%x", digest[:8])
+}
+
+func safeProxyLogMethod(method string) string {
+	method = strings.ToUpper(strings.TrimSpace(method))
+	if method == "" || len(method) > 16 {
+		return "OTHER"
+	}
+	for _, character := range method {
+		if character < 'A' || character > 'Z' {
+			return "OTHER"
+		}
+	}
+	return method
+}
+
+func safeProxyLogPath(requestPath string) string {
+	if requestPath == "/rpc" {
+		return "/rpc"
+	}
+	parts := strings.Split(requestPath, "/")
+	if len(parts) == 6 && parts[0] == "" && parts[1] == "v1" && parts[2] == "a2a" && parts[3] == "local-runners" && parts[4] != "" && parts[5] == "rpc" {
+		return "/v1/a2a/local-runners/{endpointId}/rpc"
+	}
+	return "/other"
+}
+
+func proxyResponseIsStreaming(header http.Header) bool {
+	contentType := header.Get("Content-Type")
+	if separator := strings.IndexByte(contentType, ';'); separator >= 0 {
+		contentType = contentType[:separator]
+	}
+	return strings.EqualFold(strings.TrimSpace(contentType), "text/event-stream")
 }
