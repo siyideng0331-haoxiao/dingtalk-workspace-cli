@@ -211,9 +211,6 @@ func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, op
 		Summary: localRunnerA2AConfiguration{
 			Type:         "A2A",
 			AgentCardURL: created.AgentCardURL,
-			Authentication: localRunnerA2AAuthentication{
-				Scheme: "Bearer", CredentialStorage: "system-keyring", CredentialExported: false,
-			},
 			LocalRunner: localRunnerA2ALocalRunner{
 				RunnerID: created.RunnerID, EndpointID: created.EndpointID, Status: "CONNECTING",
 			},

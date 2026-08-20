@@ -270,7 +270,7 @@ func TestLocalRunnerStartLocalWritesSanitizedSummaryBeforeConnectAndDoesNotRevok
 		if closed {
 			t.Fatal("built-in Agent closed before Connect")
 		}
-		want := "{\"type\":\"A2A\",\"agentCardUrl\":\"https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-1/.well-known/agent-card.json\",\"authentication\":{\"scheme\":\"Bearer\",\"credentialStorage\":\"system-keyring\",\"credentialExported\":false},\"localRunner\":{\"runnerId\":\"runner-1\",\"endpointId\":\"endpoint-1\",\"status\":\"CONNECTING\"}}\n"
+		want := "{\"type\":\"A2A\",\"agentCardUrl\":\"https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-1/.well-known/agent-card.json\",\"localRunner\":{\"runnerId\":\"runner-1\",\"endpointId\":\"endpoint-1\",\"status\":\"CONNECTING\"}}\n"
 		if output.String() != want {
 			t.Fatalf("summary before connect = %q, want %q", output.String(), want)
 		}
@@ -413,9 +413,6 @@ func testLocalRunnerStartResult() *localRunnerStartLocalResult {
 		Summary: localRunnerA2AConfiguration{
 			Type:         "A2A",
 			AgentCardURL: "https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-1/.well-known/agent-card.json",
-			Authentication: localRunnerA2AAuthentication{
-				Scheme: "Bearer", CredentialStorage: "system-keyring", CredentialExported: false,
-			},
 			LocalRunner: localRunnerA2ALocalRunner{RunnerID: "runner-1", EndpointID: "endpoint-1", Status: "CONNECTING"},
 		},
 		ConnectOptions: localRunnerConnectOptions{

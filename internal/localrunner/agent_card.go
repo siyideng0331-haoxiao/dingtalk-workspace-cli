@@ -59,14 +59,10 @@ func RewriteAgentCard(raw json.RawMessage, endpointID, publicBaseURL string) (*A
 		return nil, ErrInvalidAgentCard
 	}
 	delete(card, "authentication")
-	card["securitySchemes"] = map[string]any{
-		"localRunnerBearer": map[string]any{
-			"type":   "http",
-			"scheme": "bearer",
-		},
-	}
-	card["security"] = []any{
-		map[string]any{"localRunnerBearer": []any{}},
+	delete(card, "securitySchemes")
+	delete(card, "security")
+	for _, skill := range card["skills"].([]any) {
+		delete(skill.(map[string]any), "security")
 	}
 	if containsLoopbackHTTPURL(card) {
 		return nil, ErrInvalidAgentCard

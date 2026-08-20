@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -182,7 +183,7 @@ func TestProductionLocalRunnerStartLocalPreparesOneCardReadAndSanitizedConnect(t
 	if createRequest.LocalAgentID != wantLocalAgentID || createRequest.DisplayName != "Card default" {
 		t.Fatalf("create request identity = %q/%q", createRequest.LocalAgentID, createRequest.DisplayName)
 	}
-	if result.Summary.Type != "A2A" || result.Summary.AgentCardURL == "" || result.Summary.Authentication.Scheme != "Bearer" || result.Summary.Authentication.CredentialStorage != "system-keyring" || result.Summary.Authentication.CredentialExported || result.Summary.LocalRunner.RunnerID != "runner-1" || result.Summary.LocalRunner.EndpointID != "endpoint-1" || result.Summary.LocalRunner.Status != "CONNECTING" {
+	if result.Summary.Type != "A2A" || result.Summary.AgentCardURL == "" || result.Summary.LocalRunner.RunnerID != "runner-1" || result.Summary.LocalRunner.EndpointID != "endpoint-1" || result.Summary.LocalRunner.Status != "CONNECTING" {
 		t.Fatalf("start-local summary = %#v", result.Summary)
 	}
 	if result.ConnectOptions.TargetURL != localAgent.URL+"/rpc" || result.ConnectOptions.AgentCardSHA256 != agentCardSHA256 || result.ConnectOptions.MaxConcurrent != 7 || !result.ConnectOptions.Streaming {
@@ -223,7 +224,7 @@ func TestProductionLocalRunnerStartLocalReusesStoredBuiltInBindingWithoutCreate(
 	if err != nil {
 		t.Fatal(err)
 	}
-	serverDigest := localRunnerFlatBearerDigest(t, snapshot.JSON)
+	serverDigest := localRunnerSnapshotDigest(snapshot.JSON)
 	if err := previousAgent.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -305,12 +306,7 @@ func TestRecoverStoredLocalAgentCardIgnoresPublicObjectKeyOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	serverCard := []byte(strings.Replace(string(snapshot.JSON),
-		`"localRunnerBearer":{"scheme":"bearer","type":"http"}`,
-		`"localRunnerBearer":{"type":"http","scheme":"bearer"}`, 1))
-	if bytes.Equal(serverCard, snapshot.JSON) {
-		t.Fatalf("fixture did not change the public Card key order: %s", snapshot.JSON)
-	}
+	serverCard := localRunnerReorderedTopLevelCard(t, snapshot.JSON)
 	var desiredValue any
 	var serverValue any
 	if json.Unmarshal(snapshot.JSON, &desiredValue) != nil || json.Unmarshal(serverCard, &serverValue) != nil {
@@ -479,12 +475,7 @@ func TestRecoverStoredLocalAgentCardStoresServerDigestAfterSemanticUpdate(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	serverUpdatedCard := []byte(strings.Replace(string(desiredSnapshot.JSON),
-		`"localRunnerBearer":{"scheme":"bearer","type":"http"}`,
-		`"localRunnerBearer":{"type":"http","scheme":"bearer"}`, 1))
-	if bytes.Equal(serverUpdatedCard, desiredSnapshot.JSON) {
-		t.Fatalf("fixture did not change the updated Card key order: %s", desiredSnapshot.JSON)
-	}
+	serverUpdatedCard := localRunnerReorderedTopLevelCard(t, desiredSnapshot.JSON)
 	legacyHash := sha256.Sum256(legacySnapshot.JSON)
 	legacyDigest := fmt.Sprintf("sha256:%x", legacyHash[:])
 	updatedHash := sha256.Sum256(serverUpdatedCard)
@@ -1226,12 +1217,7 @@ func newLocalRunnerStoredCardUpgradeFixture(t *testing.T) (localrunner.StoredRun
 	if err := agent.Close(); err != nil {
 		t.Fatal(err)
 	}
-	currentPublicCard := []byte(strings.Replace(string(currentSnapshot.JSON),
-		`"localRunnerBearer":{"scheme":"bearer","type":"http"}`,
-		`"localRunnerBearer":{"type":"http","scheme":"bearer"}`, 1))
-	if bytes.Equal(currentPublicCard, currentSnapshot.JSON) {
-		t.Fatalf("fixture did not change the current public Card key order: %s", currentSnapshot.JSON)
-	}
+	currentPublicCard := localRunnerReorderedTopLevelCard(t, currentSnapshot.JSON)
 	currentPublicHash := sha256.Sum256(currentPublicCard)
 	return localrunner.StoredRunnerConfig{
 		RunnerID: "runner-existing", EndpointID: "endpoint-existing",
@@ -1241,27 +1227,38 @@ func newLocalRunnerStoredCardUpgradeFixture(t *testing.T) (localrunner.StoredRun
 	}, fmt.Sprintf("sha256:%x", currentPublicHash[:]), legacySnapshot.JSON, currentPublicCard
 }
 
-func localRunnerFlatBearerDigest(t *testing.T, published []byte) string {
+func localRunnerSnapshotDigest(published []byte) string {
+	digest := sha256.Sum256(published)
+	return fmt.Sprintf("sha256:%x", digest[:])
+}
+
+func localRunnerReorderedTopLevelCard(t *testing.T, published []byte) []byte {
 	t.Helper()
-	var card map[string]any
+	var card map[string]json.RawMessage
 	if err := json.Unmarshal(published, &card); err != nil {
 		t.Fatal(err)
 	}
-	card["securitySchemes"] = map[string]any{
-		"localRunnerBearer": map[string]any{"type": "http", "scheme": "bearer"},
+	keys := make([]string, 0, len(card))
+	for key := range card {
+		keys = append(keys, key)
 	}
-	var canonical bytes.Buffer
-	encoder := json.NewEncoder(&canonical)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(card); err != nil {
-		t.Fatal(err)
+	sort.Sort(sort.Reverse(sort.StringSlice(keys)))
+	var reordered bytes.Buffer
+	reordered.WriteByte('{')
+	for index, key := range keys {
+		if index > 0 {
+			reordered.WriteByte(',')
+		}
+		encodedKey, _ := json.Marshal(key)
+		reordered.Write(encodedKey)
+		reordered.WriteByte(':')
+		reordered.Write(card[key])
 	}
-	canonicalBytes := bytes.TrimSuffix(canonical.Bytes(), []byte{'\n'})
-	if !bytes.Equal(canonicalBytes, published) {
-		t.Fatalf("flat bearer canonical Card differs from RewriteAgentCard output:\nwant: %s\n got: %s", canonicalBytes, published)
+	reordered.WriteByte('}')
+	if bytes.Equal(reordered.Bytes(), published) {
+		t.Fatalf("fixture did not change the public Card key order: %s", published)
 	}
-	digest := sha256.Sum256(canonicalBytes)
-	return fmt.Sprintf("sha256:%x", digest[:])
+	return reordered.Bytes()
 }
 
 func localRunnerStatusTestResponse(t *testing.T, request *http.Request, data localrunner.RunnerStatusData) *http.Response {

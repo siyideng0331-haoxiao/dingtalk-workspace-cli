@@ -15,7 +15,8 @@ func TestRewriteAgentCardValidatesLoopbackAndRemovesLocalURLs(t *testing.T) {
 		"protocolVersion":"1.0",
 		"url":"http://127.0.0.1:8080/rpc",
 		"capabilities":{"streaming":true},
-		"skills":[{"id":"answer","name":"Answer"}],
+		"skills":[{"id":"answer","name":"Answer","security":[{"source":[]}],"metadata":{"security":"business-metadata"}}],
+		"metadata":{"security":"business-metadata"},
 		"authentication":{"schemes":["source-secret"]},
 		"securitySchemes":{"source":{"apiKeySecurityScheme":{"name":"source-secret"}}},
 		"security":[{"source":[]}],
@@ -37,13 +38,20 @@ func TestRewriteAgentCardValidatesLoopbackAndRemovesLocalURLs(t *testing.T) {
 	if err := json.Unmarshal(snapshot.JSON, &published); err != nil {
 		t.Fatal(err)
 	}
-	var securitySchemes map[string]map[string]json.RawMessage
-	if err := json.Unmarshal(published["securitySchemes"], &securitySchemes); err != nil {
-		t.Fatal(err)
+	for _, field := range []string{"authentication", "securitySchemes", "security"} {
+		if published[field] != nil {
+			t.Fatalf("published Card retained Relay authentication field %q: %s", field, published[field])
+		}
 	}
-	bearer := securitySchemes["localRunnerBearer"]
-	if published["authentication"] != nil || len(securitySchemes) != 1 || len(bearer) != 2 || string(bearer["type"]) != `"http"` || string(bearer["scheme"]) != `"bearer"` || bearer["httpAuthSecurityScheme"] != nil || string(published["security"]) != `[{"localRunnerBearer":[]}]` {
-		t.Fatalf("published bearer declaration mismatch")
+	var skills []map[string]json.RawMessage
+	if err := json.Unmarshal(published["skills"], &skills); err != nil || len(skills) != 1 {
+		t.Fatalf("published skills = %s, error = %v", published["skills"], err)
+	}
+	if skills[0]["security"] != nil {
+		t.Fatalf("published AgentSkill retained security override: %s", skills[0]["security"])
+	}
+	if bytes.Count(snapshot.JSON, []byte(`"security":"business-metadata"`)) != 2 {
+		t.Fatalf("published Card removed business metadata.security recursively: %s", snapshot.JSON)
 	}
 	if bytes.Contains(snapshot.JSON, []byte("source-secret")) || bytes.Contains(snapshot.JSON, []byte("endpoint-secret")) {
 		t.Fatal("public card retained source or endpoint credentials")

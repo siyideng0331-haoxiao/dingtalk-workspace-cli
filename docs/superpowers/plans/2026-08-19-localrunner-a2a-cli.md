@@ -708,13 +708,13 @@ the minimal DTO/client implementation, then run the focused package tests.
   validation accepts only loopback destinations; the public snapshot rewrites
   the RPC URL to `/v1/a2a/local-runners/{endpointId}/rpc` deterministically and
   uses the matching SHA-256 contract.
-- Every public snapshot replaces any source `authentication`,
-  `securitySchemes`, and `security` declarations with standard A2A HTTP Bearer
-  metadata exactly as
-  `securitySchemes.localRunnerBearer={"type":"http","scheme":"bearer"}`
-  and `security=[{"localRunnerBearer":[]}]`. This is a credential-free scheme
-  declaration: it never embeds, derives, or hints at the one-time
-  `endpointBearer` value.
+- Every Relay snapshot removes top-level source `authentication`,
+  `securitySchemes`, and `security`, plus each `skills[*].security` override,
+  and does not add a LocalRunner bearer scheme. This is a structural Agent Card
+  operation, not a recursive same-key deletion: business `metadata.security`
+  remains untouched. The published Card/RPC remains unauthenticated at this
+  Relay boundary; WSS keeps its separate OAuth plus one-attempt
+  connection-ticket handshake.
 - After structurally rewriting only the root, `supportedInterfaces`, and
   `additionalInterfaces` callable URLs, recursively inspect every remaining
   card value. Any residual HTTP/HTTPS URL whose lexical host is loopback makes
@@ -722,10 +722,10 @@ the minimal DTO/client implementation, then run the focused package tests.
   are neither retained nor guessed/replaced. This prevents a local URL from
   leaking through an unrelated field into the public snapshot.
 - Public Card GET remains raw JSON with ETag even while the runner is offline.
-  Public RPC uses `endpointBearer` and maps not-found, revoked, offline,
-  payload-limit, timeout, and protocol failures to the frozen OpenAPI statuses
-  and codes. These are server-observable compatibility requirements, not a
-  claim that CLI can locally exercise the public OpenAPI route.
+  Public RPC maps not-found, revoked, offline, payload-limit, timeout, and
+  protocol failures to the frozen OpenAPI statuses and codes without a Relay
+  bearer. These are server-observable compatibility requirements, not a claim
+  that CLI can locally exercise the public OpenAPI route.
 
 ### 10.6 CLI commands and production runtime
 
@@ -738,10 +738,11 @@ the minimal DTO/client implementation, then run the focused package tests.
   current tenant/operator identity from the same active auth profile only in
   memory when constructing the strict connection identity; do not copy app
   `clientId`/`clientSecret` or persist owner identity in Runner config.
-- Store `endpointBearer` only through the existing encrypted cross-platform
-  `internal/keychain` backend under a hashed Runner/Endpoint account. Provide
-  load/remove operations for lifecycle cleanup; do not add a plaintext file
-  fallback.
+- If the legacy create response returns `endpointBearer`, retain its existing
+  encrypted `internal/keychain` compatibility handling under a hashed
+  Runner/Endpoint account. It is never a local Agent startup input and never
+  appears in the published Card or `start-local` configuration summary; do not
+  add a plaintext file fallback.
 - Persist one non-sensitive JSON file per Runner under
   `<DWS config dir>/local-runners/` with mode 0600 and atomic rename. The exact
   content is Runner/Endpoint/local-agent/display identity, local Card URL,
@@ -946,3 +947,4 @@ Implementation and verification steps:
 | 2026-08-21 | Replaced the nested `httpAuthSecurityScheme` public Card declaration with the flat discriminated `localRunnerBearer={"type":"http","scheme":"bearer"}` shape and synchronized CLI digest/resume expectations. | The messaging A2A SDK selects security-scheme subtypes through the top-level `type` discriminator and rejects the old nested shape; keeping the CLI rewrite on that shape would also recompute a different digest after OpenAPI publishes the corrected Card and would trigger an erroneous resume PUT. |
 | 2026-08-21 | Added one safe console-visible completion record at the shared tunnel-to-loopback proxy boundary for success, streaming, error, cancellation, rejection, and disconnect paths. | Successful pre-release RPC and SSE traffic was otherwise invisible after the initial configuration summary; fixed normalized metadata provides operational evidence without exposing request IDs, endpoint IDs, query, headers, credentials, bodies, response content, or raw error text, and does not alter tunnel frames. |
 | 2026-08-21 | Changed stored-binding Card recovery to bind the server's raw public-Card digest while using bounded credential-free HTTPS fetches and JSON semantic equality for change detection and post-update verification. | Jackson and Go serialize equivalent object keys in different orders; comparing their raw digests triggered an unnecessary PUT and then rejected the unchanged server digest, so raw hashes remain concurrency evidence while key order is no longer treated as an A2A Card change. |
+| 2026-08-21 | Removed CLI-authored `localRunnerBearer`, top-level authentication/security declarations, each `skills[*].security` override, and the bearer/keyring block from the published-Card expectation and `start-local` summary while retaining business `metadata.security` and redacted legacy endpoint-bearer response storage compatibility. | The Relay and the existing digital-employee A2A chain are now explicitly decoupled: public Card/RPC is unauthenticated at both Card and AgentSkill levels, WSS keeps OAuth plus its connection ticket, and a Relay endpoint bearer must not be presented as a local Agent startup requirement or exported configuration. |

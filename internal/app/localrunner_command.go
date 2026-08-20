@@ -37,12 +37,6 @@ type localRunnerStartLocalOptions struct {
 	Streaming     bool
 }
 
-type localRunnerA2AAuthentication struct {
-	Scheme              string `json:"scheme"`
-	CredentialStorage   string `json:"credentialStorage"`
-	CredentialExported  bool   `json:"credentialExported"`
-}
-
 type localRunnerA2ALocalRunner struct {
 	RunnerID   string `json:"runnerId"`
 	EndpointID string `json:"endpointId"`
@@ -50,10 +44,9 @@ type localRunnerA2ALocalRunner struct {
 }
 
 type localRunnerA2AConfiguration struct {
-	Type           string                       `json:"type"`
-	AgentCardURL   string                       `json:"agentCardUrl"`
-	Authentication localRunnerA2AAuthentication `json:"authentication"`
-	LocalRunner    localRunnerA2ALocalRunner    `json:"localRunner"`
+	Type         string                    `json:"type"`
+	AgentCardURL string                    `json:"agentCardUrl"`
+	LocalRunner  localRunnerA2ALocalRunner `json:"localRunner"`
 }
 
 type localRunnerStartLocalResult struct {
