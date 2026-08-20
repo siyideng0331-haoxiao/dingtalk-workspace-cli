@@ -82,14 +82,12 @@ The config contains identifiers only. It does not contain any bearer, ticket, en
 ```http
 POST /v1/assistant/local-runners/{runnerId}/connections/open
 Authorization: Bearer <user-oauth-token>
-X-Dingtalk-Corp-Id: <active-profile-corp-id>
-X-Dingtalk-User-Id: <active-profile-user-id>
 Content-Type: application/json
 
 {"endpointId":"lre_01..."}
 ```
 
-The path `runnerId` and body `endpointId` are required non-blank strings. `tenantId` and `operatorUserId` must not appear in the CLI request body. Studio uses the two profile headers only as selection claims, resolves the token's DingTalk `unionId`, maps it back to the declared tenant, and rejects the request unless the verified user matches both claims.
+The path `runnerId` and body `endpointId` are required non-blank strings. `tenantId` and `operatorUserId` must not appear in the CLI request body. Studio derives the authenticated caller identity exclusively from the verified DWS user OAuth bearer. The CLI does not send the optional `X-Dingtalk-Corp-Id` or `X-Dingtalk-User-Id` cross-check headers because its stored `TokenData.UserID` is not proof of Studio's trusted numeric `uid`.
 
 HTTP 200 success is exactly:
 
@@ -901,3 +899,4 @@ Implementation and verification steps:
 | 2026-08-19 | Superseded the URL-only positional with `start-local <agent-ref>`, adding the in-process `test-echo` A2A v0.3.0 acceptance agent while retaining loopback Card URLs. | The user requires one dws process with no Python sidecar; a narrowly bounded built-in Echo Agent provides deterministic local acceptance without pretending arbitrary agent IDs or process supervision are implemented. |
 | 2026-08-20 | Migrated the default control and server-selected WSS origin from OpenAPI's `api.dingtalk.com` route to Studio pre-release `pre-deap.dingtalk.com`; every control call now sends active-profile corp/user selection headers in addition to the user OAuth bearer. | Studio owns an existing pre-release public domain and browser-cookie SSO cannot authenticate the CLI. Studio verifies the bearer, resolves its DingTalk identity, and compares it with both headers before accepting the owner context. |
 | 2026-08-20 | Corrected persisted and HELLO `agentCardSha256` handling to require and preserve the frozen `sha256:<64 lowercase hex>` representation rather than a bare 64-character digest. | OpenAPI returns and compares the prefixed digest; accepting only bare hex caused `start-local` to fail locally after successful registration, while stripping or rebuilding the prefix would risk handshake identity drift. |
+| 2026-08-20 | Superseded the control-header portion of the Studio migration: LocalRunner control calls now send only the DWS user OAuth bearer and omit optional `X-Dingtalk-Corp-Id` / `X-Dingtalk-User-Id` caller cross-check headers. | Pre-release traces proved bearer verification, trusted identity resolution, employee lookup, and corp conversion succeeded while both create attempts failed `dingtalk_user_header_mismatch`; CLI `TokenData.UserID` and Studio's trusted numeric `uid` have different semantics, so the client must not send an optional exact-match claim it cannot prove. |

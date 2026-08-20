@@ -29,15 +29,15 @@ func TestCreatedRunnerUsesFrozenLowerCamelCaseJSON(t *testing.T) {
 	}
 }
 
-func TestHTTPControlClientCreatesRunnerWithOneOAuthRefreshAndStoresBearer(t *testing.T) {
+func TestHTTPControlClientCreatesRunnerWithOneOAuthRefreshWithoutOptionalOwnerHeaders(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/assistant/local-runners" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
-		if r.Header.Get("X-Dingtalk-Corp-Id") != "corp-1" || r.Header.Get("X-Dingtalk-User-Id") != "user-1" {
-			t.Errorf("profile headers = corp %q user %q",
+		if r.Header.Get("X-Dingtalk-Corp-Id") != "" || r.Header.Get("X-Dingtalk-User-Id") != "" {
+			t.Errorf("optional owner headers must be omitted, got corp %q user %q",
 				r.Header.Get("X-Dingtalk-Corp-Id"), r.Header.Get("X-Dingtalk-User-Id"))
 		}
 		body, _ := io.ReadAll(r.Body)

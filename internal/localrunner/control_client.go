@@ -14,11 +14,6 @@ import (
 
 const maxControlResponseBytes = 1 << 20
 
-const (
-	controlTenantHeader = "X-Dingtalk-Corp-Id"
-	controlUserHeader   = "X-Dingtalk-User-Id"
-)
-
 var ErrControlClientInvalid = errors.New("control_client_invalid")
 
 type OAuthAccessTokenProvider interface {
@@ -255,8 +250,6 @@ func (c *HTTPControlClient) requestAttempt(ctx context.Context, method, path str
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set(controlTenantHeader, tenantID)
-	req.Header.Set(controlUserHeader, userID)
 	response, err := c.httpClient.Do(req)
 	if err != nil {
 		return 0, nil, err
