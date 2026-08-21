@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/cli"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/corecmd/contract"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/helpers"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/localrunner"
@@ -100,6 +99,7 @@ func newDEAPCommand() *cobra.Command {
 }
 
 func newLocalRunnerStartLocalCommand() *cobra.Command {
+	var harness string
 	options := localRunnerStartLocalOptions{
 		MaxConcurrent: 4,
 		Streaming:     true,
@@ -107,22 +107,21 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 		Yolo:          true,
 	}
 	cmd := &cobra.Command{
-		Use:   "start-local <agent-ref>",
+		Use:   "start-local",
 		Short: "注册并运行一个本地 A2A Agent",
-		Long:  "使用 opencode、codex、claudecode、qoder、qoderwork、codebuddy、workbuddy 或 custom 在当前 dws 进程管理本地 Agent（custom 通过 DWS_AGENT_CMD 指定命令），使用 test-echo 启动内置验收 Agent，或读取 loopback Agent Card URL 兼容外部真实 Agent；gemini 是远端 API backend，不支持作为本机进程 LocalRunner。注册后先输出不含凭证的公网 A2A 配置，再维持 WSS 与本地 HTTP/SSE 代理。",
-		Args:   cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			options.AgentRef = strings.TrimSpace(args[0])
-			if helpers.IsLocalRunnerAgentChannel(options.AgentRef) {
-				workDir, err := normalizeLocalRunnerWorkDir(options.WorkDir)
-				if err != nil {
-					return err
-				}
-				options.WorkDir = workDir
-				options.Model = strings.TrimSpace(options.Model)
-			} else if strings.TrimSpace(options.WorkDir) != "" || strings.TrimSpace(options.Model) != "" {
+		Long:  "使用 --harness opencode 在当前 dws 进程管理指定项目目录中的 OpenCode Agent。注册后先输出不含凭证的公网 A2A 配置，再维持 WSS 与本地 HTTP/SSE 代理；--harness 是后续本地 Agent harness 的扩展点，本轮仅支持 opencode。",
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			options.AgentRef = strings.TrimSpace(harness)
+			if options.AgentRef != "opencode" {
 				return ErrLocalRunnerRuntimeInvalid
 			}
+			workDir, err := normalizeLocalRunnerWorkDir(options.WorkDir)
+			if err != nil {
+				return err
+			}
+			options.WorkDir = workDir
+			options.Model = strings.TrimSpace(options.Model)
 			runtime := localRunnerCommandRuntimeProvider()
 			result, err := runtime.StartLocal(cmd.Context(), options)
 			if err != nil {
@@ -139,34 +138,33 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 		},
 	}
 	flags := cmd.Flags()
-	flags.StringVar(&options.WorkDir, "workdir", "", "本地 Agent 项目目录；本机 channel 模式需要，可使用相对或绝对路径")
+	flags.StringVar(&harness, "harness", "", "本地 Agent harness；本轮支持 opencode")
+	flags.StringVar(&options.WorkDir, "work-dir", "", "本地 Agent 项目目录；可使用相对或绝对路径")
 	flags.StringVar(&options.Model, "model", "", "本地 Agent 模型覆盖；留空使用 channel 默认模型")
-	flags.StringVar(&options.LocalAgentID, "local-agent-id", "", "本地 Agent 的稳定 ID；本机 channel 按 channel/绝对 workdir、test-echo 按固定值、URL 按地址确定性派生")
+	flags.StringVar(&options.LocalAgentID, "local-agent-id", "", "本地 Agent 的稳定 ID；默认按 harness/绝对 work-dir 确定性派生")
 	flags.StringVar(&options.DisplayName, "display-name", "", "LocalRunner 显示名称；默认使用 Agent Card name")
 	flags.IntVar(&options.MaxConcurrent, "max-concurrent", 4, "最大并发 A2A 请求数")
 	flags.BoolVar(&options.Streaming, "streaming", true, "声明支持 SSE streaming")
 	flags.BoolVar(&options.Memory, "memory", true, "按 A2A contextId 复用本地 Agent session")
 	flags.BoolVar(&options.Yolo, "yolo", true, "启用本地 Agent 的最高权限模式；设为 false 使用受限模式")
 	flags.DurationVar(&options.AgentTimeout, "agent-timeout", 0, "单次本地 Agent 推理超时；0 表示使用 backend 默认值")
-	positionals := []contract.RuntimeSchemaPositional{{
-		Name: "agent_ref", Type: "string", Description: "本地 agent channel、内置 test-echo 或 loopback Agent Card URL；gemini 不支持本机进程模式", Required: true, Index: 0,
-	}}
-	cli.AnnotateRuntimePositionals(cmd, positionals...)
+	_ = cmd.MarkFlagRequired("harness")
+	_ = cmd.MarkFlagRequired("work-dir")
 	declaration := localRunnerContract(
 		"runtime_start_local",
 		"deap.runtime_start_local",
 		"deap runtime start-local",
-		"从共享本地 Agent backend、test-echo 或本地 Agent Card 一键注册并维持公网 A2A LocalRunner 连接",
-		"需要把指定项目目录中的本地 Agent 暴露为 A2A，验收 test-echo，或连接已有 loopback Agent Card 时",
-		"只注册不用长连接时使用 deap runtime expose，已有 Runner 重连时使用 connect；不支持的 agent-ref 会被明确拒绝",
-		[]string{"dws deap runtime start-local opencode --workdir ./project", "dws deap runtime start-local test-echo"},
+		"从共享本地 Agent backend 一键注册并维持公网 A2A LocalRunner 连接",
+		"需要把指定项目目录中的 OpenCode harness 暴露为 A2A 时",
+		"只注册不用长连接时使用 deap runtime expose，已有 Runner 重连时使用 connect；本轮不支持 opencode 之外的 harness",
+		[]string{"dws deap runtime start-local --harness opencode --work-dir ./project"},
 	)
-	declaration.Positionals = positionals
-	workDirOptional := false
+	required := true
 	declaration.Parameters = []contract.ParamDecl{
-		{Name: "workdir", Property: "workDir", InterfaceType: "string", Description: "本地 Agent 项目目录；本机 channel 模式需要，可使用相对或绝对路径", Required: &workDirOptional, RequiredWhen: "agent-ref is a local process channel"},
+		{Name: "harness", Property: "harness", InterfaceType: "string", Description: "本地 Agent harness；本轮支持 opencode", Required: &required, Enum: []string{"opencode"}},
+		{Name: "work-dir", Property: "workDir", InterfaceType: "string", Description: "本地 Agent 项目目录；可使用相对或绝对路径", Required: &required},
 		{Name: "model", Property: "model", InterfaceType: "string", Description: "本地 Agent 模型覆盖；留空使用 channel 默认模型"},
-		{Name: "local-agent-id", Property: "localAgentId", InterfaceType: "string", Description: "本地 Agent 的稳定 ID；本机 channel 按 channel/绝对 workdir、test-echo 默认固定、URL 模式确定性派生"},
+		{Name: "local-agent-id", Property: "localAgentId", InterfaceType: "string", Description: "本地 Agent 的稳定 ID；默认按 harness/绝对 work-dir 确定性派生"},
 		{Name: "display-name", Property: "displayName", InterfaceType: "string", Description: "LocalRunner 显示名称；默认使用 Agent Card name"},
 		{Name: "max-concurrent", Property: "maxConcurrent", InterfaceType: "integer", Description: "最大并发 A2A 请求数"},
 		{Name: "streaming", Property: "streaming", InterfaceType: "boolean", Description: "声明支持 SSE streaming"},

@@ -190,7 +190,7 @@ func TestLocalRunnerCommandSkeletonRequiresDeclaredIdentityFlags(t *testing.T) {
 	}
 }
 
-func TestLocalRunnerStartLocalHelpSchemaAndExactAgentReference(t *testing.T) {
+func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing.T) {
 	testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return &recordingLocalRunnerRuntime{} })
 
 	root := newRootCommandWithEngine(context.Background(), nil, false, true)
@@ -209,7 +209,8 @@ func TestLocalRunnerStartLocalHelpSchemaAndExactAgentReference(t *testing.T) {
 
 	for _, args := range [][]string{
 		{"deap", "runtime", "start-local"},
-		{"deap", "runtime", "start-local", "test-echo", "extra"},
+		{"deap", "runtime", "start-local", "opencode", "--work-dir", t.TempDir()},
+		{"deap", "runtime", "start-local", "--harness", "opencode", "--workdir", t.TempDir()},
 	} {
 		commandRoot := newRootCommandWithEngine(context.Background(), nil, false, true)
 		commandRoot.SetOut(&bytes.Buffer{})
@@ -229,11 +230,10 @@ func TestLocalRunnerStartLocalHelpSchemaAndExactAgentReference(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"start-local <agent-ref>",
+		"start-local [flags]",
+		"--harness",
+		"--work-dir",
 		"opencode",
-		"test-echo",
-		"loopback Agent Card URL",
-		"--workdir",
 		"--model",
 		"--local-agent-id",
 		"--display-name",
@@ -245,6 +245,11 @@ func TestLocalRunnerStartLocalHelpSchemaAndExactAgentReference(t *testing.T) {
 	} {
 		if !strings.Contains(helpOutput.String(), want) {
 			t.Fatalf("start-local help missing %q:\n%s", want, helpOutput.String())
+		}
+	}
+	for _, removed := range []string{"<agent-ref>", "--workdir", "test-echo", "loopback Agent Card URL"} {
+		if strings.Contains(helpOutput.String(), removed) {
+			t.Fatalf("start-local help still publishes removed contract %q:\n%s", removed, helpOutput.String())
 		}
 	}
 
@@ -266,26 +271,37 @@ func TestLocalRunnerStartLocalHelpSchemaAndExactAgentReference(t *testing.T) {
 	if err := json.Unmarshal(schemaOutput.Bytes(), &schema); err != nil {
 		t.Fatal(err)
 	}
-	if len(schema.Positionals) != 1 || schema.Positionals[0].Name != "agent_ref" || !schema.Positionals[0].Required {
+	if len(schema.Positionals) != 0 {
 		t.Fatalf("start-local positionals = %#v", schema.Positionals)
 	}
-	for _, name := range []string{"workdir", "model", "local-agent-id", "display-name", "max-concurrent", "streaming", "memory", "yolo", "agent-timeout"} {
+	for _, name := range []string{"harness", "work-dir", "model", "local-agent-id", "display-name", "max-concurrent", "streaming", "memory", "yolo", "agent-timeout"} {
 		if schema.Parameters[name] == nil {
 			t.Fatalf("start-local Schema missing --%s", name)
 		}
 	}
-	if schema.Parameters["openapi-base"] != nil {
-		t.Fatal("start-local Schema still publishes --openapi-base")
+	for _, removed := range []string{"workdir", "openapi-base"} {
+		if schema.Parameters[removed] != nil {
+			t.Fatalf("start-local Schema still publishes --%s", removed)
+		}
 	}
-	var workDirParameter struct {
-		Required     bool   `json:"required"`
-		RequiredWhen string `json:"required_when"`
+	var harnessParameter struct {
+		Required bool     `json:"required"`
+		Enum     []string `json:"enum"`
 	}
-	if err := json.Unmarshal(schema.Parameters["workdir"], &workDirParameter); err != nil {
+	if err := json.Unmarshal(schema.Parameters["harness"], &harnessParameter); err != nil {
 		t.Fatal(err)
 	}
-	if workDirParameter.Required || workDirParameter.RequiredWhen != "agent-ref is a local process channel" {
-		t.Fatalf("start-local workdir requirement = %#v", workDirParameter)
+	if !harnessParameter.Required || len(harnessParameter.Enum) != 1 || harnessParameter.Enum[0] != "opencode" {
+		t.Fatalf("start-local harness contract = %#v", harnessParameter)
+	}
+	var workDirParameter struct {
+		Required bool `json:"required"`
+	}
+	if err := json.Unmarshal(schema.Parameters["work-dir"], &workDirParameter); err != nil {
+		t.Fatal(err)
+	}
+	if !workDirParameter.Required {
+		t.Fatalf("start-local work-dir contract = %#v", workDirParameter)
 	}
 }
 
@@ -304,7 +320,7 @@ func TestLocalRunnerStartLocalOpenCodeNormalizesWorkDirAndPassesModel(t *testing
 	root := newRootCommandWithEngine(context.Background(), nil, false, true)
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
-	root.SetArgs([]string{"deap", "runtime", "start-local", "opencode", "--workdir", relative, "--model", "provider/model"})
+	root.SetArgs([]string{"deap", "runtime", "start-local", "--harness", "opencode", "--work-dir", relative, "--model", "provider/model"})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -313,48 +329,22 @@ func TestLocalRunnerStartLocalOpenCodeNormalizesWorkDirAndPassesModel(t *testing
 	}
 }
 
-func TestLocalRunnerStartLocalSupportsSharedLocalAgentRefsAndRejectsGemini(t *testing.T) {
-	for _, agentRef := range []string{"opencode", "codex", "claudecode", "qoder", "qoderwork", "codebuddy", "workbuddy", "custom"} {
-		t.Run(agentRef, func(t *testing.T) {
+func TestLocalRunnerStartLocalAcceptsOnlyOpenCodeHarness(t *testing.T) {
+	for _, harness := range []string{"codex", "claudecode", "qoder", "qoderwork", "codebuddy", "workbuddy", "custom", "gemini", "test-echo"} {
+		t.Run(harness, func(t *testing.T) {
 			runtime := &recordingLocalRunnerRuntime{}
 			testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
-			workDir := t.TempDir()
 			root := newRootCommandWithEngine(context.Background(), nil, false, true)
 			root.SetOut(&bytes.Buffer{})
 			root.SetErr(&bytes.Buffer{})
-			root.SetArgs([]string{"deap", "runtime", "start-local", agentRef, "--workdir", workDir})
-			if err := root.Execute(); err != nil {
-				t.Fatalf("start-local %s error = %v", agentRef, err)
+			root.SetArgs([]string{"deap", "runtime", "start-local", "--harness", harness, "--work-dir", t.TempDir()})
+			if err := root.Execute(); err == nil {
+				t.Fatalf("start-local accepted unsupported harness %q", harness)
 			}
-			if runtime.startOptions.AgentRef != agentRef || runtime.startOptions.WorkDir != filepath.Clean(workDir) {
-				t.Fatalf("start-local %s options = %#v", agentRef, runtime.startOptions)
+			if runtime.lastCall != "" {
+				t.Fatalf("rejected harness %q reached runtime", harness)
 			}
 		})
-	}
-
-	runtime := &recordingLocalRunnerRuntime{}
-	testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
-	root := newRootCommandWithEngine(context.Background(), nil, false, true)
-	output := &bytes.Buffer{}
-	root.SetOut(output)
-	root.SetErr(output)
-	root.SetArgs([]string{"deap", "runtime", "start-local", "gemini", "--workdir", t.TempDir()})
-	if err := root.Execute(); err == nil {
-		t.Fatal("start-local accepted remote Gemini API as a local process backend")
-	}
-	if runtime.lastCall != "" {
-		t.Fatal("rejected gemini mode reached runtime")
-	}
-
-	helpRoot := newRootCommandWithEngine(context.Background(), nil, false, true)
-	helpRoot.SetOut(output)
-	helpRoot.SetErr(output)
-	helpRoot.SetArgs([]string{"deap", "runtime", "start-local", "--help"})
-	if err := helpRoot.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output.String(), "gemini") || !strings.Contains(output.String(), "不支持") {
-		t.Fatalf("start-local help does not explain the Gemini local-process exclusion:\n%s", output.String())
 	}
 }
 
@@ -367,10 +357,10 @@ func TestLocalRunnerStartLocalOpenCodeRejectsMissingOrBadWorkDirBeforeRuntime(t 
 		name string
 		args []string
 	}{
-		{name: "missing flag", args: []string{"deap", "runtime", "start-local", "opencode"}},
-		{name: "missing path", args: []string{"deap", "runtime", "start-local", "opencode", "--workdir", filepath.Join(t.TempDir(), "missing")}},
-		{name: "file", args: []string{"deap", "runtime", "start-local", "opencode", "--workdir", file}},
-		{name: "flag on echo", args: []string{"deap", "runtime", "start-local", "test-echo", "--workdir", t.TempDir()}},
+		{name: "missing harness", args: []string{"deap", "runtime", "start-local", "--work-dir", t.TempDir()}},
+		{name: "missing work dir", args: []string{"deap", "runtime", "start-local", "--harness", "opencode"}},
+		{name: "missing path", args: []string{"deap", "runtime", "start-local", "--harness", "opencode", "--work-dir", filepath.Join(t.TempDir(), "missing")}},
+		{name: "file", args: []string{"deap", "runtime", "start-local", "--harness", "opencode", "--work-dir", file}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime := &recordingLocalRunnerRuntime{}
@@ -417,7 +407,9 @@ func TestLocalRunnerStartLocalWritesSanitizedSummaryBeforeConnectAndDoesNotRevok
 	root.SetOut(output)
 	root.SetErr(output)
 	root.SetArgs([]string{
-		"deap", "runtime", "start-local", "test-echo",
+		"deap", "runtime", "start-local",
+		"--harness", "opencode",
+		"--work-dir", t.TempDir(),
 		"--local-agent-id", "agent-override",
 		"--display-name", "Display override",
 		"--max-concurrent", "7",
@@ -433,7 +425,7 @@ func TestLocalRunnerStartLocalWritesSanitizedSummaryBeforeConnectAndDoesNotRevok
 	if !closed {
 		t.Fatal("built-in Agent was not closed after Connect returned")
 	}
-	if runtime.startOptions.AgentRef != "test-echo" || runtime.startOptions.LocalAgentID != "agent-override" || runtime.startOptions.DisplayName != "Display override" || runtime.startOptions.OpenAPIBase != "" || runtime.startOptions.MaxConcurrent != 7 || runtime.startOptions.Streaming {
+	if runtime.startOptions.AgentRef != "opencode" || runtime.startOptions.LocalAgentID != "agent-override" || runtime.startOptions.DisplayName != "Display override" || runtime.startOptions.OpenAPIBase != "" || runtime.startOptions.MaxConcurrent != 7 || runtime.startOptions.Streaming {
 		t.Fatalf("start-local options = %#v", runtime.startOptions)
 	}
 	for _, secret := range []string{"endpoint-secret", "connection-ticket", "local-authorization"} {
@@ -462,7 +454,7 @@ func TestLocalRunnerStartLocalContextCancelStopsCleanly(t *testing.T) {
 	root := newRootCommandWithEngine(ctx, nil, false, true)
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
-	root.SetArgs([]string{"deap", "runtime", "start-local", "http://127.0.0.1:8080/card"})
+	root.SetArgs([]string{"deap", "runtime", "start-local", "--harness", "opencode", "--work-dir", t.TempDir()})
 	done := make(chan error, 1)
 	go func() { done <- root.Execute() }()
 	select {
