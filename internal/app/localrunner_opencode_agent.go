@@ -1,3 +1,16 @@
+// Copyright 2026 Alibaba Group
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package app
 
 import (
@@ -6,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"iter"
 	"mime"
 	"net"
 	"net/http"
@@ -15,6 +29,9 @@ import (
 	"time"
 
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/helpers"
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2acompat/a2av0"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/google/uuid"
 )
 
@@ -22,35 +39,113 @@ const (
 	localRunnerOpenCodeRef          = "opencode"
 	localRunnerOpenCodeDisplayName  = "DWS OpenCode"
 	localRunnerOpenCodeAgentVersion = "1.0.0"
-	localRunnerOpenCodeCardPath     = "/.well-known/agent-card.json"
+	localRunnerOpenCodeCardPath     = a2asrv.WellKnownAgentCardPath
 	localRunnerOpenCodeRPCPath      = "/rpc"
 	localRunnerOpenCodeMaxBodyBytes = 64 << 10
 )
 
-var localRunnerOpenCodeAgentStarter = startLocalRunnerOpenCodeAgent
-var localRunnerOpenCodeAgentRestarter = startLocalRunnerOpenCodeAgentAt
+type localRunnerLocalAgentOptions struct {
+	WorkDir string
+	Model string
+	Memory bool
+	Yolo bool
+	Timeout time.Duration
+}
+
+var localRunnerLocalAgentStarter = startLocalRunnerLocalAgent
+var localRunnerLocalAgentRestarter = startLocalRunnerLocalAgentAt
 
 type localRunnerOpenCodeBackend interface {
 	Prompt(context.Context, string, string) (string, error)
 	Close() error
 }
 
-type localRunnerOpenCodeAgent struct {
-	cardURL        string
-	rpcURL         string
-	defaultContext string
+type localRunnerA2AExecutor struct {
 	backend        localRunnerOpenCodeBackend
-	server         *http.Server
-	done           chan struct{}
-	closeOnce      sync.Once
-	closeErr       error
+	defaultContext string
 }
 
-func startLocalRunnerOpenCodeAgent(ctx context.Context, workDir, model string) (*localRunnerOpenCodeAgent, error) {
-	return startLocalRunnerOpenCodeAgentOn(ctx, workDir, model, "127.0.0.1:0")
+var _ a2asrv.AgentExecutor = (*localRunnerA2AExecutor)(nil)
+
+func (e *localRunnerA2AExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
+	return func(yield func(a2a.Event, error) bool) {
+		if e == nil || e.backend == nil || execCtx == nil || execCtx.Message == nil || execCtx.Message.Role != a2a.MessageRoleUser || len(execCtx.Message.Parts) == 0 {
+			yield(nil, a2a.NewError(a2a.ErrInvalidParams, "Invalid params"))
+			return
+		}
+		texts := make([]string, 0, len(execCtx.Message.Parts))
+		for _, part := range execCtx.Message.Parts {
+			if part == nil {
+				yield(nil, a2a.NewError(a2a.ErrInvalidParams, "Invalid params"))
+				return
+			}
+			text, ok := part.Content.(a2a.Text)
+			if !ok {
+				yield(nil, a2a.NewError(a2a.ErrInvalidParams, "Invalid params"))
+				return
+			}
+			texts = append(texts, string(text))
+		}
+		prompt := strings.Join(texts, "\n")
+		if strings.TrimSpace(prompt) == "" {
+			yield(nil, a2a.NewError(a2a.ErrInvalidParams, "Invalid params"))
+			return
+		}
+		contextID := execCtx.Message.ContextID
+		if strings.TrimSpace(contextID) == "" {
+			contextID = e.defaultContext
+		}
+		reply, err := e.backend.Prompt(ctx, contextID, prompt)
+		if err != nil {
+			yield(nil, localRunnerA2ASafeError(err))
+			return
+		}
+		if strings.TrimSpace(reply) == "" {
+			yield(nil, a2a.NewError(a2a.ErrServerError, "Local agent request failed"))
+			return
+		}
+		message := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(reply))
+		message.ContextID = contextID
+		yield(message, nil)
+	}
 }
 
-func startLocalRunnerOpenCodeAgentAt(ctx context.Context, rawOrigin, workDir, model string) (*localRunnerOpenCodeAgent, error) {
+func (e *localRunnerA2AExecutor) Cancel(_ context.Context, execCtx *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
+	return func(yield func(a2a.Event, error) bool) {
+		if execCtx == nil {
+			yield(nil, a2a.NewError(a2a.ErrInvalidParams, "Invalid params"))
+			return
+		}
+		yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCanceled, nil), nil)
+	}
+}
+
+func localRunnerA2ASafeError(err error) error {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return a2a.NewError(a2a.ErrServerError, "Local agent request canceled")
+	case errors.Is(err, context.DeadlineExceeded):
+		return a2a.NewError(a2a.ErrServerError, "Local agent request timed out")
+	default:
+		return a2a.NewError(a2a.ErrServerError, "Local agent request failed")
+	}
+}
+
+type localRunnerOpenCodeAgent struct {
+	cardURL   string
+	rpcURL    string
+	backend   localRunnerOpenCodeBackend
+	server    *http.Server
+	done      chan struct{}
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func startLocalRunnerLocalAgent(ctx context.Context, agentRef string, options localRunnerLocalAgentOptions) (*localRunnerOpenCodeAgent, error) {
+	return startLocalRunnerLocalAgentOn(ctx, agentRef, options, "127.0.0.1:0")
+}
+
+func startLocalRunnerLocalAgentAt(ctx context.Context, rawOrigin, agentRef string, options localRunnerLocalAgentOptions) (*localRunnerOpenCodeAgent, error) {
 	parsed, err := url.Parse(strings.TrimSpace(rawOrigin))
 	if err != nil || parsed.Scheme != "http" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
 		return nil, errors.New("invalid_local_runner_opencode_origin")
@@ -60,15 +155,17 @@ func startLocalRunnerOpenCodeAgentAt(ctx context.Context, rawOrigin, workDir, mo
 	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
 		return nil, errors.New("invalid_local_runner_opencode_origin")
 	}
-	return startLocalRunnerOpenCodeAgentOn(ctx, workDir, model, parsed.Host)
+	return startLocalRunnerLocalAgentOn(ctx, agentRef, options, parsed.Host)
 }
 
-func startLocalRunnerOpenCodeAgentOn(ctx context.Context, workDir, model, listenAddress string) (*localRunnerOpenCodeAgent, error) {
-	backend, err := helpers.StartOpenCodeLocal(ctx, helpers.OpenCodeLocalOptions{WorkDir: workDir, Model: model})
+func startLocalRunnerLocalAgentOn(ctx context.Context, agentRef string, options localRunnerLocalAgentOptions, listenAddress string) (*localRunnerOpenCodeAgent, error) {
+	backend, err := helpers.StartLocalAgentBackend(ctx, helpers.LocalAgentBackendOptions{
+		Channel: agentRef, WorkDir: options.WorkDir, Model: options.Model, Memory: options.Memory, Yolo: options.Yolo, Timeout: options.Timeout,
+	})
 	if err != nil {
 		return nil, err
 	}
-	agent, err := startLocalRunnerOpenCodeAgentWithBackend(backend, listenAddress)
+	agent, err := startLocalRunnerLocalAgentWithBackend(backend, listenAddress, agentRef)
 	if err != nil {
 		_ = backend.Close()
 		return nil, err
@@ -77,46 +174,49 @@ func startLocalRunnerOpenCodeAgentOn(ctx context.Context, workDir, model, listen
 }
 
 func startLocalRunnerOpenCodeAgentWithBackend(backend localRunnerOpenCodeBackend, listenAddress string) (*localRunnerOpenCodeAgent, error) {
+	return startLocalRunnerLocalAgentWithBackend(backend, listenAddress, localRunnerOpenCodeRef)
+}
+
+func startLocalRunnerLocalAgentWithBackend(backend localRunnerOpenCodeBackend, listenAddress, agentRef string) (*localRunnerOpenCodeAgent, error) {
 	if backend == nil {
 		return nil, errors.New("local_runner_opencode_backend_required")
+	}
+	agentRef = strings.ToLower(strings.TrimSpace(agentRef))
+	displayName, ok := localRunnerLocalAgentDisplayName(agentRef)
+	if !ok {
+		return nil, errors.New("local_runner_agent_ref_unsupported")
 	}
 	listener, err := net.Listen("tcp", listenAddress)
 	if err != nil {
 		return nil, err
 	}
 	baseURL := "http://" + listener.Addr().String()
-	card, err := json.Marshal(struct {
-		Name               string                   `json:"name"`
-		Description        string                   `json:"description"`
-		Version            string                   `json:"version"`
-		URL                string                   `json:"url"`
-		ProtocolVersion    string                   `json:"protocolVersion"`
-		Capabilities       map[string]bool          `json:"capabilities"`
-		DefaultInputModes  []string                 `json:"defaultInputModes"`
-		DefaultOutputModes []string                 `json:"defaultOutputModes"`
-		Skills             []map[string]interface{} `json:"skills"`
-	}{
-		Name: localRunnerOpenCodeDisplayName, Description: "OpenCode project agent exposed through DWS LocalRunner",
-		Version: localRunnerOpenCodeAgentVersion, URL: baseURL + localRunnerOpenCodeRPCPath, ProtocolVersion: "0.3.0",
-		Capabilities: map[string]bool{"streaming": true},
-		DefaultInputModes: []string{"text/plain"}, DefaultOutputModes: []string{"text/plain"},
-		Skills: []map[string]interface{}{{
-			"id": "opencode", "name": "OpenCode", "description": "Reason about and work with the configured local project", "tags": []string{"code", "project"},
+	rpcURL := baseURL + localRunnerOpenCodeRPCPath
+	card := &a2a.AgentCard{
+		Name: displayName, Description: "Local project agent exposed through DWS LocalRunner",
+		Version: localRunnerOpenCodeAgentVersion,
+		SupportedInterfaces: []*a2a.AgentInterface{{
+			URL: rpcURL, ProtocolBinding: a2a.TransportProtocolJSONRPC, ProtocolVersion: a2av0.Version,
 		}},
-	})
-	if err != nil {
-		listener.Close()
-		return nil, err
+		Capabilities: a2a.AgentCapabilities{Streaming: true},
+		DefaultInputModes: []string{"text/plain"}, DefaultOutputModes: []string{"text/plain"},
+		Skills: []a2a.AgentSkill{{
+			ID: agentRef, Name: displayName, Description: "Reason about and work with the configured local project", Tags: []string{"code", "project"},
+		}},
 	}
+	cardProducer := localRunnerCompatCardProducer{AgentCardProducer: a2av0.NewStaticAgentCardProducer(card)}
+	executor := &localRunnerA2AExecutor{backend: backend, defaultContext: "localrunner-agent-" + uuid.NewString()}
+	rpcHandler := a2av0.NewJSONRPCHandler(a2asrv.NewHandler(executor))
+	cardHandler := a2asrv.NewAgentCardHandler(cardProducer)
+
 	agent := &localRunnerOpenCodeAgent{
 		cardURL: baseURL + localRunnerOpenCodeCardPath,
-		rpcURL: baseURL + localRunnerOpenCodeRPCPath,
-		defaultContext: "localrunner-opencode-" + uuid.NewString(),
+		rpcURL: rpcURL,
 		backend: backend,
 		done: make(chan struct{}),
 	}
 	agent.server = &http.Server{
-		Handler: localRunnerOpenCodeHandler{agent: agent, card: card},
+		Handler: localRunnerOfficialA2AHandler{card: cardHandler, rpc: rpcHandler},
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout: 30 * time.Second,
 		MaxHeaderBytes: 16 << 10,
@@ -126,6 +226,99 @@ func startLocalRunnerOpenCodeAgentWithBackend(backend localRunnerOpenCodeBackend
 		close(agent.done)
 	}()
 	return agent, nil
+}
+
+func localRunnerLocalAgentDisplayName(agentRef string) (string, bool) {
+	names := map[string]string{
+		"opencode": "DWS OpenCode",
+		"codex": "DWS Codex",
+		"claudecode": "DWS Claude Code",
+		"qoder": "DWS Qoder",
+		"qoderwork": "DWS QoderWork",
+		"codebuddy": "DWS CodeBuddy",
+		"workbuddy": "DWS WorkBuddy",
+		"custom": "DWS Custom Agent",
+		"test-echo": "DWS Test Echo",
+	}
+	name, ok := names[agentRef]
+	return name, ok
+}
+
+type localRunnerCompatCardProducer struct {
+	a2asrv.AgentCardProducer
+}
+
+func (p localRunnerCompatCardProducer) CardJSON(ctx context.Context) ([]byte, error) {
+	producer, ok := p.AgentCardProducer.(a2asrv.AgentCardJSONProducer)
+	if !ok {
+		return nil, errors.New("local_runner_agent_card_json_unavailable")
+	}
+	raw, err := producer.CardJSON(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var card map[string]any
+	if err := json.Unmarshal(raw, &card); err != nil {
+		return nil, err
+	}
+	card["protocolVersion"] = "0.3.0"
+	if interfaces, ok := card["supportedInterfaces"].([]any); ok {
+		for _, item := range interfaces {
+			if supported, ok := item.(map[string]any); ok && supported["protocolVersion"] == "0.3" {
+				supported["protocolVersion"] = "0.3.0"
+			}
+		}
+	}
+	return json.Marshal(card)
+}
+
+type localRunnerOfficialA2AHandler struct {
+	card http.Handler
+	rpc  http.Handler
+}
+
+func (h localRunnerOfficialA2AHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r == nil || r.URL == nil || r.URL.RawQuery != "" {
+		http.NotFound(w, r)
+		return
+	}
+	switch r.URL.Path {
+	case localRunnerOpenCodeCardPath:
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		h.card.ServeHTTP(w, r)
+	case localRunnerOpenCodeRPCPath:
+		h.serveRPC(w, r)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (h localRunnerOfficialA2AHandler) serveRPC(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		w.WriteHeader(http.StatusUnsupportedMediaType)
+		return
+	}
+	if r.ContentLength > localRunnerOpenCodeMaxBodyBytes {
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, localRunnerOpenCodeMaxBodyBytes+1))
+	if err != nil || len(body) > localRunnerOpenCodeMaxBodyBytes {
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	h.rpc.ServeHTTP(w, r)
 }
 
 func (a *localRunnerOpenCodeAgent) CardURL() string {
@@ -160,187 +353,4 @@ func (a *localRunnerOpenCodeAgent) Close() error {
 		}
 	})
 	return a.closeErr
-}
-
-type localRunnerOpenCodeHandler struct {
-	agent *localRunnerOpenCodeAgent
-	card  []byte
-}
-
-func (h localRunnerOpenCodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r == nil || r.URL == nil || r.URL.RawQuery != "" {
-		http.NotFound(w, r)
-		return
-	}
-	switch r.URL.Path {
-	case localRunnerOpenCodeCardPath:
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
-		_, _ = w.Write(h.card)
-	case localRunnerOpenCodeRPCPath:
-		h.serveRPC(w, r)
-	default:
-		http.NotFound(w, r)
-	}
-}
-
-func (h localRunnerOpenCodeHandler) serveRPC(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil || mediaType != "application/json" {
-		w.WriteHeader(http.StatusUnsupportedMediaType)
-		return
-	}
-	if r.ContentLength > localRunnerOpenCodeMaxBodyBytes {
-		w.WriteHeader(http.StatusRequestEntityTooLarge)
-		return
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, localRunnerOpenCodeMaxBodyBytes+1))
-	if err != nil || len(body) > localRunnerOpenCodeMaxBodyBytes {
-		w.WriteHeader(http.StatusRequestEntityTooLarge)
-		return
-	}
-	request, err := decodeLocalRunnerOpenCodeRequest(body)
-	if err != nil {
-		writeLocalRunnerOpenCodeError(w, http.StatusBadRequest, nil, -32600, "Invalid Request")
-		return
-	}
-	if request.Method != "message/send" && request.Method != "message/stream" {
-		writeLocalRunnerOpenCodeError(w, http.StatusOK, request.ID, -32601, "Method not found")
-		return
-	}
-	prompt, contextID, err := h.agent.promptInput(request)
-	if err != nil {
-		writeLocalRunnerOpenCodeError(w, http.StatusBadRequest, request.ID, -32602, "Invalid params")
-		return
-	}
-	reply, err := h.agent.backend.Prompt(r.Context(), contextID, prompt)
-	if err != nil {
-		switch {
-		case errors.Is(err, context.Canceled):
-			writeLocalRunnerOpenCodeError(w, http.StatusOK, request.ID, -32001, "OpenCode request canceled")
-		case errors.Is(err, context.DeadlineExceeded):
-			writeLocalRunnerOpenCodeError(w, http.StatusOK, request.ID, -32002, "OpenCode request timed out")
-		default:
-			writeLocalRunnerOpenCodeError(w, http.StatusOK, request.ID, -32000, "OpenCode request failed")
-		}
-		return
-	}
-	response, err := encodeLocalRunnerOpenCodeResponse(request.ID, contextID, reply)
-	if err != nil {
-		writeLocalRunnerOpenCodeError(w, http.StatusOK, request.ID, -32000, "OpenCode request failed")
-		return
-	}
-	if request.Method == "message/stream" {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("data: "))
-		_, _ = w.Write(response)
-		_, _ = w.Write([]byte("\n\n"))
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
-		}
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(response)
-}
-
-type localRunnerOpenCodeRequest struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id"`
-	Method  string          `json:"method"`
-	Params  struct {
-		Message struct {
-			Kind      string `json:"kind"`
-			Role      string `json:"role"`
-			MessageID string `json:"messageId"`
-			ContextID string `json:"contextId"`
-			Parts     []struct {
-				Kind string `json:"kind"`
-				Text string `json:"text"`
-			} `json:"parts"`
-		} `json:"message"`
-	} `json:"params"`
-}
-
-func decodeLocalRunnerOpenCodeRequest(body []byte) (*localRunnerOpenCodeRequest, error) {
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	var request localRunnerOpenCodeRequest
-	if err := decoder.Decode(&request); err != nil {
-		return nil, err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return nil, errors.New("invalid_request")
-	}
-	id := bytes.TrimSpace(request.ID)
-	if request.JSONRPC != "2.0" || len(id) == 0 || bytes.Equal(id, []byte("null")) || !json.Valid(id) || strings.TrimSpace(request.Method) == "" {
-		return nil, errors.New("invalid_request")
-	}
-	request.ID = append(json.RawMessage(nil), id...)
-	return &request, nil
-}
-
-func (a *localRunnerOpenCodeAgent) promptInput(request *localRunnerOpenCodeRequest) (string, string, error) {
-	message := request.Params.Message
-	if message.Kind != "message" || message.Role != "user" || strings.TrimSpace(message.MessageID) == "" || len(message.Parts) == 0 {
-		return "", "", errors.New("invalid_params")
-	}
-	texts := make([]string, 0, len(message.Parts))
-	for _, part := range message.Parts {
-		if part.Kind != "text" {
-			return "", "", errors.New("invalid_params")
-		}
-		texts = append(texts, part.Text)
-	}
-	prompt := strings.Join(texts, "\n")
-	if strings.TrimSpace(prompt) == "" {
-		return "", "", errors.New("invalid_params")
-	}
-	contextID := message.ContextID
-	if strings.TrimSpace(contextID) == "" {
-		contextID = a.defaultContext
-	}
-	return prompt, contextID, nil
-}
-
-func encodeLocalRunnerOpenCodeResponse(id json.RawMessage, contextID, reply string) ([]byte, error) {
-	if strings.TrimSpace(reply) == "" {
-		return nil, errors.New("invalid_reply")
-	}
-	return json.Marshal(struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      json.RawMessage `json:"id"`
-		Result  interface{}     `json:"result"`
-	}{
-		JSONRPC: "2.0", ID: id,
-		Result: map[string]interface{}{
-			"kind": "message", "role": "agent", "messageId": "msg_" + uuid.NewString(),
-			"contextId": contextID, "parts": []map[string]string{{"kind": "text", "text": reply}},
-		},
-	})
-}
-
-func writeLocalRunnerOpenCodeError(w http.ResponseWriter, status int, id json.RawMessage, code int, message string) {
-	if len(id) == 0 {
-		id = json.RawMessage("null")
-	}
-	payload, _ := json.Marshal(struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      json.RawMessage `json:"id"`
-		Error   interface{}     `json:"error"`
-	}{JSONRPC: "2.0", ID: id, Error: map[string]interface{}{"code": code, "message": message}})
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(payload)
 }

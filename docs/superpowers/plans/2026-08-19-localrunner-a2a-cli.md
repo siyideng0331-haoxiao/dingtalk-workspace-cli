@@ -4,9 +4,9 @@
 
 **Goal:** Add the independently testable DWS-side LocalRunner contract foundation that is wire-compatible with the Albert OpenAPI gateway and structurally enforces `Runner : Endpoint : WSS = 1 : 1 : 1`.
 
-**Architecture:** The contract and transport core lives in `internal/localrunner`: one runner/endpoint identity, exact OpenAPI lifecycle envelopes, memory-only secrets, the shared text-control/binary-chunk tunnel codec, a single-endpoint state machine, HTTP/WSS adapters, reconnect orchestration, Agent Card rewrite, and multiplexed loopback proxy. `internal/app` mounts only declared Cobra command skeletons behind an injected runtime boundary. Remote OpenAPI/WSS/public-RPC interoperability and production OAuth/keyring/runtime wiring remain external gates.
+**Architecture:** The contract and transport core lives in `internal/localrunner`: one runner/endpoint identity, exact OpenAPI lifecycle envelopes, memory-only secrets, the shared text-control/binary-chunk tunnel codec, a single-endpoint state machine, HTTP/WSS adapters, reconnect orchestration, Agent Card rewrite, and multiplexed loopback proxy. `internal/app` mounts one `deap runtime` command group behind an injected runtime boundary and serves local A2A through the official SDK compatibility handler. `internal/helpers` owns the shared local-agent process/forwarder/session lifecycle used by both `dev connect` streaming ingress and LocalRunner A2A ingress. Remote OpenAPI/WSS/public-RPC interoperability remains an external gate.
 
-**Tech Stack:** Go 1.25.9 with `GOTOOLCHAIN=auto`, standard library JSON/binary/HTTP/URL/concurrency packages, the repository's existing Gorilla WebSocket dependency and declared Cobra command framework, and the standard `testing` package.
+**Tech Stack:** Go 1.25.9 with `GOTOOLCHAIN=auto`, `github.com/a2aproject/a2a-go/v2` with its `a2acompat/a2av0` compatibility layer, standard library JSON/binary/HTTP/URL/concurrency packages, the repository's existing Gorilla WebSocket dependency and declared Cobra command framework, and the standard `testing` package.
 
 ---
 
@@ -729,10 +729,12 @@ the minimal DTO/client implementation, then run the focused package tests.
 
 ### 10.6 CLI commands and production runtime
 
-- Add `expose`, `status`, `revoke`, and `connect` leaves using the repository's
-  declared command framework. The default provider constructs the production
-  runtime rather than an unavailable placeholder, and every command exposes no
-  secret-bearing value.
+- Mount `expose`, `status`, `revoke`, `connect`, and `start-local` only under
+  the repository's declared `dws deap runtime` group. The overlapping
+  `dws deap local-runner` group is absent from Cobra, Help, Schema, CLI paths,
+  and examples. The default provider constructs the production runtime rather
+  than an unavailable placeholder, and every command exposes no secret-bearing
+  value.
 - Resolve OAuth access tokens through the existing DWS `TokenManager` and use
   the existing force-refresh path for one rejected-token retry. Resolve the
   current tenant/operator identity from the same active auth profile only in
@@ -749,12 +751,18 @@ the minimal DTO/client implementation, then run the focused package tests.
   callable loopback origin, OpenAPI base, and Agent Card SHA-256; it contains
   no endpoint bearer, connection ticket, OAuth/local Authorization, body, or
   SSE data.
-- `expose` defaults the compatibility-named `--openapi-base` to Studio's
-  pre-release public gateway `https://pre-deap.dingtalk.com`, while retaining an explicit override for isolated
-  tests or separately configured environments. It fetches a loopback Agent
-  Card without following it outside loopback, validates the frozen Card
-  contract, creates the Runner, transfers the one-time bearer to keyring,
-  fetches the authoritative Runner view/hash, and saves non-sensitive config.
+- Neither `expose` nor `start-local` publishes `--openapi-base`. New
+  registrations resolve one control-plane base through
+  `pkg/config.GetDEAPOpenAPIBaseURL`: the production default is
+  `https://deap-open-api.dingtalk.com`; an exact nonblank value in
+  `$DWS_CONFIG_DIR/deap_openapi_url` (default
+  `~/.dws/deap_openapi_url`) overrides it, including the pre-release value
+  `https://pre-deap-open-api.dingtalk.com`. Existing `status`, `revoke`, and
+  `connect` operations continue using the base stored with their binding.
+  `expose` fetches a loopback Agent Card without following it outside loopback,
+  validates the frozen Card contract, creates the Runner, transfers any legacy
+  one-time bearer response to keyring, fetches the authoritative Runner
+  view/hash, and saves non-sensitive config.
 - `status` performs both GET Runner and GET connection and reports their
   sanitized exact views. `revoke` performs DELETE Runner and then removes the
   exact local config/keyring entries. `connect` validates all supplied identity,
@@ -774,18 +782,19 @@ the minimal DTO/client implementation, then run the focused package tests.
 
 Local unit/fake-server tests may establish DTO, OAuth control, handshake, heartbeat,
 fresh-ticket reconnect, multiplexing, streaming/cancel, and command-delegation
-behavior. Real Studio HTTP/WSS/public-RPC interoperability, public DNS/TLS,
-outer `pre-deap.dingtalk.com` WebSocket Upgrade preservation, load-balancer idle
+behavior. Real OpenAPI HTTP/WSS/public-RPC interoperability, public DNS/TLS,
+outer public-gateway WebSocket Upgrade preservation, load-balancer idle
 timeouts, server-side card rewrite/hash equality, remote limits, and deployment
 remain external integration gates and must be reported as unverified.
 
 ### 10.8 One-command local runtime orchestration
 
-Add `dws deap runtime start-local <agent-card-url>` as a declared composite
-leaf while preserving all four `deap local-runner` leaves. The command accepts
-exactly one required positional loopback Card URL plus optional
-`--local-agent-id`, `--display-name`, `--openapi-base`, `--max-concurrent`, and
-`--streaming` overrides. With no identity/name override, the production runtime
+Add `dws deap runtime start-local <agent-ref>` as a declared composite leaf in
+the sole LocalRunner command group. The positional accepts a supported local
+agent channel, `test-echo`, or a lexical-loopback Card URL. It has no
+`--openapi-base`; optional identity, display, concurrency, streaming, workdir,
+model, memory, yolo, and timeout overrides are declared only where meaningful.
+With no URL identity/name override, the production runtime
 derives a stable `local-<sha256-prefix>` ID from the normalized Card URL and
 uses the validated Card's non-blank `name`.
 
@@ -817,9 +826,9 @@ Both paths return only a sanitized A2A summary and private in-process connect
 options. The command JSON-encodes that summary before invoking the existing
 blocking `Connect` path, so users can copy the public configuration while the
 WSS/proxy stays active. The summary is exactly lowerCamelCase and includes
-`type="A2A"`, public `agentCardUrl`, credential-free Bearer metadata
-(`system-keyring`, never exported), and the singular Runner/Endpoint with
-pre-connection `CONNECTING` status.
+`type="A2A"`, public `agentCardUrl`, and the singular Runner/Endpoint with
+pre-connection `CONNECTING` status. It contains no authentication, security,
+credential storage, or exported credential declaration.
 
 No failure after registration implicitly calls `Revoke`: a failed connection
 returns its stable error while config and keyring state remain available for
@@ -831,8 +840,8 @@ local Authorization, A2A body, or SSE content.
 Implementation and verification steps:
 
 - [x] Add command/help/Schema/argument tests proving the exact hierarchy,
-  single positional, optional overrides, production provider, legacy command
-  compatibility, and stable summary-before-connect ordering.
+  single positional, optional overrides, production provider, absence of the
+  overlapping legacy group, and stable summary-before-connect ordering.
 - [x] Add runtime tests proving deterministic URL-derived ID, Card-name default,
   one-time Card read, real control/keyring/config preparation, private connect
   options, clean cancellation, and no automatic revoke on connect failure.
@@ -910,57 +919,58 @@ Implementation and verification steps:
   `internal/localrunner` regression, independent temporary-output build, and
   tracked/no-index diff checks without a formatter.
 
-### 10.10 In-process OpenCode project A2A agent
+### 10.10 Shared local-agent backend and official A2A compatibility server
 
-Extend the same long-running entry point with the exact built-in reference:
+Extend the same long-running entry point with the local agent channel registry:
 
 ```text
 dws deap runtime start-local opencode --workdir <project> [--model <provider/model>]
 ```
 
-`--workdir` is required only for `opencode`. The command resolves a relative
-value against the current directory, cleans it, requires an existing directory,
-and passes only the absolute value into the runtime. Empty directories are
-valid. DWS starts `opencode serve` with that directory as its process working
-directory, so OpenCode remains responsible for its normal `AGENTS.md`, skill,
-and project discovery. `--model` is optional and is forwarded to the existing
-OpenCode message API; an omitted value preserves OpenCode's default-model
-selection. The existing `test-echo` and lexical-loopback Card URL forms remain
-unchanged and reject these OpenCode-only flags.
+The registry accepts `opencode`, `codex`, `claudecode`, `qoder`, `qoderwork`,
+`codebuddy`, `workbuddy`, and `custom`, plus the existing `test-echo` and
+lexical-loopback Card URL compatibility forms. `gemini` remains available to
+`dev connect` but is explicitly excluded from LocalRunner because that channel
+uses a remote API rather than a DWS-owned local process. `--workdir` is required
+for process-backed channel references. The command resolves a relative value
+against the current directory, cleans it, requires an existing directory, and
+passes only the absolute value into the runtime; empty directories are valid.
 
-`internal/helpers/opencode_local.go` is a narrow façade over the existing
-`opencodeForwarder`, `opencodeServer`, HTTP health/session/message client, and
-process cleanup. It accepts only an already-normalized absolute directory,
-eagerly starts and health-checks the existing server, keeps a private in-memory
-context-to-session map, returns the final unbranded text, and exposes one
-idempotent close. It does not introduce a second OpenCode HTTP client or persist
-session IDs, prompts, server passwords, response bodies, or environment.
+`internal/helpers.LocalAgentBackend` is the shared lifecycle boundary. It uses
+the existing `agentSpecs`, `resolveExecAgent`, `forwarderForChannel`,
+`forwardConnectTurn`, streaming/attachment interfaces, and `forwarderCloser`;
+it does not copy a launcher or agent-specific HTTP client. Both `dev connect`
+and LocalRunner obtain their process/session handle through this factory.
+Channel, workdir, model, memory, yolo, and timeout options enter the same
+backend, while prompt content, session IDs, credentials, and environment remain
+in memory and out of config/logs.
 
-`internal/app/localrunner_opencode_agent.go` owns a separate bounded loopback
-A2A surface and does not change the `test-echo` implementation. Its Card is A2A
-`protocolVersion="0.3.0"`, agent `version="1.0.0"`, streaming-capable, text-only,
-and contains neither the project path nor an authentication declaration. It
-accepts only JSON-RPC 2.0 `message/send` and `message/stream` requests with user
-Message text parts. Ordered text parts are joined with one newline. A nonblank
-`contextId` is the stable OpenCode session key; a missing context uses a stable
-adapter-instance default that cannot cross another process/endpoint instance.
-Replies use a new agent message ID and preserve the selected context. Stream
-mode emits exactly one final SSE `data:` event because the existing OpenCode
-HTTP API supplies a final response rather than token deltas.
+The bounded loopback A2A surface uses official
+`github.com/a2aproject/a2a-go/v2` message/Card/executor types and server handler,
+with `a2acompat/a2av0.NewJSONRPCHandler` retaining the current DEAP JSON-RPC/SSE
+wire. A thin Card producer normalizes the SDK compatibility spelling `0.3` to
+the existing `0.3.0` contract at the root and in `supportedInterfaces`; it does
+not upgrade the wire to A2A 1.0. The Card is streaming-capable, text-only, and
+contains neither project path nor authentication/security declarations. The
+official executor accepts only user Message text parts, joins ordered parts
+with one newline, preserves nonblank `contextId` as the backend session key,
+creates an agent Message reply, and emits one final official SSE event when the
+backend has only a final response.
 
 Invalid requests and unsupported parts use static JSON-RPC errors. Cancellation,
-deadline, and other OpenCode failures map to distinct static categories without
+deadline, and other backend failures map to distinct static categories without
 including prompts, response bodies, server credentials, environment, headers,
 or raw errors. The adapter limits request bodies, binds only loopback, exposes
-only the Card and RPC paths, and closes HTTP ingress plus the DWS-owned OpenCode
-child exactly once on registration failure, Connect return, or context-driven
-command exit.
+only the Card and RPC paths, and closes HTTP ingress plus the DWS-owned backend
+exactly once on registration failure, Connect return, or context-driven command
+exit. `test-echo` is a thin backend on this same official handler rather than a
+second handwritten JSON-RPC/SSE server.
 
-The default local agent ID is `opencode-<first 16 lowercase sha256 hex>` of the
-normalized absolute workdir, independent of the random loopback port. An
-explicit ID remains allowed. Stored config adds only
-`agentKind="opencode"` and the absolute `workDir`; model and all credentials are
-not persisted. Resume first requires the same kind/workdir and then reuses the
+The default local agent ID is `<channel>-<first 16 lowercase sha256 hex>`, with
+the digest computed from the normalized absolute workdir, independent of the random
+loopback port. An explicit ID remains allowed. Stored config adds only the
+exact `agentKind` and absolute `workDir`; model and all credentials are not
+persisted. Resume first requires the same kind/workdir and then reuses the
 existing strict runner/endpoint/origin/status/raw-digest/public-Card semantic
 checks. A matching binding reopens the stored loopback origin without Create;
 any kind/workdir or existing remote drift fails closed before an unknown project
@@ -970,16 +980,16 @@ RPC semantics are unchanged.
 
 Implementation and verification steps:
 
-- [x] Add helper façade RED/GREEN coverage for context session isolation, raw
-  replies, safe errors, strict workdir validation, and existing forwarder
-  regressions.
-- [x] Add real-loopback adapter RED/GREEN coverage for Card, send, one final SSE
-  event, text-only validation, context mapping, cancellation/timeout/error
-  redaction, and one-time cleanup.
+- [x] Add shared helper-factory RED/GREEN coverage for registry selection,
+  session forwarding, streaming/attachment capability preservation, one-time
+  cleanup, and `dev connect` factory usage.
+- [x] Add official-executor/real-loopback RED/GREEN coverage for Card, send,
+  one final SSE event, text-only validation, context mapping,
+  cancellation/timeout/error redaction, and one-time cleanup.
 - [x] Add command/config/runtime RED/GREEN coverage for Help/Schema flags,
   relative normalization, empty-directory startup, stable ID, registration
   cleanup, stored kind/workdir drift rejection, and no-create/no-update resume.
-- [ ] Run final focused, race, full related-package, Schema drift, independent
+- [x] Run final focused, race, full related-package, Schema drift, independent
   build, and Git diff gates without a formatter; record exact evidence in the
   delivery report.
 
@@ -1022,3 +1032,4 @@ Implementation and verification steps:
 | 2026-08-21 | Changed stored-binding Card recovery to bind the server's raw public-Card digest while using bounded credential-free HTTPS fetches and JSON semantic equality for change detection and post-update verification. | Jackson and Go serialize equivalent object keys in different orders; comparing their raw digests triggered an unnecessary PUT and then rejected the unchanged server digest, so raw hashes remain concurrency evidence while key order is no longer treated as an A2A Card change. |
 | 2026-08-21 | Removed CLI-authored `localRunnerBearer`, top-level authentication/security declarations, each `skills[*].security` override, and the bearer/keyring block from the published-Card expectation and `start-local` summary while retaining business `metadata.security` and redacted legacy endpoint-bearer response storage compatibility. | The Relay and the existing digital-employee A2A chain are now explicitly decoupled: public Card/RPC is unauthenticated at both Card and AgentSkill levels, WSS keeps OAuth plus its connection ticket, and a Relay endpoint bearer must not be presented as a local Agent startup requirement or exported configuration. |
 | 2026-08-21 | Added `start-local opencode --workdir <project>` with an in-process A2A 0.3 adapter over the existing OpenCode serve/session/message lifecycle, stable workdir identity, optional model override, and guarded stored-binding recovery. | Users need one DWS command to expose a real project reasoning agent rather than an echo or separately managed HTTP service; the thin façade keeps OpenCode discovery and cleanup in the mature implementation while leaving Relay, control OAuth, WSS tickets, tunnel frames, and public RPC authentication semantics unchanged. |
+| 2026-08-21 | Consolidated every LocalRunner leaf under the sole `deap runtime` group, removed public `--openapi-base` in favor of `deap_openapi_url` with production default `https://deap-open-api.dingtalk.com`, migrated the loopback Card/RPC server to official `a2a-go/v2` through `a2acompat/a2av0` while preserving `0.3.0`, and routed LocalRunner plus `dev connect` through one shared local-agent backend for `opencode`, `codex`, `claudecode`, `qoder`, `qoderwork`, `codebuddy`, `workbuddy`, and `custom`. | The product has one LocalRunner lifecycle surface and one environment resolver; official SDK types/handlers replace handwritten JSON-RPC/SSE envelopes without an incompatible wire upgrade, while reusing the existing agent registry, forwarder, process, session, streaming, attachment, and close lifecycle prevents a second OpenCode-specific launcher. `gemini` remains a `dev connect` remote-API channel and is explicitly excluded from LocalRunner. |

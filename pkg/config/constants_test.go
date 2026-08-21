@@ -219,6 +219,30 @@ func TestGetMCPBaseURLUsesConfigFile(t *testing.T) {
 	}
 }
 
+func TestGetDEAPOpenAPIBaseURLDefaultsToProduction(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DWS_CONFIG_DIR", dir)
+
+	got := GetDEAPOpenAPIBaseURL()
+	if got != "https://deap-open-api.dingtalk.com" {
+		t.Fatalf("GetDEAPOpenAPIBaseURL() = %q, want production DEAP OpenAPI URL", got)
+	}
+	if strings.Contains(got, "pre-deap") {
+		t.Fatalf("GetDEAPOpenAPIBaseURL() = %q, must not default to prepub URL", got)
+	}
+}
+
+func TestGetDEAPOpenAPIBaseURLUsesConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DWS_CONFIG_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, "deap_openapi_url"), []byte("https://pre-deap-open-api.dingtalk.com\n"), FilePerm); err != nil {
+		t.Fatalf("WriteFile(deap_openapi_url) error = %v", err)
+	}
+	if got := GetDEAPOpenAPIBaseURL(); got != "https://pre-deap-open-api.dingtalk.com" {
+		t.Fatalf("GetDEAPOpenAPIBaseURL() = %q, want configured URL", got)
+	}
+}
+
 func TestMaxUploadFileSize(t *testing.T) {
 	t.Parallel()
 	var want int64 = 100 * 1024 * 1024

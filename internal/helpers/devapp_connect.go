@@ -53,6 +53,7 @@ var (
 	devAppConnectStdinInteractive = connectStdinInteractive
 	devAppRunConnectOnboarding    = runConnectOnboarding
 	devAppStartConnectDaemon      = startDaemon
+	devAppStartLocalAgentBackend  = StartLocalAgentBackend
 )
 
 // resolveConnectChannel resolves the current agent channel using "explicit wins,
@@ -271,7 +272,10 @@ func launchConnector(cmd *cobra.Command, runner executor.Runner, channel, client
 			fmt.Fprintf(cmd.ErrOrStderr(), "[connect] 角色已加载：%s（主人=%s｜知识源 +%d｜权限scope=[%s]｜确认策略=%s）\n",
 				role.Name, opts.OwnerUserID, len(role.KnowledgeSources), strings.Join(role.AllowedScopes, ","), role.ConfirmPolicy)
 		}
-		fwd, err := forwarderForChannel(channel, clientID, opts)
+		fwd, err := devAppStartLocalAgentBackend(cmd.Context(), LocalAgentBackendOptions{
+			Channel: channel, ClientID: clientID, WorkDir: opts.WorkDir, Model: opts.Model,
+			Memory: opts.Memory, Yolo: opts.Yolo, Timeout: opts.Timeout,
+		})
 		if err != nil {
 			return err
 		}

@@ -44,7 +44,7 @@ func (c StoredRunnerConfig) Validate() error {
 	}
 	if c.AgentKind == "" && c.WorkDir == "" {
 		// Legacy external/test-echo bindings predate local process metadata.
-	} else if c.AgentKind != "opencode" || strings.TrimSpace(c.WorkDir) != c.WorkDir || !filepath.IsAbs(c.WorkDir) || filepath.Clean(c.WorkDir) != c.WorkDir {
+	} else if !validLocalAgentKind(c.AgentKind) || strings.TrimSpace(c.WorkDir) != c.WorkDir || !filepath.IsAbs(c.WorkDir) || filepath.Clean(c.WorkDir) != c.WorkDir {
 		return ErrRunnerConfigInvalid
 	}
 	const agentCardSHA256Prefix = "sha256:"
@@ -60,6 +60,18 @@ func (c StoredRunnerConfig) Validate() error {
 		return ErrRunnerConfigInvalid
 	}
 	return nil
+}
+
+func validLocalAgentKind(kind string) bool {
+	if kind == "" || strings.TrimSpace(kind) != kind {
+		return false
+	}
+	for _, char := range kind {
+		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 type RunnerConfigStore struct {

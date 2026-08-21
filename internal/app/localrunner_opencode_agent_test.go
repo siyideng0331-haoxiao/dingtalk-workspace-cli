@@ -11,6 +11,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 )
 
 type fakeLocalRunnerOpenCodeBackend struct {
@@ -38,6 +41,74 @@ func (f *fakeLocalRunnerOpenCodeBackend) Close() error {
 	defer f.mu.Unlock()
 	f.closeCalls++
 	return nil
+}
+
+func TestLocalRunnerAgentExecutorUsesOfficialA2ATypes(t *testing.T) {
+	backend := &fakeLocalRunnerOpenCodeBackend{reply: "official reply"}
+	executor := &localRunnerA2AExecutor{backend: backend, defaultContext: "default-context"}
+	var _ a2asrv.AgentExecutor = executor
+	message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("first"), a2a.NewTextPart("second"))
+	message.ContextID = "context-1"
+	message.ID = "message-1"
+	execContext := &a2asrv.ExecutorContext{Message: message, ContextID: message.ContextID}
+
+	var events []a2a.Event
+	for event, err := range executor.Execute(context.Background(), execContext) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	if len(events) != 1 {
+		t.Fatalf("official executor events = %d, want 1", len(events))
+	}
+	reply, ok := events[0].(*a2a.Message)
+	if !ok || reply.Role != a2a.MessageRoleAgent || reply.ContextID != "context-1" || len(reply.Parts) != 1 || reply.Parts[0].Text() != "official reply" {
+		t.Fatalf("official executor reply = %#v", events[0])
+	}
+}
+
+func TestLocalRunnerOfficialA2AAdapterIsSharedAcrossLocalAgentChannels(t *testing.T) {
+	for _, test := range []struct {
+		ref  string
+		name string
+	}{
+		{ref: "opencode", name: "DWS OpenCode"},
+		{ref: "codex", name: "DWS Codex"},
+		{ref: "claudecode", name: "DWS Claude Code"},
+		{ref: "qoder", name: "DWS Qoder"},
+		{ref: "qoderwork", name: "DWS QoderWork"},
+		{ref: "codebuddy", name: "DWS CodeBuddy"},
+		{ref: "workbuddy", name: "DWS WorkBuddy"},
+		{ref: "custom", name: "DWS Custom Agent"},
+	} {
+		t.Run(test.ref, func(t *testing.T) {
+			backend := &fakeLocalRunnerOpenCodeBackend{reply: "reply"}
+			agent, err := startLocalRunnerLocalAgentWithBackend(backend, "127.0.0.1:0", test.ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer agent.Close()
+			response, err := http.Get(agent.CardURL())
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var card struct {
+				Name   string `json:"name"`
+				Skills []struct {
+					ID string `json:"id"`
+				} `json:"skills"`
+			}
+			if response.StatusCode != http.StatusOK || json.Unmarshal(body, &card) != nil || card.Name != test.name || len(card.Skills) != 1 || card.Skills[0].ID != test.ref {
+				t.Fatalf("%s Card status=%d body=%s", test.ref, response.StatusCode, body)
+			}
+		})
+	}
 }
 
 func TestLocalRunnerOpenCodeAgentServesCardSendAndFinalStream(t *testing.T) {
@@ -68,12 +139,19 @@ func TestLocalRunnerOpenCodeAgentServesCardSendAndFinalStream(t *testing.T) {
 		Security        interface{} `json:"security"`
 		SecuritySchemes interface{} `json:"securitySchemes"`
 		Authentication  interface{} `json:"authentication"`
+		SupportedInterfaces []struct {
+			ProtocolVersion string `json:"protocolVersion"`
+			URL             string `json:"url"`
+		} `json:"supportedInterfaces"`
 	}
 	if response.StatusCode != http.StatusOK || json.Unmarshal(cardBody, &card) != nil {
 		t.Fatalf("Card response status=%d body=%s", response.StatusCode, cardBody)
 	}
 	if card.Name != localRunnerOpenCodeDisplayName || card.Version != "1.0.0" || card.ProtocolVersion != "0.3.0" || card.URL != agent.RPCURL() || !card.Capabilities.Streaming {
 		t.Fatalf("OpenCode Card = %#v", card)
+	}
+	if len(card.SupportedInterfaces) != 1 || card.SupportedInterfaces[0].ProtocolVersion != "0.3.0" || card.SupportedInterfaces[0].URL != agent.RPCURL() {
+		t.Fatalf("OpenCode Card supportedInterfaces = %#v", card.SupportedInterfaces)
 	}
 	if card.Security != nil || card.SecuritySchemes != nil || card.Authentication != nil {
 		t.Fatalf("OpenCode Card unexpectedly declares authentication: %s", cardBody)
@@ -117,18 +195,10 @@ func TestLocalRunnerOpenCodeAgentServesCardSendAndFinalStream(t *testing.T) {
 	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("stream response status=%d contentType=%q", response.StatusCode, response.Header.Get("Content-Type"))
 	}
-	reader := bufio.NewReader(response.Body)
-	firstLine, err := reader.ReadString('\n')
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(firstLine, "data: ") || !strings.Contains(firstLine, `"text":"OpenCode final answer"`) {
-		t.Fatalf("first SSE event = %q", firstLine)
-	}
-	rest, err := io.ReadAll(reader)
+	streamBody, err = io.ReadAll(bufio.NewReader(response.Body))
 	response.Body.Close()
-	if err != nil || string(rest) != "\n" {
-		t.Fatalf("SSE tail = %q err=%v", rest, err)
+	if err != nil || strings.Count(string(streamBody), "data: ") != 1 || !strings.Contains(string(streamBody), `"text":"OpenCode final answer"`) {
+		t.Fatalf("official SSE body = %q err=%v", streamBody, err)
 	}
 }
 
@@ -181,11 +251,11 @@ func TestLocalRunnerOpenCodeAgentRejectsUnsupportedPartsAndRedactsFailures(t *te
 	}
 	defer agent.Close()
 
-	unsupported := []byte(`{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"kind":"message","role":"user","messageId":"message","parts":[{"kind":"file","uri":"file:///secret"}]}}}`)
+	unsupported := []byte(`{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"kind":"message","role":"user","messageId":"message","parts":[{"kind":"file","file":{"uri":"file:///secret"}}]}}}`)
 	response := postLocalRunnerOpenCode(t, agent.RPCURL(), unsupported)
 	body, _ := io.ReadAll(response.Body)
 	response.Body.Close()
-	if response.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), `"code":-32602`) {
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"code":-32602`) {
 		t.Fatalf("unsupported part response status=%d body=%s", response.StatusCode, body)
 	}
 
@@ -193,7 +263,7 @@ func TestLocalRunnerOpenCodeAgentRejectsUnsupportedPartsAndRedactsFailures(t *te
 	response = postLocalRunnerOpenCode(t, agent.RPCURL(), failed)
 	body, _ = io.ReadAll(response.Body)
 	response.Body.Close()
-	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"code":-32000`) || !strings.Contains(string(body), `"message":"OpenCode request failed"`) {
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"code":-32000`) || !strings.Contains(string(body), `"message":"Local agent request failed"`) {
 		t.Fatalf("backend failure response status=%d body=%s", response.StatusCode, body)
 	}
 	if strings.Contains(string(body), sensitive) {
@@ -208,8 +278,8 @@ func TestLocalRunnerOpenCodeAgentMapsCancellationAndTimeout(t *testing.T) {
 		code    string
 		message string
 	}{
-		{name: "canceled", err: context.Canceled, code: `"code":-32001`, message: `"message":"OpenCode request canceled"`},
-		{name: "timeout", err: context.DeadlineExceeded, code: `"code":-32002`, message: `"message":"OpenCode request timed out"`},
+		{name: "canceled", err: context.Canceled, code: `"code":-32000`, message: `"message":"Local agent request canceled"`},
+		{name: "timeout", err: context.DeadlineExceeded, code: `"code":-32000`, message: `"message":"Local agent request timed out"`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			backend := &fakeLocalRunnerOpenCodeBackend{err: test.err}

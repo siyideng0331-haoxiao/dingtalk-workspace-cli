@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,7 +34,20 @@ func TestDefaultLocalRunnerRuntimeProviderIsProduction(t *testing.T) {
 	}
 }
 
+func TestProductionLocalRunnerRuntimeUsesDEAPOpenAPIConfigFile(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("DWS_CONFIG_DIR", configDir)
+	if err := os.WriteFile(filepath.Join(configDir, "deap_openapi_url"), []byte("https://pre-deap-open-api.dingtalk.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{ConfigDir: configDir})
+	if got := runtime.openAPIBaseURL(); got != "https://pre-deap-open-api.dingtalk.com" {
+		t.Fatalf("resolved DEAP OpenAPI base = %q", got)
+	}
+}
+
 func TestProductionLocalRunnerExposeUsesPublicDingTalkDefaultBase(t *testing.T) {
+	t.Setenv("DWS_CONFIG_DIR", t.TempDir())
 	agentCardSHA256 := "sha256:" + strings.Repeat("a", 64)
 	localAgent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"name":"Local agent","protocolVersion":"1.0","capabilities":{},"skills":[],"url":"` + localAgentURL(r) + `/rpc"}`))
@@ -43,10 +58,10 @@ func TestProductionLocalRunnerExposeUsesPublicDingTalkDefaultBase(t *testing.T) 
 	controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 		requestedURLs = append(requestedURLs, request.URL.String())
 		status := http.StatusOK
-		body := `{"success":true,"data":{"runnerId":"runner-1","endpointId":"endpoint-1","localAgentId":"agent-1","displayName":"Local agent","status":"ACTIVE","agentCardUrl":"https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-1/card","agentCardSha256":"` + agentCardSHA256 + `","connected":false,"lastHeartbeatAtEpochSecond":null}}`
+		body := `{"success":true,"data":{"runnerId":"runner-1","endpointId":"endpoint-1","localAgentId":"agent-1","displayName":"Local agent","status":"ACTIVE","agentCardUrl":"https://deap-open-api.dingtalk.com/v1/a2a/local-runners/endpoint-1/card","agentCardSha256":"` + agentCardSHA256 + `","connected":false,"lastHeartbeatAtEpochSecond":null}}`
 		if request.Method == http.MethodPost {
 			status = http.StatusCreated
-			body = `{"success":true,"data":{"runnerId":"runner-1","endpointId":"endpoint-1","agentCardUrl":"https://pre-deap.dingtalk.com/v1/a2a/local-runners/endpoint-1/card","endpointBearer":"endpoint-secret","status":"ACTIVE"}}`
+			body = `{"success":true,"data":{"runnerId":"runner-1","endpointId":"endpoint-1","agentCardUrl":"https://deap-open-api.dingtalk.com/v1/a2a/local-runners/endpoint-1/card","endpointBearer":"endpoint-secret","status":"ACTIVE"}}`
 		}
 		return &http.Response{
 			StatusCode: status,
@@ -67,14 +82,14 @@ func TestProductionLocalRunnerExposeUsesPublicDingTalkDefaultBase(t *testing.T) 
 	testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
 
 	executeLocalRunnerCommand(t, context.Background(), []string{
-		"deap", "local-runner", "expose",
+		"deap", "runtime", "expose",
 		"--local-agent-id", "agent-1",
 		"--display-name", "Local agent",
 		"--agent-card-url", localAgent.URL,
 	})
 	wantURLs := []string{
-		"https://pre-deap.dingtalk.com/v1/assistant/local-runners",
-		"https://pre-deap.dingtalk.com/v1/assistant/local-runners/runner-1",
+		"https://deap-open-api.dingtalk.com/v1/assistant/local-runners",
+		"https://deap-open-api.dingtalk.com/v1/assistant/local-runners/runner-1",
 	}
 	if len(requestedURLs) != len(wantURLs) {
 		t.Fatalf("control request URLs = %v", requestedURLs)
@@ -88,7 +103,7 @@ func TestProductionLocalRunnerExposeUsesPublicDingTalkDefaultBase(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.OpenAPIBase != "https://pre-deap.dingtalk.com" {
+	if stored.OpenAPIBase != "https://deap-open-api.dingtalk.com" {
 		t.Fatalf("stored OpenAPI base = %q", stored.OpenAPIBase)
 	}
 }
@@ -887,29 +902,37 @@ func TestProductionLocalRunnerStartLocalClosesBuiltInEchoWhenRegistrationFails(t
 	}
 }
 
-func TestProductionLocalRunnerStartLocalRunsOpenCodeWithStableWorkDirIdentity(t *testing.T) {
+func TestProductionLocalRunnerStartLocalRunsSharedCodexBackendWithStableWorkDirIdentity(t *testing.T) {
 	workDir := t.TempDir()
-	backend := &fakeLocalRunnerOpenCodeBackend{reply: "OpenCode reply"}
+	backend := &fakeLocalRunnerOpenCodeBackend{reply: "Codex reply"}
 	var started *localRunnerOpenCodeAgent
+	var gotAgentRef string
 	var gotWorkDir string
 	var gotModel string
-	testseam.Swap(t, &localRunnerOpenCodeAgentStarter, func(ctx context.Context, workDir, model string) (*localRunnerOpenCodeAgent, error) {
-		gotWorkDir = workDir
-		gotModel = model
-		agent, err := startLocalRunnerOpenCodeAgentWithBackend(backend, "127.0.0.1:0")
+	var gotMemory bool
+	var gotYolo bool
+	var gotTimeout time.Duration
+	testseam.Swap(t, &localRunnerLocalAgentStarter, func(_ context.Context, agentRef string, options localRunnerLocalAgentOptions) (*localRunnerOpenCodeAgent, error) {
+		gotAgentRef = agentRef
+		gotWorkDir = options.WorkDir
+		gotModel = options.Model
+		gotMemory = options.Memory
+		gotYolo = options.Yolo
+		gotTimeout = options.Timeout
+		agent, err := startLocalRunnerLocalAgentWithBackend(backend, "127.0.0.1:0", agentRef)
 		started = agent
 		return agent, err
 	})
 	digest := sha256.Sum256([]byte(workDir))
-	wantLocalAgentID := fmt.Sprintf("opencode-%x", digest[:8])
+	wantLocalAgentID := fmt.Sprintf("codex-%x", digest[:8])
 	agentCardSHA256 := "sha256:" + strings.Repeat("a", 64)
 	var createRequest localrunner.CreateRunnerRequest
 	controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 		status := http.StatusOK
-		body := `{"success":true,"data":{"runnerId":"runner-opencode","endpointId":"endpoint-opencode","localAgentId":"` + wantLocalAgentID + `","displayName":"DWS OpenCode","status":"ACTIVE","agentCardUrl":"https://api.dingtalk.com/v1/a2a/local-runners/endpoint-opencode/.well-known/agent-card.json","agentCardSha256":"` + agentCardSHA256 + `","connected":false,"lastHeartbeatAtEpochSecond":null}}`
+		body := `{"success":true,"data":{"runnerId":"runner-codex","endpointId":"endpoint-codex","localAgentId":"` + wantLocalAgentID + `","displayName":"DWS Codex","status":"ACTIVE","agentCardUrl":"https://api.dingtalk.com/v1/a2a/local-runners/endpoint-codex/.well-known/agent-card.json","agentCardSha256":"` + agentCardSHA256 + `","connected":false,"lastHeartbeatAtEpochSecond":null}}`
 		if request.Method == http.MethodPost {
 			status = http.StatusCreated
-			body = `{"success":true,"data":{"runnerId":"runner-opencode","endpointId":"endpoint-opencode","agentCardUrl":"https://api.dingtalk.com/v1/a2a/local-runners/endpoint-opencode/.well-known/agent-card.json","endpointBearer":"endpoint-secret","status":"ACTIVE"}}`
+			body = `{"success":true,"data":{"runnerId":"runner-codex","endpointId":"endpoint-codex","agentCardUrl":"https://api.dingtalk.com/v1/a2a/local-runners/endpoint-codex/.well-known/agent-card.json","endpointBearer":"endpoint-secret","status":"ACTIVE"}}`
 			if err := json.NewDecoder(request.Body).Decode(&createRequest); err != nil {
 				t.Fatal(err)
 			}
@@ -924,27 +947,27 @@ func TestProductionLocalRunnerStartLocalRunsOpenCodeWithStableWorkDirIdentity(t 
 	})
 
 	result, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
-		AgentRef: "opencode", WorkDir: workDir, Model: "provider/model",
+		AgentRef: "codex", WorkDir: workDir, Model: "provider/model", Memory: true, Yolo: false, AgentTimeout: 11 * time.Second,
 		OpenAPIBase: "https://api.dingtalk.com", MaxConcurrent: 3, Streaming: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotWorkDir != workDir || gotModel != "provider/model" {
-		t.Fatalf("OpenCode starter options = workdir %q model %q", gotWorkDir, gotModel)
+	if gotAgentRef != "codex" || gotWorkDir != workDir || gotModel != "provider/model" || !gotMemory || gotYolo || gotTimeout != 11*time.Second {
+		t.Fatalf("shared starter ref=%q workdir=%q model=%q memory=%v yolo=%v timeout=%v", gotAgentRef, gotWorkDir, gotModel, gotMemory, gotYolo, gotTimeout)
 	}
-	if createRequest.LocalAgentID != wantLocalAgentID || createRequest.DisplayName != localRunnerOpenCodeDisplayName {
-		t.Fatalf("OpenCode create identity = %q/%q", createRequest.LocalAgentID, createRequest.DisplayName)
+	if createRequest.LocalAgentID != wantLocalAgentID || createRequest.DisplayName != "DWS Codex" {
+		t.Fatalf("Codex create identity = %q/%q", createRequest.LocalAgentID, createRequest.DisplayName)
 	}
 	if result.ConnectOptions.TargetURL != started.RPCURL() {
 		t.Fatalf("OpenCode connect target = %q, want %q", result.ConnectOptions.TargetURL, started.RPCURL())
 	}
-	stored, err := runtime.configs.Load("runner-opencode")
+	stored, err := runtime.configs.Load("runner-codex")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.AgentKind != "opencode" || stored.WorkDir != workDir {
-		t.Fatalf("stored OpenCode binding = %#v", stored)
+	if stored.AgentKind != "codex" || stored.WorkDir != workDir {
+		t.Fatalf("stored Codex binding = %#v", stored)
 	}
 	if err := result.Close(); err != nil {
 		t.Fatal(err)
@@ -953,13 +976,13 @@ func TestProductionLocalRunnerStartLocalRunsOpenCodeWithStableWorkDirIdentity(t 
 	closeCalls := backend.closeCalls
 	backend.mu.Unlock()
 	if closeCalls != 1 {
-		t.Fatalf("OpenCode backend close calls = %d, want 1", closeCalls)
+		t.Fatalf("Codex backend close calls = %d, want 1", closeCalls)
 	}
 }
 
 func TestProductionLocalRunnerStartLocalClosesOpenCodeWhenRegistrationFails(t *testing.T) {
 	backend := &fakeLocalRunnerOpenCodeBackend{reply: "reply"}
-	testseam.Swap(t, &localRunnerOpenCodeAgentStarter, func(context.Context, string, string) (*localRunnerOpenCodeAgent, error) {
+	testseam.Swap(t, &localRunnerLocalAgentStarter, func(context.Context, string, localRunnerLocalAgentOptions) (*localRunnerOpenCodeAgent, error) {
 		return startLocalRunnerOpenCodeAgentWithBackend(backend, "127.0.0.1:0")
 	})
 	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
@@ -1007,7 +1030,7 @@ func TestProductionLocalRunnerStartLocalRejectsStoredOpenCodeWorkDirDriftBeforeS
 		t.Fatal(err)
 	}
 	startCalls := 0
-	testseam.Swap(t, &localRunnerOpenCodeAgentStarter, func(context.Context, string, string) (*localRunnerOpenCodeAgent, error) {
+	testseam.Swap(t, &localRunnerLocalAgentStarter, func(context.Context, string, localRunnerLocalAgentOptions) (*localRunnerOpenCodeAgent, error) {
 		startCalls++
 		return nil, errors.New("must not start")
 	})
@@ -1078,10 +1101,10 @@ func TestProductionLocalRunnerStartLocalResumesStoredOpenCodeWithoutCreateOrUpda
 	}
 	resumedBackend := &fakeLocalRunnerOpenCodeBackend{reply: "resumed"}
 	restartCalls := 0
-	testseam.Swap(t, &localRunnerOpenCodeAgentRestarter, func(_ context.Context, rawOrigin, gotWorkDir, model string) (*localRunnerOpenCodeAgent, error) {
+	testseam.Swap(t, &localRunnerLocalAgentRestarter, func(_ context.Context, rawOrigin, agentRef string, options localRunnerLocalAgentOptions) (*localRunnerOpenCodeAgent, error) {
 		restartCalls++
-		if rawOrigin != stored.LoopbackBaseURL || gotWorkDir != workDir || model != "provider/model" {
-			t.Fatalf("OpenCode restart options = origin %q workdir %q model %q", rawOrigin, gotWorkDir, model)
+		if rawOrigin != stored.LoopbackBaseURL || agentRef != localRunnerOpenCodeRef || options.WorkDir != workDir || options.Model != "provider/model" {
+			t.Fatalf("OpenCode restart options = origin %q ref %q options %#v", rawOrigin, agentRef, options)
 		}
 		parsed, err := url.Parse(rawOrigin)
 		if err != nil {
@@ -1338,6 +1361,7 @@ func TestLocalRunnerCommandsCompleteLocalControlWSSAndSSELifecycle(t *testing.T)
 		WSSDialer:         &websocket.Dialer{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
 		OAuth:             staticLocalRunnerOAuth("oauth-token"),
 		Credentials:       credentials,
+		OpenAPIBaseURL:    func() string { return controlServer.URL },
 		OwnerIdentity: func(context.Context) (string, string, error) {
 			return "tenant-1", "operator-1", nil
 		},
@@ -1346,15 +1370,15 @@ func TestLocalRunnerCommandsCompleteLocalControlWSSAndSSELifecycle(t *testing.T)
 	testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
 
 	exposeOutput := executeLocalRunnerCommand(t, context.Background(), []string{
-		"deap", "local-runner", "expose", "--local-agent-id", "agent-1", "--display-name", "Local agent",
-		"--agent-card-url", localAgent.URL + "/card", "--openapi-base", controlServer.URL,
+		"deap", "runtime", "expose", "--local-agent-id", "agent-1", "--display-name", "Local agent",
+		"--agent-card-url", localAgent.URL + "/card",
 	})
 	assertLocalRunnerOutputHasNoSecrets(t, exposeOutput)
 
 	connectDone := make(chan error, 1)
 	go func() {
 		_, err := executeLocalRunnerCommandResult(ctx, []string{
-			"deap", "local-runner", "connect", "--runner-id", "runner-1", "--endpoint-id", "endpoint-1",
+			"deap", "runtime", "connect", "--runner-id", "runner-1", "--endpoint-id", "endpoint-1",
 			"--target-url", localAgent.URL + "/rpc", "--agent-card-sha256", cardSHA,
 		})
 		connectDone <- err
@@ -1364,7 +1388,7 @@ func TestLocalRunnerCommandsCompleteLocalControlWSSAndSSELifecycle(t *testing.T)
 	case <-time.After(5 * time.Second):
 		t.Fatal("first SSE chunk did not reach the WSS gateway")
 	}
-	statusOutput := executeLocalRunnerCommand(t, context.Background(), []string{"deap", "local-runner", "status", "--runner-id", "runner-1"})
+	statusOutput := executeLocalRunnerCommand(t, context.Background(), []string{"deap", "runtime", "status", "--runner-id", "runner-1"})
 	if !strings.Contains(statusOutput, `"connected":true`) || !strings.Contains(statusOutput, `"connectionId":"connection-1"`) {
 		t.Fatalf("status did not combine runner and connection state: %s", statusOutput)
 	}
@@ -1383,7 +1407,7 @@ func TestLocalRunnerCommandsCompleteLocalControlWSSAndSSELifecycle(t *testing.T)
 		t.Fatal("connect did not stop after context cancellation")
 	}
 
-	revokeOutput := executeLocalRunnerCommand(t, context.Background(), []string{"--yes", "deap", "local-runner", "revoke", "--runner-id", "runner-1"})
+	revokeOutput := executeLocalRunnerCommand(t, context.Background(), []string{"--yes", "deap", "runtime", "revoke", "--runner-id", "runner-1"})
 	assertLocalRunnerOutputHasNoSecrets(t, revokeOutput)
 	if _, err := runtime.configs.Load("runner-1"); !errors.Is(err, localrunner.ErrRunnerConfigNotFound) {
 		t.Fatalf("local config remained after revoke: %v", err)

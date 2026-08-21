@@ -26,22 +26,22 @@ func TestLocalRunnerCommandSkeletonDelegatesWithoutSecretOutput(t *testing.T) {
 	}{
 		{
 			name: "expose",
-			args: []string{"deap", "local-runner", "expose", "--local-agent-id", "agent-1", "--display-name", "Local agent", "--agent-card-url", "http://127.0.0.1:8080/card"},
+			args: []string{"deap", "runtime", "expose", "--local-agent-id", "agent-1", "--display-name", "Local agent", "--agent-card-url", "http://127.0.0.1:8080/card"},
 			want: "expose",
 		},
 		{
 			name: "status",
-			args: []string{"deap", "local-runner", "status", "--runner-id", "runner-1"},
+			args: []string{"deap", "runtime", "status", "--runner-id", "runner-1"},
 			want: "status",
 		},
 		{
 			name: "revoke",
-			args: []string{"--yes", "deap", "local-runner", "revoke", "--runner-id", "runner-1"},
+			args: []string{"--yes", "deap", "runtime", "revoke", "--runner-id", "runner-1"},
 			want: "revoke",
 		},
 		{
 			name: "connect",
-			args: []string{"deap", "local-runner", "connect", "--runner-id", "runner-1", "--endpoint-id", "endpoint-1", "--target-url", "http://127.0.0.1:8080/rpc", "--agent-card-sha256", "abc123"},
+			args: []string{"deap", "runtime", "connect", "--runner-id", "runner-1", "--endpoint-id", "endpoint-1", "--target-url", "http://127.0.0.1:8080/rpc", "--agent-card-sha256", "abc123"},
 			want: "connect",
 		},
 	}
@@ -65,7 +65,30 @@ func TestLocalRunnerCommandSkeletonDelegatesWithoutSecretOutput(t *testing.T) {
 	}
 }
 
-func TestMergedDEAPRootKeepsLocalRunnerAndManagePublish(t *testing.T) {
+func TestLocalRunnerCommandsAreConsolidatedUnderRuntimeWithoutOpenAPIBaseFlag(t *testing.T) {
+	root := NewRootCommand()
+	for _, leaf := range []string{"expose", "status", "revoke", "connect", "start-local"} {
+		path := []string{"deap", "runtime", leaf}
+		command, remaining, err := root.Find(path)
+		if err != nil || command == nil || len(remaining) != 0 || command.CommandPath() != "dws "+strings.Join(path, " ") {
+			t.Fatalf("command %v resolution = command=%v remaining=%v error=%v", path, command, remaining, err)
+		}
+	}
+	if command, remaining, err := root.Find([]string{"deap", "local-runner"}); err == nil && command != nil && len(remaining) == 0 && command.CommandPath() == "dws deap local-runner" {
+		t.Fatal("deprecated deap local-runner group is still executable")
+	}
+	for _, leaf := range []string{"expose", "start-local"} {
+		command, _, err := root.Find([]string{"deap", "runtime", leaf})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if command.Flags().Lookup("openapi-base") != nil {
+			t.Fatalf("deap runtime %s still publishes --openapi-base", leaf)
+		}
+	}
+}
+
+func TestMergedDEAPRootKeepsRuntimeAndManagePublish(t *testing.T) {
 	root := NewRootCommand()
 	deapCommands := 0
 	for _, command := range root.Commands() {
@@ -77,7 +100,7 @@ func TestMergedDEAPRootKeepsLocalRunnerAndManagePublish(t *testing.T) {
 		t.Fatalf("top-level deap commands = %d, want 1", deapCommands)
 	}
 	for _, path := range [][]string{
-		{"deap", "local-runner", "expose"},
+		{"deap", "runtime", "expose"},
 		{"deap", "runtime", "start-local"},
 		{"deap", "manage", "publish"},
 		{"deap", "skill", "query"},
@@ -97,7 +120,7 @@ func TestLocalRunnerExposeUsesFrozenLowerCamelCaseJSON(t *testing.T) {
 	root := newRootCommandWithEngine(context.Background(), nil, false, true)
 	root.SetOut(&output)
 	root.SetErr(&output)
-	root.SetArgs([]string{"deap", "local-runner", "expose", "--local-agent-id", "agent-1", "--display-name", "Local agent", "--agent-card-url", "http://127.0.0.1:8080/card"})
+	root.SetArgs([]string{"deap", "runtime", "expose", "--local-agent-id", "agent-1", "--display-name", "Local agent", "--agent-card-url", "http://127.0.0.1:8080/card"})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -107,43 +130,39 @@ func TestLocalRunnerExposeUsesFrozenLowerCamelCaseJSON(t *testing.T) {
 	}
 }
 
-func TestLocalRunnerExposeHelpAndSchemaUsePublicDingTalkDefaultBase(t *testing.T) {
-	const wantBase = "https://pre-deap.dingtalk.com"
-
+func TestLocalRunnerExposeHelpAndSchemaDoNotExposeOpenAPIBase(t *testing.T) {
 	var helpOutput bytes.Buffer
 	helpRoot := newRootCommandWithEngine(context.Background(), nil, false, true)
 	helpRoot.SetOut(&helpOutput)
 	helpRoot.SetErr(&helpOutput)
-	helpRoot.SetArgs([]string{"deap", "local-runner", "expose", "--help"})
+	helpRoot.SetArgs([]string{"deap", "runtime", "expose", "--help"})
 	if err := helpRoot.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(helpOutput.String(), `--openapi-base string`) || !strings.Contains(helpOutput.String(), `default "`+wantBase+`"`) {
-		t.Fatalf("expose help does not publish default %q:\n%s", wantBase, helpOutput.String())
+	if strings.Contains(helpOutput.String(), `--openapi-base`) {
+		t.Fatalf("expose help still publishes --openapi-base:\n%s", helpOutput.String())
 	}
 
 	var schemaOutput bytes.Buffer
 	schemaRoot := NewRootCommand()
 	schemaRoot.SetOut(&schemaOutput)
 	schemaRoot.SetErr(&schemaOutput)
-	schemaRoot.SetArgs([]string{"schema", "--cli-path", "deap local-runner expose", "-f", "json"})
+	schemaRoot.SetArgs([]string{"schema", "--cli-path", "deap runtime expose", "-f", "json"})
 	if err := schemaRoot.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	var schema struct {
-		Parameters map[string]struct {
-			Default string `json:"default"`
-		} `json:"parameters"`
+		Parameters map[string]json.RawMessage `json:"parameters"`
 	}
 	if err := json.Unmarshal(schemaOutput.Bytes(), &schema); err != nil {
 		t.Fatal(err)
 	}
-	if got := schema.Parameters["openapi-base"].Default; got != wantBase {
-		t.Fatalf("Schema --openapi-base default = %q, want %q", got, wantBase)
+	if schema.Parameters["openapi-base"] != nil {
+		t.Fatalf("Schema still publishes --openapi-base: %s", schemaOutput.String())
 	}
 }
 
-func TestLocalRunnerExposePreservesExplicitOpenAPIBaseOverride(t *testing.T) {
+func TestLocalRunnerExposeRejectsOpenAPIBaseFlag(t *testing.T) {
 	runtime := &recordingLocalRunnerRuntime{}
 	testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
 
@@ -151,24 +170,21 @@ func TestLocalRunnerExposePreservesExplicitOpenAPIBaseOverride(t *testing.T) {
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
 	root.SetArgs([]string{
-		"deap", "local-runner", "expose",
+		"deap", "runtime", "expose",
 		"--local-agent-id", "agent-1",
 		"--display-name", "Local agent",
 		"--agent-card-url", "http://127.0.0.1:8080/card",
 		"--openapi-base", "https://override.example.test",
 	})
-	if err := root.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	if got := runtime.exposeOptions.OpenAPIBase; got != "https://override.example.test" {
-		t.Fatalf("explicit OpenAPI base = %q", got)
+	if err := root.Execute(); err == nil {
+		t.Fatal("expose accepted removed --openapi-base flag")
 	}
 }
 
 func TestLocalRunnerCommandSkeletonRequiresDeclaredIdentityFlags(t *testing.T) {
 	testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return &recordingLocalRunnerRuntime{} })
 	root := newRootCommandWithEngine(context.Background(), nil, false, true)
-	root.SetArgs([]string{"deap", "local-runner", "connect", "--runner-id", "runner-1"})
+	root.SetArgs([]string{"deap", "runtime", "connect", "--runner-id", "runner-1"})
 	if err := root.Execute(); err == nil {
 		t.Fatal("connect accepted an incomplete one-to-one identity")
 	}
@@ -180,10 +196,10 @@ func TestLocalRunnerStartLocalHelpSchemaAndExactAgentReference(t *testing.T) {
 	root := newRootCommandWithEngine(context.Background(), nil, false, true)
 	for _, path := range []string{
 		"deap runtime start-local",
-		"deap local-runner expose",
-		"deap local-runner status",
-		"deap local-runner revoke",
-		"deap local-runner connect",
+		"deap runtime expose",
+		"deap runtime status",
+		"deap runtime revoke",
+		"deap runtime connect",
 	} {
 		command, remaining, err := root.Find(strings.Fields(path))
 		if err != nil || command == nil || len(remaining) != 0 || command.CommandPath() != "dws "+path {
@@ -221,9 +237,11 @@ func TestLocalRunnerStartLocalHelpSchemaAndExactAgentReference(t *testing.T) {
 		"--model",
 		"--local-agent-id",
 		"--display-name",
-		"--openapi-base",
 		"--max-concurrent",
 		"--streaming",
+		"--memory",
+		"--yolo",
+		"--agent-timeout",
 	} {
 		if !strings.Contains(helpOutput.String(), want) {
 			t.Fatalf("start-local help missing %q:\n%s", want, helpOutput.String())
@@ -251,10 +269,23 @@ func TestLocalRunnerStartLocalHelpSchemaAndExactAgentReference(t *testing.T) {
 	if len(schema.Positionals) != 1 || schema.Positionals[0].Name != "agent_ref" || !schema.Positionals[0].Required {
 		t.Fatalf("start-local positionals = %#v", schema.Positionals)
 	}
-	for _, name := range []string{"workdir", "model", "local-agent-id", "display-name", "openapi-base", "max-concurrent", "streaming"} {
+	for _, name := range []string{"workdir", "model", "local-agent-id", "display-name", "max-concurrent", "streaming", "memory", "yolo", "agent-timeout"} {
 		if schema.Parameters[name] == nil {
 			t.Fatalf("start-local Schema missing --%s", name)
 		}
+	}
+	if schema.Parameters["openapi-base"] != nil {
+		t.Fatal("start-local Schema still publishes --openapi-base")
+	}
+	var workDirParameter struct {
+		Required     bool   `json:"required"`
+		RequiredWhen string `json:"required_when"`
+	}
+	if err := json.Unmarshal(schema.Parameters["workdir"], &workDirParameter); err != nil {
+		t.Fatal(err)
+	}
+	if workDirParameter.Required || workDirParameter.RequiredWhen != "agent-ref is a local process channel" {
+		t.Fatalf("start-local workdir requirement = %#v", workDirParameter)
 	}
 }
 
@@ -279,6 +310,51 @@ func TestLocalRunnerStartLocalOpenCodeNormalizesWorkDirAndPassesModel(t *testing
 	}
 	if runtime.startOptions.AgentRef != "opencode" || runtime.startOptions.WorkDir != filepath.Clean(workDir) || runtime.startOptions.Model != "provider/model" {
 		t.Fatalf("start-local OpenCode options = %#v", runtime.startOptions)
+	}
+}
+
+func TestLocalRunnerStartLocalSupportsSharedLocalAgentRefsAndRejectsGemini(t *testing.T) {
+	for _, agentRef := range []string{"opencode", "codex", "claudecode", "qoder", "qoderwork", "codebuddy", "workbuddy", "custom"} {
+		t.Run(agentRef, func(t *testing.T) {
+			runtime := &recordingLocalRunnerRuntime{}
+			testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
+			workDir := t.TempDir()
+			root := newRootCommandWithEngine(context.Background(), nil, false, true)
+			root.SetOut(&bytes.Buffer{})
+			root.SetErr(&bytes.Buffer{})
+			root.SetArgs([]string{"deap", "runtime", "start-local", agentRef, "--workdir", workDir})
+			if err := root.Execute(); err != nil {
+				t.Fatalf("start-local %s error = %v", agentRef, err)
+			}
+			if runtime.startOptions.AgentRef != agentRef || runtime.startOptions.WorkDir != filepath.Clean(workDir) {
+				t.Fatalf("start-local %s options = %#v", agentRef, runtime.startOptions)
+			}
+		})
+	}
+
+	runtime := &recordingLocalRunnerRuntime{}
+	testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
+	root := newRootCommandWithEngine(context.Background(), nil, false, true)
+	output := &bytes.Buffer{}
+	root.SetOut(output)
+	root.SetErr(output)
+	root.SetArgs([]string{"deap", "runtime", "start-local", "gemini", "--workdir", t.TempDir()})
+	if err := root.Execute(); err == nil {
+		t.Fatal("start-local accepted remote Gemini API as a local process backend")
+	}
+	if runtime.lastCall != "" {
+		t.Fatal("rejected gemini mode reached runtime")
+	}
+
+	helpRoot := newRootCommandWithEngine(context.Background(), nil, false, true)
+	helpRoot.SetOut(output)
+	helpRoot.SetErr(output)
+	helpRoot.SetArgs([]string{"deap", "runtime", "start-local", "--help"})
+	if err := helpRoot.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "gemini") || !strings.Contains(output.String(), "不支持") {
+		t.Fatalf("start-local help does not explain the Gemini local-process exclusion:\n%s", output.String())
 	}
 }
 
@@ -344,7 +420,6 @@ func TestLocalRunnerStartLocalWritesSanitizedSummaryBeforeConnectAndDoesNotRevok
 		"deap", "runtime", "start-local", "test-echo",
 		"--local-agent-id", "agent-override",
 		"--display-name", "Display override",
-		"--openapi-base", "https://override.example.test",
 		"--max-concurrent", "7",
 		"--streaming=false",
 	})
@@ -358,7 +433,7 @@ func TestLocalRunnerStartLocalWritesSanitizedSummaryBeforeConnectAndDoesNotRevok
 	if !closed {
 		t.Fatal("built-in Agent was not closed after Connect returned")
 	}
-	if runtime.startOptions.AgentRef != "test-echo" || runtime.startOptions.LocalAgentID != "agent-override" || runtime.startOptions.DisplayName != "Display override" || runtime.startOptions.OpenAPIBase != "https://override.example.test" || runtime.startOptions.MaxConcurrent != 7 || runtime.startOptions.Streaming {
+	if runtime.startOptions.AgentRef != "test-echo" || runtime.startOptions.LocalAgentID != "agent-override" || runtime.startOptions.DisplayName != "Display override" || runtime.startOptions.OpenAPIBase != "" || runtime.startOptions.MaxConcurrent != 7 || runtime.startOptions.Streaming {
 		t.Fatalf("start-local options = %#v", runtime.startOptions)
 	}
 	for _, secret := range []string{"endpoint-secret", "connection-ticket", "local-authorization"} {

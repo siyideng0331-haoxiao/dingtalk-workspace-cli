@@ -116,9 +116,10 @@ func TestRunnerConfigRequiresPairedOpenCodeKindAndAbsoluteWorkDir(t *testing.T) 
 	}{
 		{name: "legacy external", want: true},
 		{name: "opencode", kind: "opencode", dir: filepath.Join(t.TempDir(), "project"), want: true},
+		{name: "codex", kind: "codex", dir: filepath.Join(t.TempDir(), "project"), want: true},
 		{name: "missing workdir", kind: "opencode"},
 		{name: "missing kind", dir: filepath.Join(t.TempDir(), "project")},
-		{name: "unknown kind", kind: "other", dir: filepath.Join(t.TempDir(), "project")},
+		{name: "invalid kind", kind: "Other/Bad", dir: filepath.Join(t.TempDir(), "project")},
 		{name: "relative workdir", kind: "opencode", dir: "relative/project"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -74,7 +74,7 @@ func TestLocalRunnerTestEchoAgentServesCardSendAndStream(t *testing.T) {
 	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "application/json" || json.Unmarshal(sendBody, &send) != nil {
 		t.Fatalf("send response status=%d contentType=%q body=%s", response.StatusCode, response.Header.Get("Content-Type"), sendBody)
 	}
-	if send.JSONRPC != "2.0" || string(send.ID) != `"request-1"` || send.Result.Kind != "message" || send.Result.Role != "agent" || send.Result.MessageID != "message-1-echo" || len(send.Result.Parts) != 1 || send.Result.Parts[0].Kind != "text" || send.Result.Parts[0].Text != "hello" {
+	if send.JSONRPC != "2.0" || string(send.ID) != `"request-1"` || send.Result.Kind != "message" || send.Result.Role != "agent" || send.Result.MessageID == "" || send.Result.MessageID == "message-1" || len(send.Result.Parts) != 1 || send.Result.Parts[0].Kind != "text" || send.Result.Parts[0].Text != "hello" {
 		t.Fatalf("send response = %#v id=%s", send, send.ID)
 	}
 
@@ -83,18 +83,40 @@ func TestLocalRunnerTestEchoAgentServesCardSendAndStream(t *testing.T) {
 	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("stream response status=%d contentType=%q", response.StatusCode, response.Header.Get("Content-Type"))
 	}
-	reader := bufio.NewReader(response.Body)
-	firstLine, err := reader.ReadString('\n')
+	streamResponse, err := io.ReadAll(bufio.NewReader(response.Body))
+	response.Body.Close()
+	if err != nil || !strings.Contains(string(streamResponse), "id: ") || strings.Count(string(streamResponse), "data: ") != 1 || !strings.Contains(string(streamResponse), `"text":"hello"`) {
+		t.Fatalf("official SSE response = %q err=%v", streamResponse, err)
+	}
+}
+
+func TestLocalRunnerTestEchoUsesOfficialCompatCardAndSSEEnvelope(t *testing.T) {
+	agent, err := startLocalRunnerTestEchoAgent()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(firstLine, "data: ") || !strings.Contains(firstLine, `"text":"hello"`) {
-		t.Fatalf("first SSE event = %q", firstLine)
+	defer agent.Close()
+	response, err := http.Get(agent.CardURL())
+	if err != nil {
+		t.Fatal(err)
 	}
-	rest, err := io.ReadAll(reader)
+	card, err := io.ReadAll(response.Body)
 	response.Body.Close()
-	if err != nil || string(rest) != "\n" {
-		t.Fatalf("SSE tail = %q err=%v", rest, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(card, []byte(`"supportedInterfaces"`)) || !bytes.Contains(card, []byte(`"protocolVersion":"0.3.0"`)) {
+		t.Fatalf("test-echo Card is not the official v0.3 compat projection: %s", card)
+	}
+	request := []byte(`{"jsonrpc":"2.0","id":"stream-1","method":"message/stream","params":{"message":{"kind":"message","role":"user","messageId":"message-1","parts":[{"kind":"text","text":"hello"}]}}}`)
+	response = postLocalRunnerTestEcho(t, agent.RPCURL(), request)
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(body, []byte("id: ")) || strings.Count(string(body), "data: ") != 1 {
+		t.Fatalf("test-echo SSE is not the official compat envelope: %q", body)
 	}
 }
 

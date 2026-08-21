@@ -137,6 +137,7 @@ type streamingAttachmentForwarder interface {
 }
 
 func forwardConnectTurn(ctx context.Context, fwd forwarder, convID, prompt string, attachments []connectMediaAttachment, onDelta func(string)) (string, error) {
+	fwd = unwrapLocalAgentForwarder(fwd)
 	if af, ok := fwd.(streamingAttachmentForwarder); ok {
 		return af.forwardStreamWithAttachments(ctx, convID, prompt, attachments, onDelta)
 	}
@@ -1389,7 +1390,7 @@ func runStreamConnector(ctx context.Context, channel, clientID, clientSecret str
 					// channel's agent supports one (opencode). /new always just
 					// drops the local mapping so the old session stays resumable.
 					if action.name == "clear" {
-						if c, canClear := fwd.(sessionClearer); canClear {
+						if c, canClear := unwrapLocalAgentForwarder(fwd).(sessionClearer); canClear {
 							cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 							if err := c.clearSession(cctx, convID); err != nil {
 								fmt.Fprintf(os.Stderr, "[connect] /clear 删除会话失败 (%s, msgId=%s): %v\n", channel, msgID, err)
@@ -1399,7 +1400,7 @@ func runStreamConnector(ctx context.Context, channel, clientID, clientSecret str
 						}
 					}
 					if !cleared {
-						if r, canReset := fwd.(sessionResetter); canReset {
+						if r, canReset := unwrapLocalAgentForwarder(fwd).(sessionResetter); canReset {
 							r.resetSession(convID)
 						} else {
 							ackText = "当前渠道暂不支持会话指令（/new、/clear）。"
@@ -1462,7 +1463,7 @@ func runStreamConnector(ctx context.Context, channel, clientID, clientSecret str
 			// One-shot channels (or a failed card) fall back below.
 			var cardInst *aiCardInstance
 			var onDelta func(string)
-			sf, streamable := fwd.(streamingForwarder)
+			sf, streamable := unwrapLocalAgentForwarder(fwd).(streamingForwarder)
 			if cardCli != nil && cardCli.hasTemplate() && streamable && sf.canStream() && !gateOn {
 				if ci, cerr := cardCli.createAndDeliver(context.Background(), callbackData); cerr != nil {
 					fmt.Fprintf(os.Stderr, "[connect][card] 预投卡片失败，降级一次性回复: %v\n", cerr)
@@ -1482,7 +1483,7 @@ func runStreamConnector(ctx context.Context, channel, clientID, clientSecret str
 				if errors.Is(err, context.DeadlineExceeded) {
 					// Self-recovery: drop the conversation's session so the next
 					// message starts fresh instead of reusing a stuck one.
-					if r, ok := fwd.(sessionResetter); ok {
+					if r, ok := unwrapLocalAgentForwarder(fwd).(sessionResetter); ok {
 						r.resetSession(convID)
 					}
 					reply = fmt.Sprintf("（%s 回复超时，已自动重置会话，请重试。如需调整超时上限可用 --agent-timeout）", channel)

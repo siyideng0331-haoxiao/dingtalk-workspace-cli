@@ -165,6 +165,10 @@ const (
 	// Override at runtime via ~/.dws/mcp_url file.
 	DefaultMCPBaseURL = "https://mcp.dingtalk.com"
 
+	// DefaultDEAPOpenAPIBaseURL is the DingTalk DEAP OpenAPI base URL.
+	// Override at runtime via ~/.dws/deap_openapi_url file.
+	DefaultDEAPOpenAPIBaseURL = "https://deap-open-api.dingtalk.com"
+
 	// DefaultTerminalBaseURL is the DingTalk developer platform base URL.
 	// Override at runtime via ~/.dws/terminal_url file.
 	DefaultTerminalBaseURL = "https://open-dev.dingtalk.com"
@@ -198,6 +202,19 @@ func GetMCPBaseURL() string {
 		}
 	}
 	return DefaultMCPBaseURL
+}
+
+// GetDEAPOpenAPIBaseURL returns the DEAP OpenAPI base URL with priority:
+//  1. ~/.dws/deap_openapi_url file content (for custom environment)
+//  2. Default value (https://deap-open-api.dingtalk.com)
+func GetDEAPOpenAPIBaseURL() string {
+	deapOpenAPIURLPath := filepath.Join(DefaultConfigDir(), "deap_openapi_url")
+	if data, err := os.ReadFile(deapOpenAPIURLPath); err == nil {
+		if u := strings.TrimSpace(string(data)); u != "" {
+			return u
+		}
+	}
+	return DefaultDEAPOpenAPIBaseURL
 }
 
 // GetTerminalBaseURL returns the terminal base URL with priority:
