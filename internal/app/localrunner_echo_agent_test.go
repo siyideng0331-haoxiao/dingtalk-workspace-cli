@@ -105,8 +105,8 @@ func TestLocalRunnerTestEchoUsesOfficialCompatCardAndSSEEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(card, []byte(`"supportedInterfaces"`)) || !bytes.Contains(card, []byte(`"protocolVersion":"0.3.0"`)) {
-		t.Fatalf("test-echo Card is not the official v0.3 compat projection: %s", card)
+	if bytes.Contains(card, []byte(`"supportedInterfaces"`)) || bytes.Contains(card, []byte(`"securityRequirements"`)) || !bytes.Contains(card, []byte(`"protocolVersion":"0.3.0"`)) || !bytes.Contains(card, []byte(`"preferredTransport":"JSONRPC"`)) {
+		t.Fatalf("test-echo Card is not a pure official v0.3 projection: %s", card)
 	}
 	request := []byte(`{"jsonrpc":"2.0","id":"stream-1","method":"message/stream","params":{"message":{"kind":"message","role":"user","messageId":"message-1","parts":[{"kind":"text","text":"hello"}]}}}`)
 	response = postLocalRunnerTestEcho(t, agent.RPCURL(), request)

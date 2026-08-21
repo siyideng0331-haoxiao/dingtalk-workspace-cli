@@ -139,10 +139,8 @@ func TestLocalRunnerOpenCodeAgentServesCardSendAndFinalStream(t *testing.T) {
 		Security        interface{} `json:"security"`
 		SecuritySchemes interface{} `json:"securitySchemes"`
 		Authentication  interface{} `json:"authentication"`
-		SupportedInterfaces []struct {
-			ProtocolVersion string `json:"protocolVersion"`
-			URL             string `json:"url"`
-		} `json:"supportedInterfaces"`
+		SupportedInterfaces json.RawMessage `json:"supportedInterfaces"`
+		PreferredTransport  string          `json:"preferredTransport"`
 	}
 	if response.StatusCode != http.StatusOK || json.Unmarshal(cardBody, &card) != nil {
 		t.Fatalf("Card response status=%d body=%s", response.StatusCode, cardBody)
@@ -150,8 +148,8 @@ func TestLocalRunnerOpenCodeAgentServesCardSendAndFinalStream(t *testing.T) {
 	if card.Name != localRunnerOpenCodeDisplayName || card.Version != "1.0.0" || card.ProtocolVersion != "0.3.0" || card.URL != agent.RPCURL() || !card.Capabilities.Streaming {
 		t.Fatalf("OpenCode Card = %#v", card)
 	}
-	if len(card.SupportedInterfaces) != 1 || card.SupportedInterfaces[0].ProtocolVersion != "0.3.0" || card.SupportedInterfaces[0].URL != agent.RPCURL() {
-		t.Fatalf("OpenCode Card supportedInterfaces = %#v", card.SupportedInterfaces)
+	if card.SupportedInterfaces != nil || card.PreferredTransport != "JSONRPC" {
+		t.Fatalf("OpenCode Card mixed v1 interface fields into v0.3 shape: %s", cardBody)
 	}
 	if card.Security != nil || card.SecuritySchemes != nil || card.Authentication != nil {
 		t.Fatalf("OpenCode Card unexpectedly declares authentication: %s", cardBody)

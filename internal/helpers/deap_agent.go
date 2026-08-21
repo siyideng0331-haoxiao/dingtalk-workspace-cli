@@ -456,7 +456,7 @@ func newDeapAddSubAgentCommand() *cobra.Command {
 			{Name: "name", Usage: "外部 A2A 子智能体名称", Bind: "name", Trim: true, OmitEmpty: true, RequiredWhen: "type=a2a"},
 			{Name: "description", Usage: "外部 A2A 子智能体描述", Bind: "description", Trim: true, OmitEmpty: true, RequiredWhen: "type=a2a"},
 			{Name: "agent-card-url", Usage: "外部 A2A Agent Card URL", Bind: "agentCardUrl", Trim: true, OmitEmpty: true, Format: "uri", RequiredWhen: "type=a2a"},
-			{Name: "protocol-version", Usage: "A2A 协议版本", Bind: "protocolVersion", Trim: true, OmitEmpty: true, RequiredWhen: "type=a2a"},
+			{Name: "protocol-version", Usage: "A2A 协议版本；非空字符串原样透传，不限制版本范围", Bind: "protocolVersion", Trim: true, OmitEmpty: true, RequiredWhen: "type=a2a"},
 		},
 		Safety: contract.SafetySpec{
 			Effect: "write", Risk: "high",
@@ -496,7 +496,7 @@ func newDeapAddSubAgentCommand() *cobra.Command {
 				AvoidWhen:    []string{"只需修改数字员工人设时使用 save-draft", "无法确认外部 Agent Card 来源与用途时不要执行"},
 				Examples: []string{
 					"dws deap manage add-sub-agent --agent-uuid <agentUuid> --type internal --sub-agent-uuid <subAgentUuid> --dry-run --format json",
-					`dws deap manage add-sub-agent --agent-uuid <agentUuid> --type a2a --name "外部客服" --description "处理外部咨询" --agent-card-url <agentCardUrl> --protocol-version 1.0 --dry-run --format json`,
+					`dws deap manage add-sub-agent --agent-uuid <agentUuid> --type a2a --name "外部客服" --description "处理外部咨询" --agent-card-url <agentCardUrl> --protocol-version <protocolVersion> --dry-run --format json`,
 				},
 			},
 		},

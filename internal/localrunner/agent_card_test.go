@@ -67,7 +67,7 @@ func TestRewriteAgentCardValidatesLoopbackAndRemovesLocalURLs(t *testing.T) {
 
 func TestRewriteAgentCardRejectsInvalidShapeOrNonLoopback(t *testing.T) {
 	for name, card := range map[string]string{
-		"protocol": `{"name":"n","protocolVersion":"2.0","url":"http://localhost/rpc","capabilities":{},"skills":[]}`,
+		"protocol": `{"name":"n","protocolVersion":"   ","url":"http://localhost/rpc","capabilities":{},"skills":[]}`,
 		"remote": `{"name":"n","protocolVersion":"1.0","url":"https://example.com/rpc","capabilities":{},"skills":[]}`,
 		"userinfo": `{"name":"n","protocolVersion":"1.0","url":"http://user@localhost/rpc","capabilities":{},"skills":[]}`,
 		"missing callable": `{"name":"n","protocolVersion":"1.0","capabilities":{},"skills":[]}`,
@@ -80,6 +80,23 @@ func TestRewriteAgentCardRejectsInvalidShapeOrNonLoopback(t *testing.T) {
 				t.Fatalf("error = %v", err)
 			}
 		})
+	}
+}
+
+func TestRewriteAgentCardAcceptsOpaqueNonblankProtocolVersion(t *testing.T) {
+	card := json.RawMessage(`{"name":"n","protocolVersion":"2026.08-future","url":"http://localhost/rpc","capabilities":{},"skills":[]}`)
+	snapshot, err := RewriteAgentCard(card, "endpoint-1", "https://api.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if err := json.Unmarshal(snapshot.JSON, &published); err != nil {
+		t.Fatal(err)
+	}
+	if published.ProtocolVersion != "2026.08-future" {
+		t.Fatalf("protocolVersion = %q, want opaque value", published.ProtocolVersion)
 	}
 }
 

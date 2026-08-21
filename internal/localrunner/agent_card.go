@@ -91,7 +91,7 @@ func validAgentCardCore(card map[string]any) bool {
 		return false
 	}
 	protocol, ok := card["protocolVersion"].(string)
-	if !ok || (protocol != "0.3.0" && protocol != "1.0") {
+	if !ok || strings.TrimSpace(protocol) == "" {
 		return false
 	}
 	capabilities, ok := card["capabilities"].(map[string]any)

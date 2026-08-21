@@ -100,6 +100,11 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 			t.Errorf("%s interface rpc = %q, want %q", canonical, got, want.tool)
 		}
 		parameters := schemaContractMap(tool["parameters"])
+		if canonical == "deap.add_de_sub_agent" {
+			if enum := schemaContractStringSlice(parameters["protocol-version"]["enum"]); len(enum) != 0 {
+				t.Errorf("%s protocol-version unexpectedly restricts opaque values: %#v", canonical, enum)
+			}
+		}
 		if len(parameters) != len(want.parameters) {
 			t.Errorf("%s parameter count = %d, want %d: %#v", canonical, len(parameters), len(want.parameters), parameters)
 		}

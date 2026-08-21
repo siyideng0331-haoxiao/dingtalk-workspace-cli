@@ -948,10 +948,15 @@ in memory and out of config/logs.
 The bounded loopback A2A surface uses official
 `github.com/a2aproject/a2a-go/v2` message/Card/executor types and server handler,
 with `a2acompat/a2av0.NewJSONRPCHandler` retaining the current DEAP JSON-RPC/SSE
-wire. A thin Card producer normalizes the SDK compatibility spelling `0.3` to
-the existing `0.3.0` contract at the root and in `supportedInterfaces`; it does
-not upgrade the wire to A2A 1.0. The Card is streaming-capable, text-only, and
-contains neither project path nor authentication/security declarations. The
+wire. The SDK compatibility Card producer intentionally emits a v0/v1 union,
+so a thin v0.3 projection normalizes only the root spelling to `0.3.0`, removes
+the v1-only `supportedInterfaces` and `securityRequirements`, and preserves the
+SDK-produced v0.3 `url`, `preferredTransport`, and `additionalInterfaces` fields.
+It does not upgrade the wire to A2A 1.0. The Card is streaming-capable,
+text-only, and contains neither project path nor authentication/security
+declarations. Input Card validation and `add-sub-agent --protocol-version`
+instead treat any trimmed nonblank protocol version as an opaque value and do
+not impose a `0.3.0`/`1.0` whitelist. The
 official executor accepts only user Message text parts, joins ordered parts
 with one newline, preserves nonblank `contextId` as the backend session key,
 creates an agent Message reply, and emits one final official SSE event when the
@@ -1033,3 +1038,4 @@ Implementation and verification steps:
 | 2026-08-21 | Removed CLI-authored `localRunnerBearer`, top-level authentication/security declarations, each `skills[*].security` override, and the bearer/keyring block from the published-Card expectation and `start-local` summary while retaining business `metadata.security` and redacted legacy endpoint-bearer response storage compatibility. | The Relay and the existing digital-employee A2A chain are now explicitly decoupled: public Card/RPC is unauthenticated at both Card and AgentSkill levels, WSS keeps OAuth plus its connection ticket, and a Relay endpoint bearer must not be presented as a local Agent startup requirement or exported configuration. |
 | 2026-08-21 | Added `start-local opencode --workdir <project>` with an in-process A2A 0.3 adapter over the existing OpenCode serve/session/message lifecycle, stable workdir identity, optional model override, and guarded stored-binding recovery. | Users need one DWS command to expose a real project reasoning agent rather than an echo or separately managed HTTP service; the thin façade keeps OpenCode discovery and cleanup in the mature implementation while leaving Relay, control OAuth, WSS tickets, tunnel frames, and public RPC authentication semantics unchanged. |
 | 2026-08-21 | Consolidated every LocalRunner leaf under the sole `deap runtime` group, removed public `--openapi-base` in favor of `deap_openapi_url` with production default `https://deap-open-api.dingtalk.com`, migrated the loopback Card/RPC server to official `a2a-go/v2` through `a2acompat/a2av0` while preserving `0.3.0`, and routed LocalRunner plus `dev connect` through one shared local-agent backend for `opencode`, `codex`, `claudecode`, `qoder`, `qoderwork`, `codebuddy`, `workbuddy`, and `custom`. | The product has one LocalRunner lifecycle surface and one environment resolver; official SDK types/handlers replace handwritten JSON-RPC/SSE envelopes without an incompatible wire upgrade, while reusing the existing agent registry, forwarder, process, session, streaming, attachment, and close lifecycle prevents a second OpenCode-specific launcher. `gemini` remains a `dev connect` remote-API channel and is explicitly excluded from LocalRunner. |
+| 2026-08-21 | Projected the official compat producer's LocalRunner Card to a pure A2A v0.3 shape by omitting v1-only `supportedInterfaces` and `securityRequirements`, while accepting every trimmed nonblank input `protocolVersion` as an opaque value in Card rewrite and `add-sub-agent`. | Pre-release Skill Center accepts the older pure v0.3 Card but rejects a `protocolVersion="0.3.0"` Card mixed with v1 interface fields; LocalRunner must truthfully advertise its current a2av0 handler without constraining future external Card versions or pretending that it serves A2A 1.0. |

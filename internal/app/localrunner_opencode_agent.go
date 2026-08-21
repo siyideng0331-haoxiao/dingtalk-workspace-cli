@@ -262,13 +262,8 @@ func (p localRunnerCompatCardProducer) CardJSON(ctx context.Context) ([]byte, er
 		return nil, err
 	}
 	card["protocolVersion"] = "0.3.0"
-	if interfaces, ok := card["supportedInterfaces"].([]any); ok {
-		for _, item := range interfaces {
-			if supported, ok := item.(map[string]any); ok && supported["protocolVersion"] == "0.3" {
-				supported["protocolVersion"] = "0.3.0"
-			}
-		}
-	}
+	delete(card, "supportedInterfaces")
+	delete(card, "securityRequirements")
 	return json.Marshal(card)
 }
 
