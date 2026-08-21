@@ -3,6 +3,8 @@ package helpers
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -110,6 +112,15 @@ func TestLocalAgentBackendSupportsConnectRegistryAndExcludesGeminiOnlyFromLocalR
 	if IsLocalRunnerAgentChannel("gemini") {
 		t.Fatal("gemini remote API backend was exposed as a LocalRunner process channel")
 	}
+	wantLocalRunner := []string{"claudecode", "codebuddy", "codex", "custom", "opencode", "qoder", "qoderwork", "workbuddy"}
+	if got := strings.Join(LocalRunnerAgentChannels(), ","); got != strings.Join(wantLocalRunner, ",") {
+		t.Fatalf("LocalRunnerAgentChannels() = %q, want %q", got, strings.Join(wantLocalRunner, ","))
+	}
+	for _, channel := range []string{"auto", "gemini", "openclaw", "hermes", "unknown"} {
+		if IsLocalRunnerAgentChannel(channel) {
+			t.Fatalf("non-local harness %q was exposed to LocalRunner", channel)
+		}
+	}
 	fake := &recordingLocalAgentForwarder{}
 	testseam.Swap(t, &localAgentForwarderFactory, func(channel, _ string, _ connectAgentOptions) (forwarder, error) {
 		if channel != "gemini" {
@@ -123,6 +134,29 @@ func TestLocalAgentBackendSupportsConnectRegistryAndExcludesGeminiOnlyFromLocalR
 	}
 	if _, err := StartLocalAgentBackend(context.Background(), LocalAgentBackendOptions{Channel: "unknown"}); !errors.Is(err, ErrLocalAgentBackendUnsupported) {
 		t.Fatalf("unknown backend error = %v, want ErrLocalAgentBackendUnsupported", err)
+	}
+}
+
+func TestLocalAgentBackendCustomCommandUsesSharedExecForwarderWithoutEnvironmentMutation(t *testing.T) {
+	t.Setenv("DWS_AGENT_CMD", "")
+	workDir := t.TempDir()
+	command := filepath.Join(t.TempDir(), "custom-agent")
+	if err := os.WriteFile(command, []byte("#!/bin/sh\nprintf 'custom reply'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	backend, err := StartLocalAgentBackend(context.Background(), LocalAgentBackendOptions{
+		Channel: "custom", AgentCommand: command, WorkDir: workDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+	reply, err := backend.Prompt(context.Background(), "context-1", "question")
+	if err != nil || reply != "custom reply" {
+		t.Fatalf("custom Prompt() reply=%q error=%v", reply, err)
+	}
+	if os.Getenv("DWS_AGENT_CMD") != "" {
+		t.Fatal("explicit custom command mutated DWS_AGENT_CMD")
 	}
 }
 

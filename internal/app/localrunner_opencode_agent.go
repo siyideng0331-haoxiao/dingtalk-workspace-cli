@@ -47,6 +47,7 @@ const (
 type localRunnerLocalAgentOptions struct {
 	WorkDir string
 	Model string
+	AgentCommand string
 	Memory bool
 	Yolo bool
 	Timeout time.Duration
@@ -160,7 +161,7 @@ func startLocalRunnerLocalAgentAt(ctx context.Context, rawOrigin, agentRef strin
 
 func startLocalRunnerLocalAgentOn(ctx context.Context, agentRef string, options localRunnerLocalAgentOptions, listenAddress string) (*localRunnerOpenCodeAgent, error) {
 	backend, err := helpers.StartLocalAgentBackend(ctx, helpers.LocalAgentBackendOptions{
-		Channel: agentRef, WorkDir: options.WorkDir, Model: options.Model, Memory: options.Memory, Yolo: options.Yolo, Timeout: options.Timeout,
+		Channel: agentRef, AgentCommand: options.AgentCommand, WorkDir: options.WorkDir, Model: options.Model, Memory: options.Memory, Yolo: options.Yolo, Timeout: options.Timeout,
 	})
 	if err != nil {
 		return nil, err

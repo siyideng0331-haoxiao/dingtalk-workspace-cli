@@ -178,6 +178,9 @@ type forwarderCloser interface {
 // channel's built-in model, per-conversation memory on (where the CLI supports
 // it), empty scratch workdir.
 type connectAgentOptions struct {
+	// AgentCommand is an explicit custom harness command supplied by an owning
+	// caller. It stays in memory and takes precedence over DWS_AGENT_CMD.
+	AgentCommand string
 	// Model overrides the channel CLI's model (flag --agent-model /
 	// env DWS_AGENT_MODEL). Empty keeps the spec's built-in choice.
 	Model string
@@ -945,6 +948,13 @@ func resolveExecAgent(channel string) (argv []string, env []string, err error) {
 	return argv, env, nil
 }
 
+func resolveExecAgentWithCommand(channel, command string) (argv []string, env []string, err error) {
+	if command = strings.TrimSpace(command); command != "" && channel != "codex" {
+		return strings.Fields(command), nil, nil
+	}
+	return resolveExecAgent(channel)
+}
+
 // forwarderForChannel builds the forwarder for a channel. Every stream-bridge
 // channel forwards to its corresponding LOCAL CLI product (one-shot, runs 24/7),
 // resolved via PATH → app bundle → install guidance — no hardcoded path, no
@@ -959,13 +969,13 @@ func forwarderForChannel(channel, clientID string, opts connectAgentOptions) (fo
 	if !ok {
 		return nil, apperrors.NewValidation(fmt.Sprintf("渠道 %q 不是 stream-bridge 渠道，无 forwarder", channel))
 	}
-	overridden := strings.TrimSpace(os.Getenv("DWS_AGENT_CMD")) != "" && channel != "codex"
+	overridden := (strings.TrimSpace(opts.AgentCommand) != "" || strings.TrimSpace(os.Getenv("DWS_AGENT_CMD")) != "") && channel != "codex"
 	if channel == "gemini" && !overridden {
 		return newGeminiAPIForwarder(timeout, opts)
 	}
 	// Resolve the agent CLI (PATH → app bundle → auto-install → guidance) and
 	// preflight here so a missing dependency errors at connect time.
-	argv, env, err := resolveExecAgent(channel)
+	argv, env, err := resolveExecAgentWithCommand(channel, opts.AgentCommand)
 	if err != nil {
 		return nil, err
 	}

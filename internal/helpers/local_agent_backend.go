@@ -30,6 +30,7 @@ var (
 type LocalAgentBackendOptions struct {
 	Channel  string
 	ClientID string
+	AgentCommand string
 	WorkDir  string
 	Model    string
 	Memory   bool
@@ -94,7 +95,7 @@ func StartLocalAgentBackend(ctx context.Context, options LocalAgentBackendOption
 		return nil, ErrLocalAgentBackendInvalid
 	}
 	fwd, err := localAgentForwarderFactory(channel, strings.TrimSpace(options.ClientID), connectAgentOptions{
-		Model: strings.TrimSpace(options.Model), WorkDir: strings.TrimSpace(options.WorkDir),
+		AgentCommand: strings.TrimSpace(options.AgentCommand), Model: strings.TrimSpace(options.Model), WorkDir: strings.TrimSpace(options.WorkDir),
 		Memory: options.Memory, Yolo: options.Yolo, Timeout: options.Timeout,
 	})
 	if err != nil {

@@ -927,8 +927,9 @@ dws deap runtime start-local --harness opencode --work-dir <project> [--model <p
 
 The shared helper registry still supports `opencode`, `codex`, `claudecode`,
 `qoder`, `qoderwork`, `codebuddy`, `workbuddy`, and `custom` for its existing
-consumers, but `start-local` exposes only `opencode` in this phase. `gemini`
-remains a remote-API `dev connect` backend rather than a LocalRunner harness.
+consumers, and `start-local` exposes that exact local subset through the shared
+registry. `gemini` remains a remote-API `dev connect` backend rather than a
+LocalRunner harness; `auto`, `openclaw`, and `hermes` are not local backends.
 `--work-dir` is required. The command resolves a relative value
 against the current directory, cleans it, requires an existing directory, and
 passes only the absolute value into the runtime; empty directories are valid.
@@ -1000,13 +1001,13 @@ Implementation and verification steps:
 The public long-running entry point is exactly:
 
 ```text
-dws deap runtime start-local --harness opencode --work-dir <project>
+dws deap runtime start-local --harness <name> --work-dir <project>
 ```
 
 `start-local` has no positional arguments. `--harness` and `--work-dir` are
-required CLI and Schema parameters; this phase accepts only the `opencode`
-harness while keeping the string flag as the extension point for later harness
-registrations. `--workdir` is removed rather than retained as an alias. The
+required CLI and Schema parameters. The harness enum is projected from the
+shared LocalRunner registry rather than copied into this command, so additions
+remain one registry change. `--workdir` is removed rather than retained as an alias. The
 runtime continues mapping these flags to its existing in-memory `AgentRef` and
 `WorkDir`, and persisted config continues using `workDir`; no control, WSS,
 Card, or storage wire field changes.
@@ -1026,6 +1027,48 @@ File responsibilities and execution steps:
 - [x] Run focused GREEN, LocalRunner regressions and race, Schema Catalog and
   generated-drift policies, an independent build, and `git diff --check`
   without invoking a formatter.
+
+### 10.12 Shared LocalRunner harness registry and custom command
+
+`start-local --harness` projects its accepted values directly from
+`helpers.LocalRunnerAgentChannels()` and validates through
+`helpers.IsLocalRunnerAgentChannel()`. The current sorted set is
+`claudecode`, `codebuddy`, `codex`, `custom`, `opencode`, `qoder`, `qoderwork`,
+and `workbuddy`. It intentionally excludes `auto` selection, external
+`openclaw`/`hermes` connectors, and the remote-API `gemini` backend. Every
+accepted harness continues through `helpers.StartLocalAgentBackend` and the
+existing `agentSpecs`, forwarder, process, session, streaming, attachment, and
+close lifecycle; LocalRunner does not create another launcher or protocol.
+
+The command adds optional `--agent-cmd` for `--harness custom`, equivalent to
+the existing `dev connect` custom command input. The value travels only through
+in-memory start/backend options into the shared forwarder. It is never written
+to environment by LocalRunner and never enters the Agent Card, public summary,
+stored runner config, logs, prompt, response, or credential material. Without
+the flag, `DWS_AGENT_CMD` remains the compatibility source. Custom fails before
+the runtime provider when neither source is nonblank; non-custom harnesses
+reject `--agent-cmd` so a command cannot silently override another registered
+harness.
+
+File responsibilities and execution steps:
+
+- [x] Extend `internal/app/localrunner_command_test.go` first to compare Help
+  and Schema enum with `helpers.LocalRunnerAgentChannels()`, pass every shared
+  harness to the runtime, reject unknown/auto/openclaw/hermes/gemini, and prove
+  custom requires a command source without printing it.
+- [x] Extend `internal/helpers/local_agent_backend_test.go` first to prove an
+  explicit custom command reaches the existing exec forwarder and can answer a
+  prompt without mutating `DWS_AGENT_CMD`.
+- [x] Add only the in-memory `AgentCommand` option path in
+  `internal/app/localrunner_command.go`, `internal/app/localrunner_runtime.go`,
+  `internal/app/localrunner_opencode_agent.go`,
+  `internal/helpers/local_agent_backend.go`, and
+  `internal/helpers/connect_stream.go`; keep persisted `workDir` and all wire
+  DTOs unchanged.
+- [x] Update Help, Schema, examples, and this history, then run focused GREEN,
+  LocalRunner/helpers race and regressions, `internal/app`, Schema Catalog,
+  generated drift, independent build, and `git diff --check` without a
+  formatter.
 
 ## 11. Protocol and Plan Change History
 
@@ -1069,3 +1112,4 @@ File responsibilities and execution steps:
 | 2026-08-21 | Consolidated every LocalRunner leaf under the sole `deap runtime` group, removed public `--openapi-base` in favor of `deap_openapi_url` with production default `https://deap-open-api.dingtalk.com`, migrated the loopback Card/RPC server to official `a2a-go/v2` through `a2acompat/a2av0` while preserving `0.3.0`, and routed LocalRunner plus `dev connect` through one shared local-agent backend for `opencode`, `codex`, `claudecode`, `qoder`, `qoderwork`, `codebuddy`, `workbuddy`, and `custom`. | The product has one LocalRunner lifecycle surface and one environment resolver; official SDK types/handlers replace handwritten JSON-RPC/SSE envelopes without an incompatible wire upgrade, while reusing the existing agent registry, forwarder, process, session, streaming, attachment, and close lifecycle prevents a second OpenCode-specific launcher. `gemini` remains a `dev connect` remote-API channel and is explicitly excluded from LocalRunner. |
 | 2026-08-21 | Projected the official compat producer's LocalRunner Card to a pure A2A v0.3 shape by omitting v1-only `supportedInterfaces` and `securityRequirements`, while accepting every trimmed nonblank input `protocolVersion` as an opaque value in Card rewrite and `add-sub-agent`. | Pre-release Skill Center accepts the older pure v0.3 Card but rejects a `protocolVersion="0.3.0"` Card mixed with v1 interface fields; LocalRunner must truthfully advertise its current a2av0 handler without constraining future external Card versions or pretending that it serves A2A 1.0. |
 | 2026-08-21 | Replaced the `start-local <agent-ref>` positional and `--workdir` flag with the required `--harness opencode` and `--work-dir <dir>` contract, with no compatibility alias or positional fallback. | The user selected one extensible harness-oriented command shape; keeping both spellings or the old positional would create competing Help/Schema contracts, while the internal `AgentRef`, `WorkDir`, and persisted `workDir` fields can remain stable without changing runtime or wire semantics. |
+| 2026-08-21 | Replaced the command-local `opencode` harness check and one-value Schema enum with `helpers.LocalRunnerAgentChannels()` / `IsLocalRunnerAgentChannel()`, exposing all eight shared local backends and adding an in-memory `--agent-cmd` path for `custom`. | LocalRunner and `dev connect` must share one runnable backend registry; `auto`, external connectors, and remote Gemini are not local harnesses, while custom must be executable without copying launcher/session logic or persisting, logging, or exporting its command. |

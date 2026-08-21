@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/helpers"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/localrunner"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/testseam"
 )
@@ -242,6 +243,7 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 		"--memory",
 		"--yolo",
 		"--agent-timeout",
+		"--agent-cmd",
 	} {
 		if !strings.Contains(helpOutput.String(), want) {
 			t.Fatalf("start-local help missing %q:\n%s", want, helpOutput.String())
@@ -274,7 +276,7 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 	if len(schema.Positionals) != 0 {
 		t.Fatalf("start-local positionals = %#v", schema.Positionals)
 	}
-	for _, name := range []string{"harness", "work-dir", "model", "local-agent-id", "display-name", "max-concurrent", "streaming", "memory", "yolo", "agent-timeout"} {
+	for _, name := range []string{"harness", "work-dir", "agent-cmd", "model", "local-agent-id", "display-name", "max-concurrent", "streaming", "memory", "yolo", "agent-timeout"} {
 		if schema.Parameters[name] == nil {
 			t.Fatalf("start-local Schema missing --%s", name)
 		}
@@ -291,8 +293,13 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 	if err := json.Unmarshal(schema.Parameters["harness"], &harnessParameter); err != nil {
 		t.Fatal(err)
 	}
-	if !harnessParameter.Required || len(harnessParameter.Enum) != 1 || harnessParameter.Enum[0] != "opencode" {
+	if !harnessParameter.Required || strings.Join(harnessParameter.Enum, ",") != strings.Join(helpers.LocalRunnerAgentChannels(), ",") {
 		t.Fatalf("start-local harness contract = %#v", harnessParameter)
+	}
+	for _, harness := range helpers.LocalRunnerAgentChannels() {
+		if !strings.Contains(helpOutput.String(), harness) {
+			t.Fatalf("start-local help missing shared harness %q:\n%s", harness, helpOutput.String())
+		}
 	}
 	var workDirParameter struct {
 		Required bool `json:"required"`
@@ -302,6 +309,16 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 	}
 	if !workDirParameter.Required {
 		t.Fatalf("start-local work-dir contract = %#v", workDirParameter)
+	}
+	var agentCommandParameter struct {
+		Required     bool   `json:"required"`
+		RequiredWhen string `json:"required_when"`
+	}
+	if err := json.Unmarshal(schema.Parameters["agent-cmd"], &agentCommandParameter); err != nil {
+		t.Fatal(err)
+	}
+	if agentCommandParameter.Required || agentCommandParameter.RequiredWhen != "harness=custom unless DWS_AGENT_CMD is set" {
+		t.Fatalf("start-local agent-cmd contract = %#v", agentCommandParameter)
 	}
 }
 
@@ -329,9 +346,37 @@ func TestLocalRunnerStartLocalOpenCodeNormalizesWorkDirAndPassesModel(t *testing
 	}
 }
 
-func TestLocalRunnerStartLocalAcceptsOnlyOpenCodeHarness(t *testing.T) {
-	for _, harness := range []string{"codex", "claudecode", "qoder", "qoderwork", "codebuddy", "workbuddy", "custom", "gemini", "test-echo"} {
+func TestLocalRunnerStartLocalUsesSharedHarnessRegistry(t *testing.T) {
+	for _, harness := range helpers.LocalRunnerAgentChannels() {
 		t.Run(harness, func(t *testing.T) {
+			runtime := &recordingLocalRunnerRuntime{}
+			testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
+			output := &bytes.Buffer{}
+			root := newRootCommandWithEngine(context.Background(), nil, false, true)
+			root.SetOut(output)
+			root.SetErr(output)
+			args := []string{"deap", "runtime", "start-local", "--harness", harness, "--work-dir", t.TempDir()}
+			if harness == "custom" {
+				args = append(args, "--agent-cmd", "custom-agent --safe-flag")
+			}
+			root.SetArgs(args)
+			if err := root.Execute(); err != nil {
+				t.Fatalf("start-local harness %q error = %v", harness, err)
+			}
+			if runtime.startOptions.AgentRef != harness {
+				t.Fatalf("start-local harness %q options = %#v", harness, runtime.startOptions)
+			}
+			if harness == "custom" && runtime.startOptions.AgentCommand != "custom-agent --safe-flag" {
+				t.Fatalf("custom agent command was not passed in memory: %#v", runtime.startOptions)
+			}
+			if strings.Contains(output.String(), "custom-agent") {
+				t.Fatalf("start-local output exposed custom command: %s", output.String())
+			}
+		})
+	}
+
+	for _, harness := range []string{"unknown", "auto", "gemini", "openclaw", "hermes", "test-echo"} {
+		t.Run("reject-"+harness, func(t *testing.T) {
 			runtime := &recordingLocalRunnerRuntime{}
 			testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
 			root := newRootCommandWithEngine(context.Background(), nil, false, true)
@@ -343,6 +388,32 @@ func TestLocalRunnerStartLocalAcceptsOnlyOpenCodeHarness(t *testing.T) {
 			}
 			if runtime.lastCall != "" {
 				t.Fatalf("rejected harness %q reached runtime", harness)
+			}
+		})
+	}
+}
+
+func TestLocalRunnerStartLocalCustomRequiresCommandAndRejectsCommandForOtherHarnesses(t *testing.T) {
+	t.Setenv("DWS_AGENT_CMD", "")
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{name: "custom missing command", args: []string{"deap", "runtime", "start-local", "--harness", "custom", "--work-dir", t.TempDir()}},
+		{name: "command on opencode", args: []string{"deap", "runtime", "start-local", "--harness", "opencode", "--work-dir", t.TempDir(), "--agent-cmd", "custom-agent"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &recordingLocalRunnerRuntime{}
+			testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
+			root := newRootCommandWithEngine(context.Background(), nil, false, true)
+			root.SetOut(&bytes.Buffer{})
+			root.SetErr(&bytes.Buffer{})
+			root.SetArgs(test.args)
+			if err := root.Execute(); err == nil {
+				t.Fatalf("start-local accepted invalid custom command contract: %v", test.args)
+			}
+			if runtime.lastCall != "" {
+				t.Fatalf("invalid custom command contract reached runtime as %q", runtime.lastCall)
 			}
 		})
 	}

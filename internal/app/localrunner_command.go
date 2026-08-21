@@ -34,6 +34,7 @@ type localRunnerConnectOptions struct {
 
 type localRunnerStartLocalOptions struct {
 	AgentRef      string
+	AgentCommand  string
 	WorkDir       string
 	Model         string
 	LocalAgentID  string
@@ -100,6 +101,8 @@ func newDEAPCommand() *cobra.Command {
 
 func newLocalRunnerStartLocalCommand() *cobra.Command {
 	var harness string
+	harnesses := helpers.LocalRunnerAgentChannels()
+	harnessDescription := "本地 Agent harness；支持 " + strings.Join(harnesses, ", ")
 	options := localRunnerStartLocalOptions{
 		MaxConcurrent: 4,
 		Streaming:     true,
@@ -109,11 +112,19 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "start-local",
 		Short: "注册并运行一个本地 A2A Agent",
-		Long:  "使用 --harness opencode 在当前 dws 进程管理指定项目目录中的 OpenCode Agent。注册后先输出不含凭证的公网 A2A 配置，再维持 WSS 与本地 HTTP/SSE 代理；--harness 是后续本地 Agent harness 的扩展点，本轮仅支持 opencode。",
+		Long:  "使用 --harness 在当前 dws 进程管理指定项目目录中的本地 Agent。支持 " + strings.Join(harnesses, ", ") + "；全部复用 dev connect 的共享 backend。custom 需要 --agent-cmd 或 DWS_AGENT_CMD。注册后先输出不含凭证的公网 A2A 配置，再维持 WSS 与本地 HTTP/SSE 代理。",
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			options.AgentRef = strings.TrimSpace(harness)
-			if options.AgentRef != "opencode" {
+			options.AgentCommand = strings.TrimSpace(options.AgentCommand)
+			if !helpers.IsLocalRunnerAgentChannel(options.AgentRef) {
+				return ErrLocalRunnerRuntimeInvalid
+			}
+			if options.AgentRef == "custom" {
+				if options.AgentCommand == "" && strings.TrimSpace(os.Getenv("DWS_AGENT_CMD")) == "" {
+					return ErrLocalRunnerRuntimeInvalid
+				}
+			} else if options.AgentCommand != "" {
 				return ErrLocalRunnerRuntimeInvalid
 			}
 			workDir, err := normalizeLocalRunnerWorkDir(options.WorkDir)
@@ -138,8 +149,9 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 		},
 	}
 	flags := cmd.Flags()
-	flags.StringVar(&harness, "harness", "", "本地 Agent harness；本轮支持 opencode")
+	flags.StringVar(&harness, "harness", "", harnessDescription)
 	flags.StringVar(&options.WorkDir, "work-dir", "", "本地 Agent 项目目录；可使用相对或绝对路径")
+	flags.StringVar(&options.AgentCommand, "agent-cmd", "", "custom harness 的无头命令；问题作为末参，stdout 作为回复；也可使用 DWS_AGENT_CMD")
 	flags.StringVar(&options.Model, "model", "", "本地 Agent 模型覆盖；留空使用 channel 默认模型")
 	flags.StringVar(&options.LocalAgentID, "local-agent-id", "", "本地 Agent 的稳定 ID；默认按 harness/绝对 work-dir 确定性派生")
 	flags.StringVar(&options.DisplayName, "display-name", "", "LocalRunner 显示名称；默认使用 Agent Card name")
@@ -155,14 +167,16 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 		"deap.runtime_start_local",
 		"deap runtime start-local",
 		"从共享本地 Agent backend 一键注册并维持公网 A2A LocalRunner 连接",
-		"需要把指定项目目录中的 OpenCode harness 暴露为 A2A 时",
-		"只注册不用长连接时使用 deap runtime expose，已有 Runner 重连时使用 connect；本轮不支持 opencode 之外的 harness",
-		[]string{"dws deap runtime start-local --harness opencode --work-dir ./project"},
+		"需要把指定项目目录中的受支持本地 Agent harness 暴露为 A2A 时",
+		"只注册不用长连接时使用 deap runtime expose，已有 Runner 重连时使用 connect；auto、外部 connector 和远程 API 不是 LocalRunner harness",
+		[]string{"dws deap runtime start-local --harness opencode --work-dir ./project", "dws deap runtime start-local --harness custom --work-dir ./project --agent-cmd \"<command>\""},
 	)
 	required := true
+	optional := false
 	declaration.Parameters = []contract.ParamDecl{
-		{Name: "harness", Property: "harness", InterfaceType: "string", Description: "本地 Agent harness；本轮支持 opencode", Required: &required, Enum: []string{"opencode"}},
+		{Name: "harness", Property: "harness", InterfaceType: "string", Description: harnessDescription, Required: &required, Enum: append([]string(nil), harnesses...)},
 		{Name: "work-dir", Property: "workDir", InterfaceType: "string", Description: "本地 Agent 项目目录；可使用相对或绝对路径", Required: &required},
+		{Name: "agent-cmd", Property: "agentCommand", InterfaceType: "string", Description: "custom harness 的无头命令；仅在内存中传给共享 backend，也可使用 DWS_AGENT_CMD", Required: &optional, RequiredWhen: "harness=custom unless DWS_AGENT_CMD is set"},
 		{Name: "model", Property: "model", InterfaceType: "string", Description: "本地 Agent 模型覆盖；留空使用 channel 默认模型"},
 		{Name: "local-agent-id", Property: "localAgentId", InterfaceType: "string", Description: "本地 Agent 的稳定 ID；默认按 harness/绝对 work-dir 确定性派生"},
 		{Name: "display-name", Property: "displayName", InterfaceType: "string", Description: "LocalRunner 显示名称；默认使用 Agent Card name"},
