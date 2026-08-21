@@ -1124,6 +1124,52 @@ File responsibilities and TDD steps:
   Schema Catalog, generated drift, module verification, independent build,
   and Git diff checks without running a formatter or a real Runner.
 
+### 10.14 Runner-only explicit recovery correction
+
+Section 10.14 supersedes only Section 10.13's public paired-ID selector. The
+recovery command is:
+
+```text
+dws deap runtime start-local --harness <name> --work-dir <project> \
+  --runner-id <lr_...>
+```
+
+`localAgentId` is the client-derived stable identity: by default it is the
+harness name plus the digest of the normalized absolute work directory, and it
+may be explicitly overridden. `endpointId` is not derived from a harness and
+is never shared by two instances of the same harness. It is an opaque unique ID
+allocated by OpenAPI when the Runner is first created. Because Runner is the
+control/lifecycle resource key and every authenticated Runner view returns its
+single Endpoint, accepting a second user-supplied ID would duplicate authority
+rather than strengthen the one-to-one invariant.
+
+With no `--runner-id`, create-or-implicit-recover remains unchanged. With one
+nonblank `--runner-id`, DWS calls authenticated `GetRunner(runnerId)` before
+starting the backend, obtains the authoritative `endpointId`, and must never
+call `CreateRunner`. If local config exists, its endpoint must equal the remote
+view. If config is absent, the remote endpoint populates the unpersisted
+candidate config, Card reconciliation keeps verifying every later response
+against it, and the final config plus WSS connect options retain that same
+endpoint. Remote missing/revoked/identity/Card/update drift remains fail-closed.
+
+File responsibilities and TDD steps:
+
+- [x] Change `internal/app/localrunner_command_test.go` first so a lone
+  `--runner-id` reaches the runtime, `--endpoint-id` is unknown, Help/Schema
+  omit it, and examples explain ordinary implicit versus disaster recovery.
+- [x] Change `internal/app/localrunner_runtime_test.go` first so options contain
+  no endpoint input, config-loss recovery saves/connects the endpoint returned
+  by `GetRunner`, and a stored/remote endpoint mismatch fails before restart.
+- [x] Remove only the public/in-memory start option `EndpointID` and paired
+  validation from `internal/app/localrunner_command.go`; keep endpoint fields in
+  stored config, summaries, control DTOs, connection tickets, and tunnel wire.
+- [x] Update `internal/app/localrunner_runtime.go` to select explicit recovery
+  by runner ID alone and bind every subsequent operation to the endpoint from
+  the authenticated view without changing OpenAPI or Card protocols.
+- [x] Run focused RED/GREEN, race and related package regressions, Schema
+  Catalog, generated drift, module verification, independent build, Help/Schema
+  negative checks, and Git diff checks without a formatter or real Runner.
+
 ## 11. Protocol and Plan Change History
 
 | Date | Change | Reason |
@@ -1168,3 +1214,4 @@ File responsibilities and TDD steps:
 | 2026-08-21 | Replaced the `start-local <agent-ref>` positional and `--workdir` flag with the required `--harness opencode` and `--work-dir <dir>` contract, with no compatibility alias or positional fallback. | The user selected one extensible harness-oriented command shape; keeping both spellings or the old positional would create competing Help/Schema contracts, while the internal `AgentRef`, `WorkDir`, and persisted `workDir` fields can remain stable without changing runtime or wire semantics. |
 | 2026-08-21 | Replaced the command-local `opencode` harness check and one-value Schema enum with `helpers.LocalRunnerAgentChannels()` / `IsLocalRunnerAgentChannel()`, exposing all eight shared local backends and adding an in-memory `--agent-cmd` path for `custom`. | LocalRunner and `dev connect` must share one runnable backend registry; `auto`, external connectors, and remote Gemini are not local harnesses, while custom must be executable without copying launcher/session logic or persisting, logging, or exporting its command. |
 | 2026-08-21 | Added paired optional `start-local --runner-id/--endpoint-id` disaster recovery while preserving create-or-implicit-recover as the normal path and keeping the existing public Agent Card URL. | A lost or migrated local config cannot be found by `localAgentId`; the explicit one-to-one pair lets the authenticated owner reconstruct only local non-secret state after strict remote identity/Card validation, without creating a duplicate Runner, requiring an endpoint bearer, or adding a second restart command surface. |
+| 2026-08-21 | Superseded the unshipped paired selector with runner-only `start-local --runner-id`; DWS now obtains the unique endpoint exclusively from the authenticated Runner view and removes public `--endpoint-id`. | `localAgentId` is derived from harness plus normalized absolute work directory, while `endpointId` is an opaque server allocation that is neither harness-derived nor shared; Runner is already the control-plane resource key, so asking users to repeat the server-owned one-to-one endpoint creates unnecessary authority and mismatch risk. |

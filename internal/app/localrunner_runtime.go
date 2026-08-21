@@ -139,11 +139,7 @@ func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, op
 		return nil, ErrLocalRunnerRuntimeInvalid
 	}
 	options.RunnerID = strings.TrimSpace(options.RunnerID)
-	options.EndpointID = strings.TrimSpace(options.EndpointID)
-	explicitRecovery := options.RunnerID != "" || options.EndpointID != ""
-	if (options.RunnerID == "") != (options.EndpointID == "") {
-		return nil, ErrLocalRunnerRuntimeInvalid
-	}
+	explicitRecovery := options.RunnerID != ""
 	if strings.TrimSpace(options.OpenAPIBase) == "" {
 		options.OpenAPIBase = r.openAPIBaseURL()
 	}
@@ -169,7 +165,7 @@ func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, op
 		if storedLocalAgentID == "" {
 			storedLocalAgentID = localRunnerLocalAgentDefaultID(agentRef, workDir)
 		}
-		candidate, findErr := r.findLocalAgentStartConfig(storedLocalAgentID, agentRef, workDir, options.OpenAPIBase, options.RunnerID, options.EndpointID)
+		candidate, findErr := r.findLocalAgentStartConfig(storedLocalAgentID, agentRef, workDir, options.OpenAPIBase, options.RunnerID)
 		if findErr != nil {
 			return nil, findErr
 		}
@@ -191,7 +187,7 @@ func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, op
 			if err != nil {
 				return nil, err
 			}
-			if explicitView.RunnerID != options.RunnerID || explicitView.EndpointID != options.EndpointID || explicitView.LocalAgentID != storedLocalAgentID || explicitView.DisplayName != expectedDisplayName || explicitView.Status != localrunner.RunnerStatusActive {
+			if explicitView.RunnerID != options.RunnerID || explicitView.LocalAgentID != storedLocalAgentID || explicitView.DisplayName != expectedDisplayName || explicitView.Status != localrunner.RunnerStatusActive || (stored != nil && explicitView.EndpointID != stored.EndpointID) {
 				return nil, ErrLocalRunnerRuntimeInvalid
 			}
 		}
@@ -290,7 +286,7 @@ func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, op
 			return nil, ErrLocalRunnerRuntimeInvalid
 		}
 		candidate := &localrunner.StoredRunnerConfig{
-			RunnerID: options.RunnerID, EndpointID: options.EndpointID,
+			RunnerID: options.RunnerID, EndpointID: explicitView.EndpointID,
 			LocalAgentID: localAgentID, DisplayName: displayName,
 			AgentCardURL: agentCardURL, LoopbackBaseURL: origin,
 			OpenAPIBase: strings.TrimRight(strings.TrimSpace(options.OpenAPIBase), "/"),
@@ -330,7 +326,7 @@ func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, op
 	return result, nil
 }
 
-func (r *productionLocalRunnerCommandRuntime) findLocalAgentStartConfig(localAgentID, agentRef, workDir, openAPIBase, runnerID, endpointID string) (*localrunner.StoredRunnerConfig, error) {
+func (r *productionLocalRunnerCommandRuntime) findLocalAgentStartConfig(localAgentID, agentRef, workDir, openAPIBase, runnerID string) (*localrunner.StoredRunnerConfig, error) {
 	if r == nil || strings.TrimSpace(localAgentID) == "" || !helpers.IsLocalRunnerAgentChannel(agentRef) || !filepath.IsAbs(workDir) {
 		return nil, ErrLocalRunnerRuntimeInvalid
 	}
@@ -360,7 +356,7 @@ func (r *productionLocalRunnerCommandRuntime) findLocalAgentStartConfig(localAge
 	if findErr != nil || byLocalAgentID.RunnerID != byRunnerID.RunnerID || byLocalAgentID.EndpointID != byRunnerID.EndpointID {
 		return nil, ErrLocalRunnerRuntimeInvalid
 	}
-	if byRunnerID.RunnerID != strings.TrimSpace(runnerID) || byRunnerID.EndpointID != strings.TrimSpace(endpointID) || byRunnerID.LocalAgentID != localAgentID || byRunnerID.AgentKind != agentRef || byRunnerID.WorkDir != workDir || byRunnerID.OpenAPIBase != strings.TrimRight(strings.TrimSpace(openAPIBase), "/") {
+	if byRunnerID.RunnerID != strings.TrimSpace(runnerID) || byRunnerID.LocalAgentID != localAgentID || byRunnerID.AgentKind != agentRef || byRunnerID.WorkDir != workDir || byRunnerID.OpenAPIBase != strings.TrimRight(strings.TrimSpace(openAPIBase), "/") {
 		return nil, ErrLocalRunnerRuntimeInvalid
 	}
 	return byRunnerID, nil

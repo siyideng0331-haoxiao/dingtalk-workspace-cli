@@ -245,18 +245,17 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 		"--agent-timeout",
 		"--agent-cmd",
 		"--runner-id",
-		"--endpoint-id",
 	} {
 		if !strings.Contains(helpOutput.String(), want) {
 			t.Fatalf("start-local help missing %q:\n%s", want, helpOutput.String())
 		}
 	}
-	for _, want := range []string{"日常重启可直接重跑原命令", "灾难恢复"} {
+	for _, want := range []string{"日常重启可直接重跑原命令", "灾难恢复", "localAgentId", "endpointId"} {
 		if !strings.Contains(helpOutput.String(), want) {
 			t.Fatalf("start-local help missing recovery guidance %q:\n%s", want, helpOutput.String())
 		}
 	}
-	for _, removed := range []string{"<agent-ref>", "--workdir", "test-echo", "loopback Agent Card URL"} {
+	for _, removed := range []string{"<agent-ref>", "--workdir", "--endpoint-id", "test-echo", "loopback Agent Card URL"} {
 		if strings.Contains(helpOutput.String(), removed) {
 			t.Fatalf("start-local help still publishes removed contract %q:\n%s", removed, helpOutput.String())
 		}
@@ -283,12 +282,12 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 	if len(schema.Positionals) != 0 {
 		t.Fatalf("start-local positionals = %#v", schema.Positionals)
 	}
-	for _, name := range []string{"harness", "work-dir", "agent-cmd", "runner-id", "endpoint-id", "model", "local-agent-id", "display-name", "max-concurrent", "streaming", "memory", "yolo", "agent-timeout"} {
+	for _, name := range []string{"harness", "work-dir", "agent-cmd", "runner-id", "model", "local-agent-id", "display-name", "max-concurrent", "streaming", "memory", "yolo", "agent-timeout"} {
 		if schema.Parameters[name] == nil {
 			t.Fatalf("start-local Schema missing --%s", name)
 		}
 	}
-	for _, removed := range []string{"workdir", "openapi-base"} {
+	for _, removed := range []string{"workdir", "openapi-base", "endpoint-id"} {
 		if schema.Parameters[removed] != nil {
 			t.Fatalf("start-local Schema still publishes --%s", removed)
 		}
@@ -327,23 +326,15 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 	if agentCommandParameter.Required || agentCommandParameter.RequiredWhen != "harness=custom unless DWS_AGENT_CMD is set" {
 		t.Fatalf("start-local agent-cmd contract = %#v", agentCommandParameter)
 	}
-	for _, parameter := range []struct {
-		name         string
-		requiredWhen string
-	}{
-		{name: "runner-id", requiredWhen: "endpoint-id is provided"},
-		{name: "endpoint-id", requiredWhen: "runner-id is provided"},
-	} {
-		var identityParameter struct {
-			Required     bool   `json:"required"`
-			RequiredWhen string `json:"required_when"`
-		}
-		if err := json.Unmarshal(schema.Parameters[parameter.name], &identityParameter); err != nil {
-			t.Fatal(err)
-		}
-		if identityParameter.Required || identityParameter.RequiredWhen != parameter.requiredWhen {
-			t.Fatalf("start-local %s contract = %#v", parameter.name, identityParameter)
-		}
+	var runnerParameter struct {
+		Required     bool   `json:"required"`
+		RequiredWhen string `json:"required_when"`
+	}
+	if err := json.Unmarshal(schema.Parameters["runner-id"], &runnerParameter); err != nil {
+		t.Fatal(err)
+	}
+	if runnerParameter.Required || runnerParameter.RequiredWhen != "" {
+		t.Fatalf("start-local runner-id contract = %#v", runnerParameter)
 	}
 }
 
@@ -444,37 +435,32 @@ func TestLocalRunnerStartLocalCustomRequiresCommandAndRejectsCommandForOtherHarn
 	}
 }
 
-func TestLocalRunnerStartLocalRequiresRunnerEndpointPairAndForwardsIt(t *testing.T) {
+func TestLocalRunnerStartLocalAcceptsRunnerOnlyRecoveryAndRejectsEndpointFlag(t *testing.T) {
 	workDir := t.TempDir()
-	for _, args := range [][]string{
-		{"deap", "runtime", "start-local", "--harness", "opencode", "--work-dir", workDir, "--runner-id", "runner-existing"},
-		{"deap", "runtime", "start-local", "--harness", "opencode", "--work-dir", workDir, "--endpoint-id", "endpoint-existing"},
-	} {
-		runtime := &recordingLocalRunnerRuntime{}
-		testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
-		root := newRootCommandWithEngine(context.Background(), nil, false, true)
-		root.SetOut(&bytes.Buffer{})
-		root.SetErr(&bytes.Buffer{})
-		root.SetArgs(args)
-		if err := root.Execute(); err == nil {
-			t.Fatalf("start-local accepted incomplete recovery pair: %v", args)
-		}
-		if runtime.lastCall != "" {
-			t.Fatalf("incomplete recovery pair reached runtime as %q", runtime.lastCall)
-		}
-	}
-
 	runtime := &recordingLocalRunnerRuntime{}
 	testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
 	root := newRootCommandWithEngine(context.Background(), nil, false, true)
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
-	root.SetArgs([]string{"deap", "runtime", "start-local", "--harness", "opencode", "--work-dir", workDir, "--runner-id", "runner-existing", "--endpoint-id", "endpoint-existing"})
+	root.SetArgs([]string{"deap", "runtime", "start-local", "--harness", "opencode", "--work-dir", workDir, "--runner-id", "runner-existing"})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if runtime.startOptions.RunnerID != "runner-existing" || runtime.startOptions.EndpointID != "endpoint-existing" {
-		t.Fatalf("explicit recovery pair options = %#v", runtime.startOptions)
+	if runtime.startOptions.RunnerID != "runner-existing" {
+		t.Fatalf("explicit recovery options = %#v", runtime.startOptions)
+	}
+
+	runtime = &recordingLocalRunnerRuntime{}
+	testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
+	root = newRootCommandWithEngine(context.Background(), nil, false, true)
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"deap", "runtime", "start-local", "--harness", "opencode", "--work-dir", workDir, "--endpoint-id", "endpoint-existing"})
+	if err := root.Execute(); err == nil {
+		t.Fatal("start-local accepted removed --endpoint-id")
+	}
+	if runtime.lastCall != "" {
+		t.Fatalf("removed --endpoint-id reached runtime as %q", runtime.lastCall)
 	}
 }
 

@@ -1139,7 +1139,7 @@ func TestProductionLocalRunnerStartLocalResumesStoredOpenCodeWithoutCreateOrUpda
 
 	explicitResult, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
 		AgentRef: localRunnerOpenCodeRef, WorkDir: workDir, Model: "provider/model",
-		RunnerID: stored.RunnerID, EndpointID: stored.EndpointID,
+		RunnerID: stored.RunnerID,
 		OpenAPIBase: "https://api.dingtalk.com", MaxConcurrent: 2, Streaming: true,
 	})
 	if err != nil {
@@ -1154,13 +1154,20 @@ func TestProductionLocalRunnerStartLocalResumesStoredOpenCodeWithoutCreateOrUpda
 	}
 }
 
-func TestProductionLocalRunnerStartLocalExplicitPairRejectsStoredBindingMismatchBeforeStart(t *testing.T) {
+func TestProductionLocalRunnerStartLocalExplicitRunnerRejectsStoredEndpointMismatchBeforeRestart(t *testing.T) {
 	workDir := t.TempDir()
+	controlCalls := 0
 	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
 		ConfigDir: t.TempDir(),
-		ControlHTTPClient: localRunnerHTTPDoerFunc(func(*http.Request) (*http.Response, error) {
-			t.Fatal("stored pair mismatch reached control plane")
-			return nil, nil
+		ControlHTTPClient: localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+			controlCalls++
+			return localRunnerStatusTestResponse(t, request, localrunner.RunnerStatusData{
+				RunnerID: "runner-existing", EndpointID: "endpoint-other",
+				LocalAgentID: localRunnerOpenCodeDefaultID(workDir), DisplayName: localRunnerOpenCodeDisplayName,
+				Status: localrunner.RunnerStatusActive,
+				AgentCardURL: "https://api.dingtalk.com/v1/a2a/local-runners/endpoint-other/.well-known/agent-card.json",
+				AgentCardSHA256: "sha256:" + strings.Repeat("a", 64),
+			}), nil
 		}),
 		OAuth: staticLocalRunnerOAuth("oauth-token"),
 		Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
@@ -1187,18 +1194,18 @@ func TestProductionLocalRunnerStartLocalExplicitPairRejectsStoredBindingMismatch
 	})
 	_, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
 		AgentRef: localRunnerOpenCodeRef, WorkDir: workDir,
-		RunnerID: stored.RunnerID, EndpointID: "endpoint-other",
+		RunnerID: stored.RunnerID,
 		OpenAPIBase: stored.OpenAPIBase, MaxConcurrent: 1, Streaming: true,
 	})
 	if !errors.Is(err, ErrLocalRunnerRuntimeInvalid) {
 		t.Fatalf("StartLocal() error = %v, want ErrLocalRunnerRuntimeInvalid", err)
 	}
-	if startCalls != 0 {
-		t.Fatalf("stored pair mismatch started local backend %d times", startCalls)
+	if controlCalls != 1 || startCalls != 0 {
+		t.Fatalf("stored endpoint mismatch calls = control %d start %d, want 1/0", controlCalls, startCalls)
 	}
 }
 
-func TestProductionLocalRunnerStartLocalExplicitPairRebuildsMissingConfigWithoutCreate(t *testing.T) {
+func TestProductionLocalRunnerStartLocalExplicitRunnerRebuildsMissingConfigWithoutCreate(t *testing.T) {
 	for _, testCase := range []struct {
 		name         string
 		mutateUpdate func(*localrunner.RunnerStatusData)
@@ -1302,7 +1309,7 @@ func TestProductionLocalRunnerStartLocalExplicitPairRebuildsMissingConfigWithout
 			})
 			result, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
 				AgentRef: localRunnerOpenCodeRef, WorkDir: workDir,
-				RunnerID: "runner-existing", EndpointID: "endpoint-existing",
+				RunnerID: "runner-existing",
 				OpenAPIBase: publicOrigin, MaxConcurrent: 2, Streaming: true,
 			})
 			if testCase.wantError {
@@ -1347,7 +1354,7 @@ func TestProductionLocalRunnerStartLocalExplicitPairRebuildsMissingConfigWithout
 	}
 }
 
-func TestProductionLocalRunnerStartLocalExplicitPairRejectsRemoteDriftBeforeStart(t *testing.T) {
+func TestProductionLocalRunnerStartLocalExplicitRunnerRejectsRemoteDriftBeforeStart(t *testing.T) {
 	workDir := t.TempDir()
 	wantLocalAgentID := localRunnerOpenCodeDefaultID(workDir)
 	for _, testCase := range []struct {
@@ -1358,7 +1365,6 @@ func TestProductionLocalRunnerStartLocalExplicitPairRejectsRemoteDriftBeforeStar
 		{name: "missing", statusCode: http.StatusNotFound},
 		{name: "revoked", mutate: func(value *localrunner.RunnerStatusData) { value.Status = localrunner.RunnerStatusRevoked }},
 		{name: "runner mismatch", mutate: func(value *localrunner.RunnerStatusData) { value.RunnerID = "runner-other" }},
-		{name: "endpoint mismatch", mutate: func(value *localrunner.RunnerStatusData) { value.EndpointID = "endpoint-other" }},
 		{name: "local agent mismatch", mutate: func(value *localrunner.RunnerStatusData) { value.LocalAgentID = "agent-other" }},
 		{name: "display name mismatch", mutate: func(value *localrunner.RunnerStatusData) { value.DisplayName = "Other agent" }},
 	} {
@@ -1397,7 +1403,7 @@ func TestProductionLocalRunnerStartLocalExplicitPairRejectsRemoteDriftBeforeStar
 			})
 			result, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
 				AgentRef: localRunnerOpenCodeRef, WorkDir: workDir,
-				RunnerID: "runner-existing", EndpointID: "endpoint-existing",
+				RunnerID: "runner-existing",
 				OpenAPIBase: "https://api.dingtalk.com", MaxConcurrent: 1, Streaming: true,
 			})
 			if err == nil || result != nil {
