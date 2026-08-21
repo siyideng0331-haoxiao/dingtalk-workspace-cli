@@ -1120,7 +1120,6 @@ func TestProductionLocalRunnerStartLocalResumesStoredOpenCodeWithoutCreateOrUpda
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer result.Close()
 	if restartCalls != 1 || controlWrites != 0 {
 		t.Fatalf("recovery restart calls=%d control writes=%d", restartCalls, controlWrites)
 	}
@@ -1133,6 +1132,284 @@ func TestProductionLocalRunnerStartLocalResumesStoredOpenCodeWithoutCreateOrUpda
 	}
 	if reloaded.AgentCardSHA256 != serverDigest || reloaded.AgentKind != localRunnerOpenCodeRef || reloaded.WorkDir != workDir {
 		t.Fatalf("reloaded stored OpenCode config = %#v", reloaded)
+	}
+	if err := result.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	explicitResult, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
+		AgentRef: localRunnerOpenCodeRef, WorkDir: workDir, Model: "provider/model",
+		RunnerID: stored.RunnerID, EndpointID: stored.EndpointID,
+		OpenAPIBase: "https://api.dingtalk.com", MaxConcurrent: 2, Streaming: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer explicitResult.Close()
+	if restartCalls != 2 || controlWrites != 0 {
+		t.Fatalf("explicit recovery restart calls=%d control writes=%d", restartCalls, controlWrites)
+	}
+	if explicitResult.Summary.AgentCardURL != publicURL || explicitResult.ConnectOptions.RunnerID != stored.RunnerID || explicitResult.ConnectOptions.EndpointID != stored.EndpointID || explicitResult.ConnectOptions.TargetURL != rpcURL {
+		t.Fatalf("explicit recovered binding = summary %#v connect %#v", explicitResult.Summary, explicitResult.ConnectOptions)
+	}
+}
+
+func TestProductionLocalRunnerStartLocalExplicitPairRejectsStoredBindingMismatchBeforeStart(t *testing.T) {
+	workDir := t.TempDir()
+	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+		ConfigDir: t.TempDir(),
+		ControlHTTPClient: localRunnerHTTPDoerFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("stored pair mismatch reached control plane")
+			return nil, nil
+		}),
+		OAuth: staticLocalRunnerOAuth("oauth-token"),
+		Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
+		OwnerIdentity: testLocalRunnerOwnerIdentity,
+	})
+	stored := localrunner.StoredRunnerConfig{
+		RunnerID: "runner-existing", EndpointID: "endpoint-existing",
+		LocalAgentID: localRunnerOpenCodeDefaultID(workDir), DisplayName: localRunnerOpenCodeDisplayName,
+		AgentCardURL: "http://127.0.0.1:32123/.well-known/agent-card.json", LoopbackBaseURL: "http://127.0.0.1:32123",
+		OpenAPIBase: "https://api.dingtalk.com", AgentCardSHA256: "sha256:" + strings.Repeat("a", 64),
+		AgentKind: localRunnerOpenCodeRef, WorkDir: workDir,
+	}
+	if err := runtime.configs.Save(stored); err != nil {
+		t.Fatal(err)
+	}
+	startCalls := 0
+	testseam.Swap(t, &localRunnerLocalAgentStarter, func(context.Context, string, localRunnerLocalAgentOptions) (*localRunnerOpenCodeAgent, error) {
+		startCalls++
+		return nil, errors.New("must not start")
+	})
+	testseam.Swap(t, &localRunnerLocalAgentRestarter, func(context.Context, string, string, localRunnerLocalAgentOptions) (*localRunnerOpenCodeAgent, error) {
+		startCalls++
+		return nil, errors.New("must not restart")
+	})
+	_, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
+		AgentRef: localRunnerOpenCodeRef, WorkDir: workDir,
+		RunnerID: stored.RunnerID, EndpointID: "endpoint-other",
+		OpenAPIBase: stored.OpenAPIBase, MaxConcurrent: 1, Streaming: true,
+	})
+	if !errors.Is(err, ErrLocalRunnerRuntimeInvalid) {
+		t.Fatalf("StartLocal() error = %v, want ErrLocalRunnerRuntimeInvalid", err)
+	}
+	if startCalls != 0 {
+		t.Fatalf("stored pair mismatch started local backend %d times", startCalls)
+	}
+}
+
+func TestProductionLocalRunnerStartLocalExplicitPairRebuildsMissingConfigWithoutCreate(t *testing.T) {
+	for _, testCase := range []struct {
+		name         string
+		mutateUpdate func(*localrunner.RunnerStatusData)
+		wantError    bool
+	}{
+		{name: "success"},
+		{name: "update identity drift", mutateUpdate: func(value *localrunner.RunnerStatusData) { value.EndpointID = "endpoint-other" }, wantError: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			localAgentID := localRunnerOpenCodeDefaultID(workDir)
+			publicOrigin := "https://api.dingtalk.com"
+			publicURL := publicOrigin + "/v1/a2a/local-runners/endpoint-existing/.well-known/agent-card.json"
+			legacyRaw := json.RawMessage(`{"name":"DWS OpenCode","version":"0.9.0","protocolVersion":"0.3.0","description":"legacy","capabilities":{"streaming":true},"skills":[],"url":"http://127.0.0.1:1/rpc"}`)
+			legacySnapshot, err := localrunner.RewriteAgentCard(legacyRaw, "endpoint-existing", publicOrigin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			legacyDigest := localRunnerAgentCardDigest(legacySnapshot.JSON)
+			var desiredSnapshot *localrunner.AgentCardSnapshot
+			var desiredDigest string
+			var started *localRunnerOpenCodeAgent
+			backend := &fakeLocalRunnerOpenCodeBackend{reply: "recovered"}
+			remoteRead := false
+			getCalls := 0
+			createCalls := 0
+			updateCalls := 0
+			controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+				switch request.Method {
+				case http.MethodPost:
+					createCalls++
+					return nil, errors.New("explicit recovery must not create a Runner")
+				case http.MethodPut:
+					updateCalls++
+					if desiredSnapshot == nil || desiredDigest == "" {
+						t.Fatal("Card update ran before the local Card was available")
+					}
+					updated := localrunner.RunnerStatusData{
+						RunnerID: "runner-existing", EndpointID: "endpoint-existing",
+						LocalAgentID: localAgentID, DisplayName: localRunnerOpenCodeDisplayName,
+						Status: localrunner.RunnerStatusActive, AgentCardURL: publicURL,
+						AgentCardSHA256: desiredDigest,
+					}
+					if testCase.mutateUpdate != nil {
+						testCase.mutateUpdate(&updated)
+					}
+					return localRunnerStatusTestResponse(t, request, updated), nil
+				default:
+					getCalls++
+					if getCalls == 1 {
+						if started != nil {
+							t.Fatal("explicit recovery started the local backend before authenticated runner validation")
+						}
+						remoteRead = true
+					}
+					return localRunnerStatusTestResponse(t, request, localrunner.RunnerStatusData{
+						RunnerID: "runner-existing", EndpointID: "endpoint-existing",
+						LocalAgentID: localAgentID, DisplayName: localRunnerOpenCodeDisplayName,
+						Status: localrunner.RunnerStatusActive, AgentCardURL: publicURL,
+						AgentCardSHA256: legacyDigest,
+					}), nil
+				}
+			})
+			publicCardCalls := 0
+			cardClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Scheme == "http" {
+					return http.DefaultClient.Do(request)
+				}
+				publicCardCalls++
+				body := legacySnapshot.JSON
+				if publicCardCalls > 1 {
+					body = desiredSnapshot.JSON
+				}
+				header := make(http.Header)
+				header.Set("Content-Type", "application/json")
+				return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(bytes.NewReader(body)), Request: request}, nil
+			})
+			testseam.Swap(t, &localRunnerLocalAgentStarter, func(_ context.Context, agentRef string, options localRunnerLocalAgentOptions) (*localRunnerOpenCodeAgent, error) {
+				if !remoteRead {
+					t.Fatal("local backend started before the explicit Runner view was validated")
+				}
+				agent, err := startLocalRunnerLocalAgentWithBackend(backend, "127.0.0.1:0", agentRef)
+				if err != nil {
+					return nil, err
+				}
+				started = agent
+				rawCard := readLocalRunnerTestCard(t, agent.CardURL())
+				snapshot, err := localrunner.RewriteAgentCard(rawCard, "endpoint-existing", publicOrigin)
+				if err != nil {
+					return nil, err
+				}
+				desiredSnapshot = snapshot
+				desiredDigest = localRunnerAgentCardDigest(snapshot.JSON)
+				return agent, nil
+			})
+			credentials := localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)})
+			runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+				ConfigDir: t.TempDir(), ControlHTTPClient: controlClient, CardHTTPClient: cardClient,
+				OAuth: staticLocalRunnerOAuth("oauth-token"), Credentials: credentials,
+				OwnerIdentity: testLocalRunnerOwnerIdentity,
+			})
+			result, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
+				AgentRef: localRunnerOpenCodeRef, WorkDir: workDir,
+				RunnerID: "runner-existing", EndpointID: "endpoint-existing",
+				OpenAPIBase: publicOrigin, MaxConcurrent: 2, Streaming: true,
+			})
+			if testCase.wantError {
+				if !errors.Is(err, ErrLocalRunnerRuntimeInvalid) {
+					t.Fatalf("StartLocal() error = %v, want ErrLocalRunnerRuntimeInvalid", err)
+				}
+				if result != nil {
+					t.Fatal("failed explicit recovery returned a result")
+				}
+				if _, loadErr := runtime.configs.Load("runner-existing"); !errors.Is(loadErr, localrunner.ErrRunnerConfigNotFound) {
+					t.Fatalf("failed explicit recovery left config: %v", loadErr)
+				}
+				backend.mu.Lock()
+				closeCalls := backend.closeCalls
+				backend.mu.Unlock()
+				if closeCalls != 1 {
+					t.Fatalf("failed explicit recovery backend close calls = %d, want 1", closeCalls)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer result.Close()
+			if createCalls != 0 || getCalls != 2 || updateCalls != 1 || publicCardCalls != 2 {
+				t.Fatalf("explicit recovery calls = create %d get %d update %d public-card %d", createCalls, getCalls, updateCalls, publicCardCalls)
+			}
+			if result.Summary.AgentCardURL != publicURL || result.Summary.LocalRunner.RunnerID != "runner-existing" || result.Summary.LocalRunner.EndpointID != "endpoint-existing" || result.ConnectOptions.EndpointID != "endpoint-existing" {
+				t.Fatalf("explicit recovery result = summary %#v connect %#v", result.Summary, result.ConnectOptions)
+			}
+			stored, err := runtime.configs.Load("runner-existing")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.EndpointID != "endpoint-existing" || stored.LocalAgentID != localAgentID || stored.AgentKind != localRunnerOpenCodeRef || stored.WorkDir != workDir || stored.AgentCardURL != started.CardURL() || stored.AgentCardSHA256 != desiredDigest {
+				t.Fatalf("rebuilt stored config = %#v", stored)
+			}
+			if _, err := credentials.LoadEndpointBearer(context.Background(), "runner-existing", "endpoint-existing"); !errors.Is(err, localrunner.ErrEndpointBearerNotFound) {
+				t.Fatalf("explicit recovery unexpectedly required endpoint bearer: %v", err)
+			}
+		})
+	}
+}
+
+func TestProductionLocalRunnerStartLocalExplicitPairRejectsRemoteDriftBeforeStart(t *testing.T) {
+	workDir := t.TempDir()
+	wantLocalAgentID := localRunnerOpenCodeDefaultID(workDir)
+	for _, testCase := range []struct {
+		name       string
+		statusCode int
+		mutate     func(*localrunner.RunnerStatusData)
+	}{
+		{name: "missing", statusCode: http.StatusNotFound},
+		{name: "revoked", mutate: func(value *localrunner.RunnerStatusData) { value.Status = localrunner.RunnerStatusRevoked }},
+		{name: "runner mismatch", mutate: func(value *localrunner.RunnerStatusData) { value.RunnerID = "runner-other" }},
+		{name: "endpoint mismatch", mutate: func(value *localrunner.RunnerStatusData) { value.EndpointID = "endpoint-other" }},
+		{name: "local agent mismatch", mutate: func(value *localrunner.RunnerStatusData) { value.LocalAgentID = "agent-other" }},
+		{name: "display name mismatch", mutate: func(value *localrunner.RunnerStatusData) { value.DisplayName = "Other agent" }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			startCalls := 0
+			testseam.Swap(t, &localRunnerLocalAgentStarter, func(context.Context, string, localRunnerLocalAgentOptions) (*localRunnerOpenCodeAgent, error) {
+				startCalls++
+				return nil, errors.New("must not start")
+			})
+			createCalls := 0
+			controlClient := localRunnerHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+				if request.Method == http.MethodPost {
+					createCalls++
+					return nil, errors.New("must not create")
+				}
+				if testCase.statusCode == http.StatusNotFound {
+					return &http.Response{StatusCode: http.StatusNotFound, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":{"code":"localRunnerNotFound","message":"not found"}}`)), Request: request}, nil
+				}
+				view := localrunner.RunnerStatusData{
+					RunnerID: "runner-existing", EndpointID: "endpoint-existing",
+					LocalAgentID: wantLocalAgentID, DisplayName: localRunnerOpenCodeDisplayName,
+					Status: localrunner.RunnerStatusActive,
+					AgentCardURL: "https://api.dingtalk.com/v1/a2a/local-runners/endpoint-existing/.well-known/agent-card.json",
+					AgentCardSHA256: "sha256:" + strings.Repeat("a", 64),
+				}
+				if testCase.mutate != nil {
+					testCase.mutate(&view)
+				}
+				return localRunnerStatusTestResponse(t, request, view), nil
+			})
+			runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
+				ConfigDir: t.TempDir(), ControlHTTPClient: controlClient,
+				OAuth: staticLocalRunnerOAuth("oauth-token"),
+				Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
+				OwnerIdentity: testLocalRunnerOwnerIdentity,
+			})
+			result, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
+				AgentRef: localRunnerOpenCodeRef, WorkDir: workDir,
+				RunnerID: "runner-existing", EndpointID: "endpoint-existing",
+				OpenAPIBase: "https://api.dingtalk.com", MaxConcurrent: 1, Streaming: true,
+			})
+			if err == nil || result != nil {
+				t.Fatalf("explicit remote drift result=%#v error=%v", result, err)
+			}
+			if startCalls != 0 || createCalls != 0 {
+				t.Fatalf("remote drift calls = start %d create %d, want 0/0", startCalls, createCalls)
+			}
+			if _, loadErr := runtime.configs.Load("runner-existing"); !errors.Is(loadErr, localrunner.ErrRunnerConfigNotFound) {
+				t.Fatalf("remote drift left local config: %v", loadErr)
+			}
+		})
 	}
 }
 

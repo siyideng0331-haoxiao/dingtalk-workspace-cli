@@ -1070,6 +1070,60 @@ File responsibilities and execution steps:
   generated drift, independent build, and `git diff --check` without a
   formatter.
 
+### 10.13 Explicit Runner and Endpoint disaster recovery
+
+`deap runtime start-local` keeps implicit recovery as the normal path and adds
+one optional, paired disaster-recovery selector:
+
+```text
+dws deap runtime start-local --harness <name> --work-dir <project> \
+  --runner-id <lr_...> --endpoint-id <lre_...>
+```
+
+Neither ID is required for an ordinary restart. When both are absent, the
+existing stable `localAgentId` lookup reopens the stored loopback origin and
+keeps the public Agent Card URL. Supplying exactly one ID fails in the command
+before the runtime provider. Supplying both selects one existing one-to-one
+binding and must never fall back to `CreateRunner`; `runnerId` remains the
+OpenAPI resource key while `endpointId` is an independently verified echo.
+
+The explicit path resolves the current OpenAPI base through the same config
+file policy and calls authenticated `GetRunner(runnerId)` before starting a
+local backend. The response must echo both IDs, be `ACTIVE`, and match the
+derived or explicitly supplied `localAgentId` and `displayName`. A local config
+loaded by runner ID or local-agent ID must identify that same pair, harness,
+absolute work directory, identity, and OpenAPI base before its stored origin is
+reused. Any mismatch fails closed without starting or creating anything.
+
+When the pair is valid but local config is absent, the runtime starts the same
+shared harness backend on a new loopback origin, reads the bounded local Card,
+and constructs an unpersisted `StoredRunnerConfig` from the verified server
+view and local target. Card reconciliation reuses the existing HTTPS public
+Card fetch, raw server digest concurrency guard, semantic JSON comparison,
+`UpdateAgentCard`, identity/status/URL echo checks, and post-update public Card
+verification. The server-selected public `agentCardUrl` remains unchanged and
+continues to be determined by the existing endpoint. Only the final verified
+server digest is atomically saved; no endpoint bearer is loaded, created,
+printed, or required.
+
+File responsibilities and TDD steps:
+
+- [x] Extend `internal/app/localrunner_command_test.go` first for paired flag
+  rejection, exact option forwarding, Help, Schema parameter
+  `required_when`, sanitized summary, and implicit-restart explanation.
+- [x] Extend `internal/app/localrunner_runtime_test.go` first for matching
+  stored-pair reuse, pair/config drift rejection, config-loss recovery without
+  POST create, unchanged public URL/endpoint, remote missing/revoked/identity
+  drift, update-response drift, cleanup, and unchanged implicit recovery.
+- [x] Add only `RunnerID` and `EndpointID` to the in-memory start options and
+  command declaration; do not add a restart alias or persistent secret.
+- [x] Split Card reconciliation from persistence so stored recovery preserves
+  its current behavior while config-loss recovery performs exactly one final
+  atomic save after all remote and public-Card checks pass.
+- [x] Run focused RED/GREEN, LocalRunner race and related package regressions,
+  Schema Catalog, generated drift, module verification, independent build,
+  and Git diff checks without running a formatter or a real Runner.
+
 ## 11. Protocol and Plan Change History
 
 | Date | Change | Reason |
@@ -1113,3 +1167,4 @@ File responsibilities and execution steps:
 | 2026-08-21 | Projected the official compat producer's LocalRunner Card to a pure A2A v0.3 shape by omitting v1-only `supportedInterfaces` and `securityRequirements`, while accepting every trimmed nonblank input `protocolVersion` as an opaque value in Card rewrite and `add-sub-agent`. | Pre-release Skill Center accepts the older pure v0.3 Card but rejects a `protocolVersion="0.3.0"` Card mixed with v1 interface fields; LocalRunner must truthfully advertise its current a2av0 handler without constraining future external Card versions or pretending that it serves A2A 1.0. |
 | 2026-08-21 | Replaced the `start-local <agent-ref>` positional and `--workdir` flag with the required `--harness opencode` and `--work-dir <dir>` contract, with no compatibility alias or positional fallback. | The user selected one extensible harness-oriented command shape; keeping both spellings or the old positional would create competing Help/Schema contracts, while the internal `AgentRef`, `WorkDir`, and persisted `workDir` fields can remain stable without changing runtime or wire semantics. |
 | 2026-08-21 | Replaced the command-local `opencode` harness check and one-value Schema enum with `helpers.LocalRunnerAgentChannels()` / `IsLocalRunnerAgentChannel()`, exposing all eight shared local backends and adding an in-memory `--agent-cmd` path for `custom`. | LocalRunner and `dev connect` must share one runnable backend registry; `auto`, external connectors, and remote Gemini are not local harnesses, while custom must be executable without copying launcher/session logic or persisting, logging, or exporting its command. |
+| 2026-08-21 | Added paired optional `start-local --runner-id/--endpoint-id` disaster recovery while preserving create-or-implicit-recover as the normal path and keeping the existing public Agent Card URL. | A lost or migrated local config cannot be found by `localAgentId`; the explicit one-to-one pair lets the authenticated owner reconstruct only local non-secret state after strict remote identity/Card validation, without creating a duplicate Runner, requiring an endpoint bearer, or adding a second restart command surface. |
