@@ -294,6 +294,19 @@ dws --profile <corpId:userId> contact user search --query "..." # use one exact 
 
 Selectors support `corpId:userId`, `corpId:userName`, `corpName:userId`, and `corpName:userName`. Friendly names are input aliases only; use the stable `profile` value returned by `profile list` for automation. Duplicate organization or account names fail with explicit `corpId:userId` candidates. If an organization has multiple accounts but no recorded current account, `--profile <corpId>` fails instead of choosing the first or most recently used account.
 
+Long-running Agents can bind themselves and every inherited child `dws`
+process to one exact identity with `DWS_PROFILE`:
+
+```bash
+DWS_PROFILE=<corpId:userId> opencode
+DWS_PROFILE=<corpId:userId> codex
+```
+
+The selection precedence is explicit `--profile`, then `DWS_PROFILE`, then the
+active config directory's `currentProfile`. The environment override is
+process-scoped and does not change the persisted current profile. Use the
+stable `corpId:userId` selector for Agent identity binding.
+
 `currentProfile`, `previousProfile`, and per-organization defaults are stored as exact identities. `primaryProfile` remains in JSON only for compatibility and is not used for selection. `profile list` reads status and expiry from each real identity Token without refreshing it. `auth logout --profile <corpId>` removes all local accounts in that organization; an exact selector or local profile name removes one account.
 
 Cross-org reads are orchestrated by the agent rather than a built-in `--all-orgs`: list profiles, group by `corpId`, and use the unique `isOrgCurrent=true` account for each organization. If a multi-account organization has no default, ask the user to choose an account first. Writes default to the current account — confirm both organization and account before cross-org writes.

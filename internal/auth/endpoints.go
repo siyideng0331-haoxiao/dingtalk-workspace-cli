@@ -40,6 +40,13 @@ func init() {
 		Sensitive:    true,
 	})
 	configmeta.Register(configmeta.ConfigItem{
+		Name:         EnvProfile,
+		Category:     configmeta.CategoryAuth,
+		Description:  "绑定当前进程及其子进程使用的默认 profile；显式 --profile 优先",
+		DefaultValue: "当前配置目录的 currentProfile",
+		Example:      "corpId:userId",
+	})
+	configmeta.Register(configmeta.ConfigItem{
 		Name:        "DWS_CHANNEL",
 		Category:    configmeta.CategoryExternal,
 		Description: "第三方渠道编码 (channelCode)，如 Qoderwork",

@@ -1,9 +1,12 @@
 package app
 
 import (
+	"io"
 	"os"
 	"reflect"
 	"testing"
+
+	authpkg "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/auth"
 )
 
 func TestNormalizeProfileFlagArgsAcceptsUnquotedCommaContinuation(t *testing.T) {
@@ -78,5 +81,59 @@ func TestNormalizeProcessProfileArgsRestoresOriginalArgv(t *testing.T) {
 	restore()
 	if want := []string{"dws", "--profile", "corpA,", "corpB", "contact", "user", "get-self"}; !reflect.DeepEqual(os.Args, want) {
 		t.Fatalf("os.Args after restore = %#v, want %#v", os.Args, want)
+	}
+}
+
+func TestRootUsesDWSProfileEnvironmentWhenFlagIsAbsent(t *testing.T) {
+	oldArgs := os.Args
+	t.Cleanup(func() {
+		os.Args = oldArgs
+		authpkg.SetRuntimeProfile("")
+	})
+	t.Setenv("DWS_CONFIG_DIR", t.TempDir())
+	t.Setenv(authpkg.EnvProfile, "  corp_env:user_env  ")
+	authpkg.SetRuntimeProfile("")
+	os.Args = []string{"dws", "version"}
+
+	root := NewRootCommand()
+	if got := authpkg.RuntimeProfile(); got != "corp_env:user_env" {
+		t.Fatalf("runtime profile after root construction = %q, want environment selector", got)
+	}
+
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	root.SetArgs([]string{"version"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got := authpkg.RuntimeProfile(); got != "corp_env:user_env" {
+		t.Fatalf("runtime profile after command execution = %q, want environment selector", got)
+	}
+}
+
+func TestRootProfileFlagOverridesDWSProfileEnvironment(t *testing.T) {
+	oldArgs := os.Args
+	t.Cleanup(func() {
+		os.Args = oldArgs
+		authpkg.SetRuntimeProfile("")
+	})
+	t.Setenv("DWS_CONFIG_DIR", t.TempDir())
+	t.Setenv(authpkg.EnvProfile, "corp_env:user_env")
+	authpkg.SetRuntimeProfile("")
+	os.Args = []string{"dws", "--profile", "corp_flag:user_flag", "version"}
+
+	root := NewRootCommand()
+	if got := authpkg.RuntimeProfile(); got != "corp_flag:user_flag" {
+		t.Fatalf("runtime profile after root construction = %q, want explicit flag selector", got)
+	}
+
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	root.SetArgs([]string{"--profile", "corp_flag:user_flag", "version"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got := authpkg.RuntimeProfile(); got != "corp_flag:user_flag" {
+		t.Fatalf("runtime profile after command execution = %q, want explicit flag selector", got)
 	}
 }

@@ -103,6 +103,7 @@ JSON 模式下，失败写到 stderr，稳定外层结构为：
 | 变量 | 用途 |
 |---|---|
 | `DWS_CONFIG_DIR` | 覆盖默认 `~/.dws` 配置目录 |
+| `DWS_PROFILE` | 为当前 Agent 进程及继承环境的 `dws` 子进程指定默认身份；使用 `profile list` 返回的稳定 `corpId:userId`。显式 `--profile` 优先，未设置时回退到当前配置目录的 `currentProfile` |
 | `DWS_CLIENT_ID` + `DWS_CLIENT_SECRET` | 成对覆盖 OAuth 应用凭据；只设置一个时不会作为完整凭据对使用 |
 | `DWS_CHANNEL` | 受控分发渠道；仅在明确渠道任务中按 [channel-login.md](channel-login.md) 使用 |
 
