@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/helpers"
+	dwslogging "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/logging"
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2acompat/a2av0"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
@@ -103,12 +104,12 @@ func (e *localRunnerA2AExecutor) Execute(ctx context.Context, execCtx *a2asrv.Ex
 		}
 		reply, err := e.backend.Prompt(ctx, contextID, prompt)
 		if err != nil {
-			localRunnerLogBackendFailure(ctx, e.harness, "prompt", err)
+			localRunnerLogBackendFailure(ctx, e.harness, "prompt", prompt, contextID, err)
 			yield(nil, localRunnerA2ASafeError(err))
 			return
 		}
 		if strings.TrimSpace(reply) == "" {
-			localRunnerLogBackendFailure(ctx, e.harness, "prompt", errors.New("empty backend reply"))
+			localRunnerLogBackendFailure(ctx, e.harness, "prompt", prompt, contextID, errors.New("empty backend reply"))
 			yield(nil, a2a.NewError(a2a.ErrServerError, "Local agent request failed"))
 			return
 		}
@@ -139,20 +140,78 @@ func localRunnerA2ASafeError(err error) error {
 	}
 }
 
-func localRunnerLogBackendFailure(ctx context.Context, harness, phase string, err error) {
+func localRunnerLogBackendFailure(ctx context.Context, harness, phase, prompt, contextID string, err error) {
 	if err == nil {
 		return
 	}
 	category, reason := localRunnerBackendFailureReason(err)
+	detail := dwslogging.SanitizeFreeText(err.Error(), []string{prompt, contextID}, 240)
+	if detail == "" {
+		detail = reason
+	}
 	digest := sha256.Sum256([]byte(err.Error()))
 	slog.DebugContext(ctx, "localrunner.backend.failure",
 		"harness", strings.ToLower(strings.TrimSpace(harness)),
 		"phase", phase,
 		"category", category,
 		"reason", reason,
+		"detail", detail,
 		"error_type", fmt.Sprintf("%T", err),
 		"fingerprint", fmt.Sprintf("sha256:%x", digest[:8]),
 	)
+}
+
+type localRunnerA2ASafeLogHandler struct {
+	inner slog.Handler
+}
+
+func (h localRunnerA2ASafeLogHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.inner != nil && h.inner.Enabled(ctx, level)
+}
+
+func (h localRunnerA2ASafeLogHandler) Handle(ctx context.Context, record slog.Record) error {
+	if h.inner == nil {
+		return nil
+	}
+	redacted := slog.NewRecord(record.Time, record.Level, record.Message, record.PC)
+	record.Attrs(func(attr slog.Attr) bool {
+		redacted.AddAttrs(localRunnerA2ASafeLogAttr(attr))
+		return true
+	})
+	return h.inner.Handle(ctx, redacted)
+}
+
+func (h localRunnerA2ASafeLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	redacted := make([]slog.Attr, len(attrs))
+	for index := range attrs {
+		redacted[index] = localRunnerA2ASafeLogAttr(attrs[index])
+	}
+	return localRunnerA2ASafeLogHandler{inner: h.inner.WithAttrs(redacted)}
+}
+
+func (h localRunnerA2ASafeLogHandler) WithGroup(name string) slog.Handler {
+	return localRunnerA2ASafeLogHandler{inner: h.inner.WithGroup(name)}
+}
+
+func localRunnerA2ASafeLogAttr(attr slog.Attr) slog.Attr {
+	value := attr.Value.Resolve()
+	if localRunnerA2ASensitiveLogKey(attr.Key) {
+		return slog.String(attr.Key, "[redacted]")
+	}
+	if value.Kind() != slog.KindGroup {
+		return attr
+	}
+	group := value.Group()
+	redacted := make([]slog.Attr, len(group))
+	for index := range group {
+		redacted[index] = localRunnerA2ASafeLogAttr(group[index])
+	}
+	return slog.Attr{Key: attr.Key, Value: slog.GroupValue(redacted...)}
+}
+
+func localRunnerA2ASensitiveLogKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	return dwslogging.IsSensitiveKey(key) || strings.Contains(key, "context") || strings.Contains(key, "session") || strings.Contains(key, "prompt")
 }
 
 func localRunnerBackendFailureReason(err error) (string, string) {
@@ -260,7 +319,8 @@ func startLocalRunnerLocalAgentWithBackend(backend localRunnerOpenCodeBackend, l
 	}
 	cardProducer := localRunnerCompatCardProducer{AgentCardProducer: a2av0.NewStaticAgentCardProducer(card)}
 	executor := &localRunnerA2AExecutor{backend: backend, defaultContext: "localrunner-agent-" + uuid.NewString(), harness: agentRef}
-	rpcHandler := a2av0.NewJSONRPCHandler(a2asrv.NewHandler(executor))
+	a2aLogger := slog.New(localRunnerA2ASafeLogHandler{inner: slog.Default().Handler()})
+	rpcHandler := a2av0.NewJSONRPCHandler(a2asrv.NewHandler(executor, a2asrv.WithLogger(a2aLogger)))
 	cardHandler := a2asrv.NewAgentCardHandler(cardProducer)
 
 	agent := &localRunnerOpenCodeAgent{

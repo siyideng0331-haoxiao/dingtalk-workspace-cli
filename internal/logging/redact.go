@@ -19,8 +19,19 @@ import (
 	"log/slog"
 	"net/http"
 	"reflect"
+	"regexp"
+	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
+)
+
+var (
+	freeTextBearerPattern = regexp.MustCompile(`(?i)\bbearer[[:space:]]+[A-Za-z0-9._~+/=-]+`)
+	freeTextSensitivePairPattern = regexp.MustCompile(`(?i)["']?(password|passwd|pwd|token|secret|credential|api[_-]?key|authorization|context([_-]?id)?|session([_-]?id)?|prompt)["']?[[:space:]]*[:=][[:space:]]*("[^"\r\n]*"|'[^'\r\n]*'|[^[:space:],;&]+)`)
+	freeTextSensitiveFlagPattern = regexp.MustCompile(`(?i)--(password|passwd|pwd|token|secret|credential|api[_-]?key|authorization|context([_-]?id)?|session([_-]?id)?|prompt)[[:space:]]+("[^"\r\n]*"|'[^'\r\n]*'|[^[:space:],;&]+)`)
+	freeTextUUIDPattern = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+	freeTextSensitiveMarkerPattern = regexp.MustCompile(`(?i)\b(password|passwd|pwd|token|secret|credential|authorization|bearer|context|session|prompt)\b|api[_-]?key`)
 )
 
 // sensitiveKeys are header/field names whose values must be redacted in logs.
@@ -106,6 +117,47 @@ func SanitizeArguments(args map[string]any, maxBytes int) string {
 		return "{}"
 	}
 	return TruncateBody(data, maxBytes)
+}
+
+// SanitizeFreeText keeps a bounded diagnostic summary while removing values
+// that must not enter logs. exactSecrets is intended for request-scoped values
+// such as the current prompt and A2A context ID. If a sensitive marker remains
+// after sanitization, the function fails closed with an empty result.
+func SanitizeFreeText(text string, exactSecrets []string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	sanitized := text
+	secrets := append([]string(nil), exactSecrets...)
+	sort.SliceStable(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
+	for _, secret := range secrets {
+		secret = strings.TrimSpace(secret)
+		if secret != "" {
+			sanitized = strings.ReplaceAll(sanitized, secret, "[redacted]")
+		}
+	}
+	sanitized = freeTextBearerPattern.ReplaceAllString(sanitized, "[redacted]")
+	sanitized = freeTextSensitivePairPattern.ReplaceAllString(sanitized, "[redacted]")
+	sanitized = freeTextSensitiveFlagPattern.ReplaceAllString(sanitized, "[redacted]")
+	sanitized = freeTextUUIDPattern.ReplaceAllString(sanitized, "[redacted]")
+	sanitized = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, sanitized)
+	sanitized = strings.Join(strings.Fields(sanitized), " ")
+	if sanitized == "" || freeTextSensitiveMarkerPattern.MatchString(sanitized) {
+		return ""
+	}
+	runes := []rune(sanitized)
+	if len(runes) > maxRunes {
+		if maxRunes == 1 {
+			return "…"
+		}
+		sanitized = string(runes[:maxRunes-1]) + "…"
+	}
+	return sanitized
 }
 
 // redactMapValues replaces values of sensitive keys with "***" in-place.
