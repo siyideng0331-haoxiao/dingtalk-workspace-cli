@@ -494,7 +494,9 @@ func newRootCommandWithEngine(rootCtx context.Context, engine *pipeline.Engine, 
 	} else {
 		publicCommands = newLegacyPublicCommands(runner, patCaller, loadRuntimeExtensions)
 	}
-	root.AddCommand(mergeTopLevelCommands(append(publicCommands, localRunnerDEAP))...)
+	mergedPublicCommands := mergeTopLevelCommands(append(publicCommands, localRunnerDEAP))
+	mergedPublicCommands = mountDigitalEmployeeDWSLogin(mergedPublicCommands)
+	root.AddCommand(mergedPublicCommands...)
 
 	// PAT authorization commands (open-source core)
 	pat.RegisterCommands(root, patCaller)

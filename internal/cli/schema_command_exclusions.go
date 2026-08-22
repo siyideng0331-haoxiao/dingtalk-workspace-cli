@@ -33,6 +33,7 @@ var reviewedRuntimeSchemaExclusionGroups = []runtimeSchemaExclusionGroup{
 			"auth status",
 			"completion",
 			"config list",
+			"deap manage login-dws",
 			"dev connect list",
 			"dev connect restart",
 			"doctor",

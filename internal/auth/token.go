@@ -158,6 +158,12 @@ func planTokenPersistenceWrites(
 	}
 	plan.MakeCurrent = plan.PersistenceSelector == ""
 	plan.ExactSelector = profileSelector(plan.CorpID, plan.UserID)
+	explicitExactProfile := plan.UserID != "" && plan.RuntimeSelector == plan.ExactSelector
+	// An exact runtime selector is an isolation boundary. Publishing or
+	// refreshing that identity must update only its exact credential slot and
+	// config-local profile metadata; the machine-global and organization
+	// compatibility mirrors may belong to another account in the same corp.
+	plan.WriteGlobal = !explicitExactProfile
 	plan.ExistingIdentity = profileIndexByIdentity(cfg, plan.CorpID, plan.UserID) >= 0
 	plan.UpgradesLegacyProfile = !plan.ExistingIdentity &&
 		plan.UserID != "" &&
@@ -176,15 +182,16 @@ func planTokenPersistenceWrites(
 	// reauthorization. Its organization slot must move with the newly exact
 	// identity even when an explicit runtime selector keeps it from becoming
 	// process-global current.
-	plan.WriteOrganization = plan.UserID == "" ||
-		plan.UpgradesLegacyProfile ||
-		(!plan.PreserveUnresolvedOrganization &&
-			(plan.MakeCurrent ||
-				exactProfileSelectorForCorp(
-					cfg,
-					plan.CorpID,
-					orgCurrentSelector,
-				) == plan.ExactSelector))
+	plan.WriteOrganization = !explicitExactProfile &&
+		(plan.UserID == "" ||
+			plan.UpgradesLegacyProfile ||
+			(!plan.PreserveUnresolvedOrganization &&
+				(plan.MakeCurrent ||
+					exactProfileSelectorForCorp(
+						cfg,
+						plan.CorpID,
+						orgCurrentSelector,
+					) == plan.ExactSelector)))
 
 	return plan
 }

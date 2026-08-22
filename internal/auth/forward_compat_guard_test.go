@@ -220,6 +220,7 @@ func TestTokenPersistenceWritePlanKeepsOrganizationOwnershipIsolated(t *testing.
 		runtimeSelector  string
 		wantUpgrade      bool
 		wantOrganization bool
+		wantGlobal       bool
 		wantMakeCurrent  bool
 	}{
 		{
@@ -232,6 +233,7 @@ func TestTokenPersistenceWritePlanKeepsOrganizationOwnershipIsolated(t *testing.
 			runtimeSelector:  corpID,
 			wantUpgrade:      true,
 			wantOrganization: true,
+			wantGlobal:       true,
 		},
 		{
 			name: "coexisting exact identity cannot overwrite unresolved owner",
@@ -245,6 +247,7 @@ func TestTokenPersistenceWritePlanKeepsOrganizationOwnershipIsolated(t *testing.
 			data:             &TokenData{CorpID: corpID, UserID: coexistingID},
 			runtimeSelector:  profileSelector(corpID, coexistingID),
 			wantOrganization: false,
+			wantGlobal:       false,
 		},
 		{
 			name: "default exact login without unresolved owner updates organization",
@@ -254,6 +257,7 @@ func TestTokenPersistenceWritePlanKeepsOrganizationOwnershipIsolated(t *testing.
 			},
 			data:             &TokenData{CorpID: corpID, UserID: resolvedUID},
 			wantOrganization: true,
+			wantGlobal:       true,
 			wantMakeCurrent:  true,
 		},
 	}
@@ -261,8 +265,11 @@ func TestTokenPersistenceWritePlanKeepsOrganizationOwnershipIsolated(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			plan := planTokenPersistenceWrites(tt.cfg, tt.data, tt.runtimeSelector)
-			if !plan.WriteIdentity || !plan.WriteGlobal {
-				t.Fatalf("write plan = %#v, want identity and global slots included", plan)
+			if !plan.WriteIdentity {
+				t.Fatalf("write plan = %#v, want identity slot included", plan)
+			}
+			if plan.WriteGlobal != tt.wantGlobal {
+				t.Fatalf("WriteGlobal = %v, want %v", plan.WriteGlobal, tt.wantGlobal)
 			}
 			if plan.UpgradesLegacyProfile != tt.wantUpgrade {
 				t.Fatalf("UpgradesLegacyProfile = %v, want %v", plan.UpgradesLegacyProfile, tt.wantUpgrade)

@@ -360,6 +360,8 @@ func defaultPerfReportPath() string {
 
 // sensitiveFlags are flag names whose values should be masked in commands.
 var sensitiveFlags = map[string]bool{
+	"--auth-code":     true,
+	"--code":          true,
 	"--token":         true,
 	"--client-secret": true,
 	"--client-id":     true,

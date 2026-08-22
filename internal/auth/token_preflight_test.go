@@ -152,7 +152,7 @@ func TestPreflightTokenPersistenceRejectsUnreadableProfileSlot(t *testing.T) {
 	}
 }
 
-func TestExactOrgCurrentRefreshRejectsUnreadableOrgMirror(t *testing.T) {
+func TestExactOrgCurrentRefreshIgnoresUnreadableOrgMirror(t *testing.T) {
 	cleanupKeychain(t)
 	t.Setenv(keychain.DisableKeychainEnv, "1")
 	configDir := t.TempDir()
@@ -167,9 +167,8 @@ func TestExactOrgCurrentRefreshRejectsUnreadableOrgMirror(t *testing.T) {
 
 	SetRuntimeProfile("corp_exact:user_exact")
 	defer SetRuntimeProfile("")
-	if err := preflightTokenRefreshPersistence(configDir, data); err == nil ||
-		!strings.Contains(err.Error(), "profile token slot") {
-		t.Fatalf("preflightTokenRefreshPersistence(exact current) error = %v, want unreadable org mirror", err)
+	if err := preflightTokenRefreshPersistence(configDir, data); err != nil {
+		t.Fatalf("preflightTokenRefreshPersistence(exact current) error = %v, want isolated exact slot", err)
 	}
 }
 

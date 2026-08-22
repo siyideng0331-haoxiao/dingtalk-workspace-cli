@@ -809,6 +809,39 @@ func (p *OAuthProvider) ExchangeAuthCode(ctx context.Context, authCode, uid stri
 	return tokenData, nil
 }
 
+// ExchangeAuthCodeForIdentity exchanges an externally issued authorization
+// code for one trusted exact identity. The returned identity is validated
+// before any credential slot is mutated.
+func (p *OAuthProvider) ExchangeAuthCodeForIdentity(
+	ctx context.Context,
+	authCode, corpID, uid string,
+) (*TokenData, error) {
+	expectedCorpID := strings.TrimSpace(corpID)
+	expectedUID := strings.TrimSpace(uid)
+	if expectedCorpID == "" || expectedUID == "" {
+		return nil, fmt.Errorf("expected corpId and userId are required")
+	}
+	if err := prepareLoginPersistence(p.configDir); err != nil {
+		return nil, fmt.Errorf("%s: %w", i18n.T("本地登录态无法安全更新"), err)
+	}
+	tokenData, err := oauthExchange(p, ctx, authCode)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", i18n.T("换取 token 失败"), err)
+	}
+	actualCorpID := strings.TrimSpace(tokenData.CorpID)
+	actualUID := strings.TrimSpace(tokenData.UserID)
+	if actualCorpID != expectedCorpID || (actualUID != "" && actualUID != expectedUID) {
+		return nil, fmt.Errorf("exchanged DWS identity does not match the expected digital employee")
+	}
+	tokenData.CorpID = expectedCorpID
+	tokenData.UserID = expectedUID
+	tokenData.FreshAuthorization = true
+	if err := p.persistKnownLoginToken(tokenData); err != nil {
+		return nil, fmt.Errorf("%s: %w", i18n.T("保存 token 失败"), err)
+	}
+	return tokenData, nil
+}
+
 func (p *OAuthProvider) persistLoginToken(ctx context.Context, tokenData *TokenData) error {
 	corpID, userID, userName := "", "", ""
 	if tokenData != nil {

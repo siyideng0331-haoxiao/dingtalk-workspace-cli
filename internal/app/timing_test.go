@@ -383,6 +383,16 @@ func TestSanitizeCommand(t *testing.T) {
 			want: "dws --token=*** version",
 		},
 		{
+			name: "auth code with space-separated value",
+			args: []string{"dws", "deap", "manage", "login-dws", "--auth-code", "one-time-secret"},
+			want: "dws deap manage login-dws --auth-code ***",
+		},
+		{
+			name: "legacy exchange code with equals sign",
+			args: []string{"dws", "auth", "exchange", "--code=one-time-secret"},
+			want: "dws auth exchange --code=***",
+		},
+		{
 			name: "client-secret space-separated",
 			args: []string{"dws", "--client-secret", "mysecret", "--client-id", "myid", "auth"},
 			want: "dws --client-secret *** --client-id *** auth",
