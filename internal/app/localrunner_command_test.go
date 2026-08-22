@@ -41,6 +41,11 @@ func TestLocalRunnerCommandSkeletonDelegatesWithoutSecretOutput(t *testing.T) {
 			want: "revoke",
 		},
 		{
+			name: "remove-local",
+			args: []string{"--yes", "deap", "runtime", "remove-local", "--runner-id", "runner-1"},
+			want: "revoke",
+		},
+		{
 			name: "connect",
 			args: []string{"deap", "runtime", "connect", "--runner-id", "runner-1", "--endpoint-id", "endpoint-1", "--target-url", "http://127.0.0.1:8080/rpc", "--agent-card-sha256", "abc123"},
 			want: "connect",
@@ -68,11 +73,34 @@ func TestLocalRunnerCommandSkeletonDelegatesWithoutSecretOutput(t *testing.T) {
 
 func TestLocalRunnerCommandsAreConsolidatedUnderRuntimeWithoutOpenAPIBaseFlag(t *testing.T) {
 	root := NewRootCommand()
-	for _, leaf := range []string{"expose", "status", "revoke", "connect", "start-local"} {
+	for _, leaf := range []string{"expose", "status", "remove-local", "revoke", "connect", "start-local"} {
 		path := []string{"deap", "runtime", leaf}
 		command, remaining, err := root.Find(path)
-		if err != nil || command == nil || len(remaining) != 0 || command.CommandPath() != "dws "+strings.Join(path, " ") {
+		if err != nil || command == nil || len(remaining) != 0 {
 			t.Fatalf("command %v resolution = command=%v remaining=%v error=%v", path, command, remaining, err)
+		}
+	}
+	var helpOutput bytes.Buffer
+	helpRoot := NewRootCommand()
+	helpRoot.SetOut(&helpOutput)
+	helpRoot.SetErr(&helpOutput)
+	helpRoot.SetArgs([]string{"deap", "runtime", "--help"})
+	if err := helpRoot.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	availableParts := strings.SplitN(helpOutput.String(), "Available Commands:", 2)
+	if len(availableParts) != 2 {
+		t.Fatalf("runtime help missing available commands section:\n%s", helpOutput.String())
+	}
+	available := strings.SplitN(availableParts[1], "\n\nFlags:", 2)[0]
+	for _, public := range []string{"remove-local", "start-local", "status"} {
+		if !strings.Contains(available, "\n  "+public) {
+			t.Fatalf("runtime help missing public command %q:\n%s", public, helpOutput.String())
+		}
+	}
+	for _, hidden := range []string{"connect", "expose", "revoke"} {
+		if strings.Contains(available, "\n  "+hidden) {
+			t.Fatalf("runtime help publishes compatibility command %q:\n%s", hidden, helpOutput.String())
 		}
 	}
 	if command, remaining, err := root.Find([]string{"deap", "local-runner"}); err == nil && command != nil && len(remaining) == 0 && command.CommandPath() == "dws deap local-runner" {
@@ -86,6 +114,39 @@ func TestLocalRunnerCommandsAreConsolidatedUnderRuntimeWithoutOpenAPIBaseFlag(t 
 		if command.Flags().Lookup("openapi-base") != nil {
 			t.Fatalf("deap runtime %s still publishes --openapi-base", leaf)
 		}
+	}
+}
+
+func TestLocalRunnerRemoveLocalKeepsRevokeSchemaAlias(t *testing.T) {
+	for _, test := range []struct {
+		path    string
+		isAlias bool
+	}{
+		{path: "deap runtime remove-local"},
+		{path: "deap runtime revoke", isAlias: true},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			var schemaOutput bytes.Buffer
+			root := NewRootCommand()
+			root.SetOut(&schemaOutput)
+			root.SetErr(&schemaOutput)
+			root.SetArgs([]string{"schema", "--cli-path", test.path, "-f", "json"})
+			if err := root.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			var schema struct {
+				CanonicalPath  string `json:"canonical_path"`
+				CLIPath        string `json:"cli_path"`
+				PrimaryCLIPath string `json:"primary_cli_path"`
+				IsAlias        bool   `json:"is_alias"`
+			}
+			if err := json.Unmarshal(schemaOutput.Bytes(), &schema); err != nil {
+				t.Fatal(err)
+			}
+			if schema.CanonicalPath != "deap.runtime_revoke" || schema.CLIPath != test.path || schema.PrimaryCLIPath != "deap runtime remove-local" || schema.IsAlias != test.isAlias {
+				t.Fatalf("remove-local Schema for %q = %#v", test.path, schema)
+			}
+		})
 	}
 }
 
@@ -199,7 +260,6 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 		"deap runtime start-local",
 		"deap runtime expose",
 		"deap runtime status",
-		"deap runtime revoke",
 		"deap runtime connect",
 	} {
 		command, remaining, err := root.Find(strings.Fields(path))
@@ -207,7 +267,6 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 			t.Fatalf("command %q resolution = %#v remaining=%v err=%v", path, command, remaining, err)
 		}
 	}
-
 	for _, args := range [][]string{
 		{"deap", "runtime", "start-local"},
 		{"deap", "runtime", "start-local", "opencode", "--work-dir", t.TempDir()},
@@ -236,26 +295,21 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 		"--work-dir",
 		"opencode",
 		"--model",
-		"--local-agent-id",
-		"--display-name",
-		"--max-concurrent",
-		"--streaming",
-		"--memory",
-		"--yolo",
-		"--agent-timeout",
 		"--agent-cmd",
+		"仅 custom harness 使用",
 		"--runner-id",
+		"仅用于本地配置丢失或迁移时的灾难恢复",
 	} {
 		if !strings.Contains(helpOutput.String(), want) {
 			t.Fatalf("start-local help missing %q:\n%s", want, helpOutput.String())
 		}
 	}
-	for _, want := range []string{"日常重启可直接重跑原命令", "灾难恢复", "localAgentId", "endpointId"} {
+	for _, want := range []string{"日常重启可直接重跑原命令", "恢复", "WSS", "HTTP/SSE"} {
 		if !strings.Contains(helpOutput.String(), want) {
 			t.Fatalf("start-local help missing recovery guidance %q:\n%s", want, helpOutput.String())
 		}
 	}
-	for _, removed := range []string{"<agent-ref>", "--workdir", "--endpoint-id", "test-echo", "loopback Agent Card URL"} {
+	for _, removed := range []string{"<agent-ref>", "--workdir", "--endpoint-id", "test-echo", "loopback Agent Card URL", "--local-agent-id", "--display-name", "--max-concurrent", "--streaming", "--memory", "--yolo", "--agent-timeout"} {
 		if strings.Contains(helpOutput.String(), removed) {
 			t.Fatalf("start-local help still publishes removed contract %q:\n%s", removed, helpOutput.String())
 		}
@@ -282,12 +336,12 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 	if len(schema.Positionals) != 0 {
 		t.Fatalf("start-local positionals = %#v", schema.Positionals)
 	}
-	for _, name := range []string{"harness", "work-dir", "agent-cmd", "runner-id", "model", "local-agent-id", "display-name", "max-concurrent", "streaming", "memory", "yolo", "agent-timeout"} {
+	for _, name := range []string{"harness", "work-dir", "model", "agent-cmd", "runner-id"} {
 		if schema.Parameters[name] == nil {
 			t.Fatalf("start-local Schema missing --%s", name)
 		}
 	}
-	for _, removed := range []string{"workdir", "openapi-base", "endpoint-id"} {
+	for _, removed := range []string{"workdir", "openapi-base", "endpoint-id", "local-agent-id", "display-name", "max-concurrent", "streaming", "memory", "yolo", "agent-timeout"} {
 		if schema.Parameters[removed] != nil {
 			t.Fatalf("start-local Schema still publishes --%s", removed)
 		}
@@ -335,6 +389,40 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 	}
 	if runnerParameter.Required || runnerParameter.RequiredWhen != "" {
 		t.Fatalf("start-local runner-id contract = %#v", runnerParameter)
+	}
+}
+
+func TestLocalRunnerPublicSelectionDoesNotRouteToHiddenCommands(t *testing.T) {
+	for _, path := range []string{"deap runtime start-local", "deap runtime status"} {
+		t.Run(path, func(t *testing.T) {
+			var schemaOutput bytes.Buffer
+			root := NewRootCommand()
+			root.SetOut(&schemaOutput)
+			root.SetErr(&schemaOutput)
+			root.SetArgs([]string{"schema", "--cli-path", path, "-f", "json"})
+			if err := root.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			var schema struct {
+				Description string   `json:"description"`
+				UseWhen     []string `json:"use_when"`
+				AvoidWhen   []string `json:"avoid_when"`
+			}
+			if err := json.Unmarshal(schemaOutput.Bytes(), &schema); err != nil {
+				t.Fatal(err)
+			}
+			guidance := strings.Join(append(append([]string{schema.Description}, schema.UseWhen...), schema.AvoidWhen...), "\n")
+			for _, hidden := range []string{"deap runtime expose", "使用 expose", "deap runtime connect", "使用 connect"} {
+				if strings.Contains(guidance, hidden) {
+					t.Fatalf("%s public guidance routes to hidden command %q:\n%s", path, hidden, guidance)
+				}
+			}
+			for _, public := range []string{"start-local", "remove-local"} {
+				if !strings.Contains(guidance, public) {
+					t.Fatalf("%s public guidance missing %q:\n%s", path, public, guidance)
+				}
+			}
+		})
 	}
 }
 

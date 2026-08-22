@@ -113,7 +113,7 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "start-local",
 		Short: "注册并运行一个本地 A2A Agent",
-		Long:  "使用 --harness 在当前 dws 进程管理指定项目目录中的本地 Agent。支持 " + strings.Join(harnesses, ", ") + "；全部复用 dev connect 的共享 backend。custom 需要 --agent-cmd 或 DWS_AGENT_CMD。日常重启可直接重跑原命令并按稳定 localAgentId 隐式恢复；localAgentId 默认由 harness 与绝对 work-dir 确定性派生。本地配置丢失或迁移时，可提供 --runner-id 做灾难恢复；endpointId 由服务端首次创建 Runner 时分配，并通过 Runner 读取唯一绑定。注册或恢复后先输出不含凭证的公网 A2A 配置，再维持 WSS 与本地 HTTP/SSE 代理。",
+		Long:  "使用 --harness 在当前 dws 进程管理指定项目目录中的本地 Agent。支持 " + strings.Join(harnesses, ", ") + "；全部复用 dev connect 的共享 backend。custom harness 可通过 --agent-cmd 指定无头命令；本地配置丢失或迁移时可通过 --runner-id 做灾难恢复。日常重启可直接重跑原命令并按稳定本地标识隐式恢复。注册或恢复后先输出不含凭证的公网 A2A 配置，再维持 WSS 与本地 HTTP/SSE 代理。",
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			options.AgentRef = strings.TrimSpace(harness)
@@ -153,8 +153,8 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 	flags := cmd.Flags()
 	flags.StringVar(&harness, "harness", "", harnessDescription)
 	flags.StringVar(&options.WorkDir, "work-dir", "", "本地 Agent 项目目录；可使用相对或绝对路径")
-	flags.StringVar(&options.AgentCommand, "agent-cmd", "", "custom harness 的无头命令；问题作为末参，stdout 作为回复；也可使用 DWS_AGENT_CMD")
-	flags.StringVar(&options.RunnerID, "runner-id", "", "灾难恢复已有 Runner；Endpoint 由服务端 Runner 视图确定")
+	flags.StringVar(&options.AgentCommand, "agent-cmd", "", "仅 custom harness 使用的无头命令；问题作为末参，stdout 作为回复；也可使用 DWS_AGENT_CMD")
+	flags.StringVar(&options.RunnerID, "runner-id", "", "仅用于本地配置丢失或迁移时的灾难恢复；Endpoint 由服务端 Runner 视图确定")
 	flags.StringVar(&options.Model, "model", "", "本地 Agent 模型覆盖；留空使用 channel 默认模型")
 	flags.StringVar(&options.LocalAgentID, "local-agent-id", "", "本地 Agent 的稳定 ID；默认按 harness/绝对 work-dir 确定性派生")
 	flags.StringVar(&options.DisplayName, "display-name", "", "LocalRunner 显示名称；默认使用 Agent Card name")
@@ -163,6 +163,9 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 	flags.BoolVar(&options.Memory, "memory", true, "按 A2A contextId 复用本地 Agent session")
 	flags.BoolVar(&options.Yolo, "yolo", true, "启用本地 Agent 的最高权限模式；设为 false 使用受限模式")
 	flags.DurationVar(&options.AgentTimeout, "agent-timeout", 0, "单次本地 Agent 推理超时；0 表示使用 backend 默认值")
+	for _, name := range []string{"local-agent-id", "display-name", "max-concurrent", "streaming", "memory", "yolo", "agent-timeout"} {
+		_ = flags.MarkHidden(name)
+	}
 	_ = cmd.MarkFlagRequired("harness")
 	_ = cmd.MarkFlagRequired("work-dir")
 	declaration := localRunnerContract(
@@ -171,24 +174,17 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 		"deap runtime start-local",
 		"从共享本地 Agent backend 一键注册并维持公网 A2A LocalRunner 连接",
 		"需要把指定项目目录中的受支持本地 Agent harness 暴露为 A2A 时",
-		"只注册不用长连接时使用 deap runtime expose，已有 Runner 重连时使用 connect；auto、外部 connector 和远程 API 不是 LocalRunner harness",
-		[]string{"dws deap runtime start-local --harness opencode --work-dir ./project", "dws deap runtime start-local --harness opencode --work-dir ./project --runner-id lr_01"},
+		"start-local 已自动完成注册和连接；需要永久移除 LocalRunner 时使用 deap runtime remove-local；auto、外部 connector 和远程 API 不是 LocalRunner harness",
+		[]string{"dws deap runtime start-local --harness opencode --work-dir ./project"},
 	)
 	required := true
 	optional := false
 	declaration.Parameters = []contract.ParamDecl{
 		{Name: "harness", Property: "harness", InterfaceType: "string", Description: harnessDescription, Required: &required, Enum: append([]string(nil), harnesses...)},
 		{Name: "work-dir", Property: "workDir", InterfaceType: "string", Description: "本地 Agent 项目目录；可使用相对或绝对路径", Required: &required},
-		{Name: "agent-cmd", Property: "agentCommand", InterfaceType: "string", Description: "custom harness 的无头命令；仅在内存中传给共享 backend，也可使用 DWS_AGENT_CMD", Required: &optional, RequiredWhen: "harness=custom unless DWS_AGENT_CMD is set"},
-		{Name: "runner-id", Property: "runnerId", InterfaceType: "string", Description: "灾难恢复已有 Runner；Endpoint 由服务端 Runner 视图确定", Required: &optional},
 		{Name: "model", Property: "model", InterfaceType: "string", Description: "本地 Agent 模型覆盖；留空使用 channel 默认模型"},
-		{Name: "local-agent-id", Property: "localAgentId", InterfaceType: "string", Description: "本地 Agent 的稳定 ID；默认按 harness/绝对 work-dir 确定性派生"},
-		{Name: "display-name", Property: "displayName", InterfaceType: "string", Description: "LocalRunner 显示名称；默认使用 Agent Card name"},
-		{Name: "max-concurrent", Property: "maxConcurrent", InterfaceType: "integer", Description: "最大并发 A2A 请求数"},
-		{Name: "streaming", Property: "streaming", InterfaceType: "boolean", Description: "声明支持 SSE streaming"},
-		{Name: "memory", Property: "memory", InterfaceType: "boolean", Description: "按 A2A contextId 复用本地 Agent session"},
-		{Name: "yolo", Property: "yolo", InterfaceType: "boolean", Description: "启用本地 Agent 的最高权限模式"},
-		{Name: "agent-timeout", Property: "agentTimeout", InterfaceType: "duration", Description: "单次本地 Agent 推理超时；0 使用 backend 默认值"},
+		{Name: "agent-cmd", Property: "agentCommand", InterfaceType: "string", Description: "仅 custom harness 使用的无头命令；仅在内存中传给共享 backend，也可使用 DWS_AGENT_CMD", Required: &optional, RequiredWhen: "harness=custom unless DWS_AGENT_CMD is set"},
+		{Name: "runner-id", Property: "runnerId", InterfaceType: "string", Description: "仅用于本地配置丢失或迁移时的灾难恢复；Endpoint 由服务端 Runner 视图确定", Required: &optional},
 	}
 	helpers.DeclareLeafMetadata(cmd, helpers.LeafSpec{
 		Safety:   contract.SafetySpec{Effect: "write", Risk: "medium", Confirmation: "not_required", Idempotency: "non_idempotent"},
@@ -214,7 +210,7 @@ func normalizeLocalRunnerWorkDir(raw string) (string, error) {
 }
 
 func newLocalRunnerExposeCommand() *cobra.Command {
-	return helpers.NewLeafCommand(helpers.LeafSpec{
+	cmd := helpers.NewLeafCommand(helpers.LeafSpec{
 		Use:   "expose",
 		Short: "注册一个本地 A2A Agent 为 LocalRunner",
 		Long:  "读取本地 Agent Card，创建严格一对一的 Runner/Endpoint，并把一次性 endpoint bearer 直接写入系统 keyring。",
@@ -246,6 +242,8 @@ func newLocalRunnerExposeCommand() *cobra.Command {
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 		},
 	})
+	cmd.Hidden = true
+	return cmd
 }
 
 func newLocalRunnerStatusCommand() *cobra.Command {
@@ -264,7 +262,7 @@ func newLocalRunnerStatusCommand() *cobra.Command {
 			"deap runtime status",
 			"查询 LocalRunner 与当前 WSS 连接状态",
 			"需要确认 Runner 是否 ACTIVE、Endpoint 是否连接以及最近心跳时",
-			"创建使用 expose；建立本地代理长连接使用 connect；撤销使用 revoke",
+			"注册和连接由 start-local 自动完成；永久移除使用 remove-local",
 			[]string{"dws deap runtime status --runner-id <runnerId>"},
 		),
 		Call: func(cmd *cobra.Command, _ string, args map[string]any) error {
@@ -278,24 +276,26 @@ func newLocalRunnerStatusCommand() *cobra.Command {
 }
 
 func newLocalRunnerRevokeCommand() *cobra.Command {
-	return helpers.NewLeafCommand(helpers.LeafSpec{
-		Use:   "revoke",
-		Short: "撤销 LocalRunner 与唯一 Endpoint",
-		Long:  "撤销 Runner/Endpoint 绑定并要求服务端关闭活动连接；该操作不会输出或恢复 endpoint bearer。",
+	declaration := localRunnerContract(
+		"runtime_revoke",
+		"deap.runtime_revoke",
+		"deap runtime remove-local",
+		"移除 LocalRunner 及其唯一 Endpoint 并关闭连接",
+		"已确认不再需要该公网 Agent Card/RPC Endpoint，需要永久移除时",
+		"只断开当前 WSS 而保留 Endpoint 时不要使用 remove-local",
+		[]string{"dws deap runtime remove-local --runner-id <runnerId>"},
+	)
+	declaration.Identity.Aliases = []string{"deap runtime revoke"}
+	cmd := helpers.NewLeafCommand(helpers.LeafSpec{
+		Use:   "remove-local",
+		Short: "移除 LocalRunner 与唯一 Endpoint",
+		Long:  "移除 Runner/Endpoint 绑定并要求服务端关闭活动连接；该操作不会输出或恢复 endpoint bearer。",
 		Tool:  "local_runner_revoke",
 		Flags: []helpers.LeafFlag{
 			{Name: "runner-id", Usage: "Runner ID", Bind: "runnerId", Trim: true, Required: true, MarkRequired: true},
 		},
 		Safety: contract.SafetySpec{Effect: "destructive", Risk: "high", Confirmation: "user_required", Idempotency: "idempotent"},
-		Contract: localRunnerContract(
-			"runtime_revoke",
-			"deap.runtime_revoke",
-			"deap runtime revoke",
-			"撤销 LocalRunner 及其唯一 Endpoint 并关闭连接",
-			"已确认不再需要该公网 Agent Card/RPC Endpoint，需要永久撤销时",
-			"只断开当前 WSS 而保留 Endpoint 时不要使用 revoke",
-			[]string{"dws deap runtime revoke --runner-id <runnerId>"},
-		),
+		Contract: declaration,
 		Call: func(cmd *cobra.Command, _ string, args map[string]any) error {
 			result, err := localRunnerCommandRuntimeProvider().Revoke(cmd.Context(), stringToolArg(args, "runnerId"))
 			if err != nil {
@@ -304,10 +304,12 @@ func newLocalRunnerRevokeCommand() *cobra.Command {
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 		},
 	})
+	cmd.Aliases = []string{"revoke"}
+	return cmd
 }
 
 func newLocalRunnerConnectCommand() *cobra.Command {
-	return helpers.NewLeafCommand(helpers.LeafSpec{
+	cmd := helpers.NewLeafCommand(helpers.LeafSpec{
 		Use:   "connect",
 		Short: "连接一个 LocalRunner Endpoint 并代理到 localhost",
 		Long:  "领取一次性 connection ticket，建立单 Endpoint WSS，并把不透明 A2A HTTP/SSE 字节代理到固定 loopback 目标。",
@@ -364,6 +366,8 @@ func newLocalRunnerConnectCommand() *cobra.Command {
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(output)
 		},
 	})
+	cmd.Hidden = true
+	return cmd
 }
 
 func localRunnerContract(name, canonicalPath, cliPath, description, useWhen, avoidWhen string, examples []string) helpers.LeafContract {
