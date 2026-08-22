@@ -38,6 +38,9 @@ var (
 )
 
 func (p *OAuthProvider) exchangeCode(ctx context.Context, code string) (*TokenData, error) {
+	if p != nil && strings.TrimSpace(p.mcpClientID) != "" {
+		return p.exchangeCodeViaMCP(ctx, code)
+	}
 	// Use MCP mode if clientID is from MCP server
 	if IsClientIDFromMCP() {
 		return p.exchangeCodeViaMCP(ctx, code)
@@ -94,7 +97,13 @@ func ExchangeCodeForToken(ctx context.Context, configDir, code string) (*TokenDa
 // exchangeCodeViaMCP exchanges auth code for token via MCP proxy.
 // This is used when client secret is not available (server-side secret management).
 func (p *OAuthProvider) exchangeCodeViaMCP(ctx context.Context, code string) (*TokenData, error) {
-	clientID := ClientID()
+	clientID := ""
+	if p != nil {
+		clientID = strings.TrimSpace(p.mcpClientID)
+	}
+	if clientID == "" {
+		clientID = ClientID()
+	}
 	url := GetMCPBaseURL() + MCPOAuthTokenPath
 	body := map[string]string{
 		"clientId":  clientID,

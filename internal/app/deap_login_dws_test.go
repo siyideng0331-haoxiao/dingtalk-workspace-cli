@@ -3,7 +3,12 @@ package app
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +21,8 @@ func TestLoginDWSUsesOperatorForGrantAndEmployeeForExchange(t *testing.T) {
 	t.Setenv("DWS_CONFIG_DIR", t.TempDir())
 	t.Setenv("DWS_PROFILE", "pending-employee-corp:pending-employee-uid")
 	t.Cleanup(func() { authpkg.SetRuntimeProfile("") })
+	testseam.Swap(t, &deapLoginDWSClientIDProvider,
+		func(context.Context) (string, error) { return "mcp-client-id", nil })
 
 	grantClient := &recordingDWSGrantIssuer{
 		grant: &dwsauth.Grant{
@@ -30,7 +37,7 @@ func TestLoginDWSUsesOperatorForGrantAndEmployeeForExchange(t *testing.T) {
 		func(string) (deapLoginDWSGrantIssuer, error) { return grantClient, nil })
 	var exchangeProfile, exchangeCode, exchangeUID string
 	testseam.Swap(t, &deapLoginDWSExchangeAuthCode,
-		func(_ context.Context, _ string, code, corpID, uid string) (*authpkg.TokenData, error) {
+		func(_ context.Context, _, _, code, corpID, uid string) (*authpkg.TokenData, error) {
 			exchangeProfile = authpkg.RuntimeProfile()
 			exchangeCode = code
 			exchangeUID = uid
@@ -106,6 +113,8 @@ func TestLoginDWSRequiresAssistantID(t *testing.T) {
 func TestLoginDWSAcceptsInjectedAuthCodeGrant(t *testing.T) {
 	t.Setenv("DWS_CONFIG_DIR", t.TempDir())
 	t.Cleanup(func() { authpkg.SetRuntimeProfile("") })
+	testseam.Swap(t, &deapLoginDWSClientIDProvider,
+		func(context.Context) (string, error) { return "mcp-client-id", nil })
 
 	testseam.Swap(t, &deapLoginDWSGrantClientProvider,
 		func(string) (deapLoginDWSGrantIssuer, error) {
@@ -114,7 +123,7 @@ func TestLoginDWSAcceptsInjectedAuthCodeGrant(t *testing.T) {
 		})
 	var exchangeCode, exchangeUID string
 	testseam.Swap(t, &deapLoginDWSExchangeAuthCode,
-		func(_ context.Context, _ string, code, corpID, uid string) (*authpkg.TokenData, error) {
+		func(_ context.Context, _, _, code, corpID, uid string) (*authpkg.TokenData, error) {
 			exchangeCode = code
 			exchangeUID = uid
 			if corpID != "ding-corp" {
@@ -146,6 +155,59 @@ func TestLoginDWSAcceptsInjectedAuthCodeGrant(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "one-time-code") {
 		t.Fatalf("output leaked auth code: %s", output.String())
+	}
+}
+
+func TestLoginDWSFetchesMCPClientIDBeforeInjectedAuthCodeExchange(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("DWS_CONFIG_DIR", configDir)
+	t.Cleanup(func() { authpkg.SetRuntimeProfile("") })
+
+	var clientIDRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != authpkg.ClientIDPath {
+			t.Errorf("MCP request path = %q, want %q", r.URL.Path, authpkg.ClientIDPath)
+			http.NotFound(w, r)
+			return
+		}
+		clientIDRequests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"result":"mcp-client-id"}`))
+	}))
+	defer server.Close()
+	if err := os.WriteFile(filepath.Join(configDir, "mcp_url"), []byte(server.URL), 0o600); err != nil {
+		t.Fatalf("write mcp_url: %v", err)
+	}
+
+	var exchangeClientID string
+	testseam.Swap(t, &deapLoginDWSExchangeAuthCode,
+		func(_ context.Context, _, clientID, _, corpID, uid string) (*authpkg.TokenData, error) {
+			exchangeClientID = clientID
+			return &authpkg.TokenData{
+				AccessToken: "employee-access-token",
+				CorpID:      corpID,
+				UserID:      uid,
+				ExpiresAt:   time.Now().Add(time.Hour),
+			}, nil
+		})
+
+	root := newRootCommandWithEngine(context.Background(), nil, false, true)
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{
+		"deap", "manage", "login-dws",
+		"--auth-code", "one-time-code",
+		"--corp-id", "ding-corp",
+		"--uid", "987654",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("login-dws injected grant error = %v", err)
+	}
+	if got := clientIDRequests.Load(); got != 1 {
+		t.Fatalf("MCP client ID requests = %d, want 1", got)
+	}
+	if exchangeClientID != "mcp-client-id" {
+		t.Fatalf("exchange clientId = %q, want mcp-client-id", exchangeClientID)
 	}
 }
 

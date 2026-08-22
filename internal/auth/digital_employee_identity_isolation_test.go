@@ -2,6 +2,11 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -162,5 +167,46 @@ func TestExchangeAuthCodeForIdentityRejectsMismatchBeforeSave(t *testing.T) {
 	}
 	if got := saveCalls.Load(); got != 0 {
 		t.Fatalf("SaveTokenData calls = %d, want 0", got)
+	}
+}
+
+func TestOAuthProviderExplicitMCPClientIDRoutesExchangeViaConfiguredMCP(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("DWS_CONFIG_DIR", configDir)
+
+	var requestClientID atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != MCPOAuthTokenPath {
+			t.Errorf("exchange path = %q, want %q", r.URL.Path, MCPOAuthTokenPath)
+			http.NotFound(w, r)
+			return
+		}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode exchange request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		requestClientID.Store(body["clientId"])
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"accessToken":"employee-access","corpId":"ding-corp","expiresIn":7200}`))
+	}))
+	defer server.Close()
+	if err := os.WriteFile(filepath.Join(configDir, "mcp_url"), []byte(server.URL), 0o600); err != nil {
+		t.Fatalf("write mcp_url: %v", err)
+	}
+
+	provider := NewOAuthProvider(configDir, nil)
+	provider.httpClient = server.Client()
+	provider.SetMCPClientID("issuer-client-id")
+	token, err := provider.exchangeCode(context.Background(), "one-time-code")
+	if err != nil {
+		t.Fatalf("exchangeCode() error = %v", err)
+	}
+	if got, _ := requestClientID.Load().(string); got != "issuer-client-id" {
+		t.Fatalf("exchange clientId = %q, want issuer-client-id", got)
+	}
+	if token.Source != "mcp" || token.ClientID != "issuer-client-id" {
+		t.Fatalf("token source/clientId = %q/%q, want mcp/issuer-client-id", token.Source, token.ClientID)
 	}
 }

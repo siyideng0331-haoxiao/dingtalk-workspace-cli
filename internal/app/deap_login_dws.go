@@ -21,15 +21,17 @@ type deapLoginDWSGrantIssuer interface {
 
 var (
 	deapLoginDWSHTTPClient          = &http.Client{Timeout: 30 * time.Second}
+	deapLoginDWSClientIDProvider    = authpkg.FetchClientIDFromMCP
 	deapLoginDWSGrantClientProvider = func(configDir string) (deapLoginDWSGrantIssuer, error) {
 		return dwsauth.NewClient(config.GetDEAPOpenAPIBaseURL(), deapLoginDWSHTTPClient,
 			dwsDigitalEmployeeGrantOAuth{configDir: configDir})
 	}
 	deapLoginDWSExchangeAuthCode = func(
 		ctx context.Context,
-		configDir, code, corpID, uid string,
+		configDir, clientID, code, corpID, uid string,
 	) (*authpkg.TokenData, error) {
 		provider := authpkg.NewOAuthProvider(configDir, nil)
+		provider.SetMCPClientID(clientID)
 		configureOAuthProviderCompatibility(provider, configDir)
 		return provider.ExchangeAuthCodeForIdentity(ctx, code, corpID, uid)
 	}
@@ -144,11 +146,22 @@ func newDeapLoginDWSCommand() *cobra.Command {
 			}
 
 			exchangeCtx, cancelExchange := context.WithTimeout(cmd.Context(), time.Minute)
+			clientID, err := deapLoginDWSClientIDProvider(exchangeCtx)
+			if err != nil {
+				cancelExchange()
+				return apperrors.NewAuth(fmt.Sprintf(
+					"failed to resolve DWS OAuth client from MCP: %v", err))
+			}
+			clientID = strings.TrimSpace(clientID)
+			if clientID == "" {
+				cancelExchange()
+				return apperrors.NewAuth("DWS OAuth client from MCP is empty")
+			}
 			tokenData, err := func() (*authpkg.TokenData, error) {
 				restore := replaceRuntimeProfile(exactSelector)
 				defer restore()
 				return deapLoginDWSExchangeAuthCode(exchangeCtx, configDir,
-					grant.AuthCode, grantCorpID, grantUID)
+					clientID, grant.AuthCode, grantCorpID, grantUID)
 			}()
 			cancelExchange()
 			if err != nil {

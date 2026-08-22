@@ -72,6 +72,7 @@ var (
 type OAuthProvider struct {
 	configDir    string
 	clientID     string
+	mcpClientID  string
 	logger       *slog.Logger
 	Output       io.Writer
 	httpClient   *http.Client
@@ -80,6 +81,17 @@ type OAuthProvider struct {
 	// IdentityEnricher resolves userId/userName/corpName while the freshly
 	// exchanged access token is still only in memory.
 	IdentityEnricher func(context.Context, *TokenData) error
+}
+
+// SetMCPClientID binds this provider instance to the OAuth application
+// advertised by the active MCP endpoint. It avoids mutating the process-wide
+// compatibility state when a one-shot digital-employee login exchanges an
+// externally issued authorization code.
+func (p *OAuthProvider) SetMCPClientID(clientID string) {
+	if p == nil {
+		return
+	}
+	p.mcpClientID = strings.TrimSpace(clientID)
 }
 
 // NewOAuthProvider creates a new OAuth provider.
