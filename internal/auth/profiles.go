@@ -83,6 +83,10 @@ const (
 	unresolvedProfileSelectorPrefix   = "@legacy/"
 )
 
+// EnvProfile binds the current process and its child processes to a default
+// profile selector. An explicit --profile flag takes precedence.
+const EnvProfile = "DWS_PROFILE"
+
 const (
 	ProfileStatusActive      = "active"
 	ProfileStatusExpired     = "expired"
@@ -125,6 +129,13 @@ func SetRuntimeProfile(profile string) {
 // RuntimeProfile returns the process-local one-shot profile override.
 func RuntimeProfile() string {
 	return profilectx.Get()
+}
+
+// EnvironmentProfile returns the profile selector inherited from the process
+// environment. Internal temporary overrides continue to use SetRuntimeProfile
+// without re-reading this value.
+func EnvironmentProfile() string {
+	return strings.TrimSpace(os.Getenv(EnvProfile))
 }
 
 // ProfilesPath returns the profile metadata path for a config dir.

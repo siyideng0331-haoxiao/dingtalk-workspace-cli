@@ -291,6 +291,15 @@ dws --profile <corpId:userId> contact user search --query "..." # 单次精确�
 
 支持 `corpId:userId`、`corpId:userName`、`corpName:userId`、`corpName:userName`。名称只用于输入，自动化应使用 `profile list` 返回的稳定 `profile`。组织名或用户名重名时会列出候选并报错；同组织多账号但没有明确当前账号时，只传组织也会报错，不会选择第一项或最近使用账号。
 
+长期运行的 Agent 可以通过 `DWS_PROFILE` 把自身及其继承环境的 `dws` 子进程固定到一个精确身份：
+
+```bash
+DWS_PROFILE=<corpId:userId> opencode
+DWS_PROFILE=<corpId:userId> codex
+```
+
+选择优先级为：显式 `--profile` > `DWS_PROFILE` > 当前配置目录的 `currentProfile`。环境变量只在当前进程及其子进程中生效，不会修改持久化的当前账号。Agent 身份绑定应使用稳定的 `corpId:userId`。
+
 `currentProfile`、`previousProfile` 和组织默认账号都保存精确身份。`primaryProfile` 只为 JSON 兼容保留，不再参与选择。`profile list` 直接读取各身份 Token 计算状态和到期时间，不触发刷新。`auth logout --profile <corpId>` 退出该组织全部账号；精确选择器或本地 profile 名只退出一个账号。
 
 跨组织读取由 agent 编排，而非内置 `--all-orgs`：先 `dws profile list`，每个组织使用唯一的 `isOrgCurrent=true` 账号；若多账号组织没有默认账号，先让用户指定账号。写操作默认只在当前账号执行——跨组织写之前先确认目标组织和账号。

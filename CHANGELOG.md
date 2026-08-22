@@ -8,6 +8,11 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/) and th
 
 ### Added
 
+- **Process-scoped DWS identity binding** — adds `DWS_PROFILE` as an inheritable
+  default profile selector for long-running Agent processes and their child
+  `dws` invocations. Explicit `--profile` remains highest priority; without
+  either override, commands continue to use the active config directory's
+  `currentProfile`.
 - **Aitable workflow execution and history** — adds `dws aitable workflow run` for confirmed asynchronous execution of scheduled or record-triggered workflows, plus `dws aitable workflow history` for status-, time-, and page-filtered execution records. The commands map directly to `aitable/run_workflow` and `aitable/get_flow_record_list`, validate trigger-specific arguments locally, and document the `executionId` / `instanceId` correlation.
 - **Streaming-card mentions** — `chat +messages-send-card` now accepts
   `--at-open-dingtalk-ids` and `--at-all` for group cards, passing mention

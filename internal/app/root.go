@@ -398,7 +398,7 @@ func newRootCommandWithEngine(rootCtx context.Context, engine *pipeline.Engine, 
 		rootCtx = context.Background()
 	}
 	flags := &GlobalFlags{}
-	authpkg.SetRuntimeProfile(preparseProfileFlag(os.Args[1:]))
+	authpkg.SetRuntimeProfile(resolveRuntimeProfileSelector(preparseProfileFlag(os.Args[1:])))
 	runner := rootNewCommandRunnerWithFlags(flags)
 
 	root := &cobra.Command{
@@ -424,7 +424,7 @@ func newRootCommandWithEngine(rootCtx context.Context, engine *pipeline.Engine, 
 				return err
 			}
 
-			authpkg.SetRuntimeProfile(flags.Profile)
+			authpkg.SetRuntimeProfile(resolveRuntimeProfileSelector(flags.Profile))
 			// Apply OAuth credential overrides from CLI flags (highest priority).
 			if flags.ClientID != "" {
 				authpkg.SetClientID(flags.ClientID)
@@ -561,6 +561,13 @@ func preparseProfileFlag(args []string) string {
 		}
 	}
 	return ""
+}
+
+func resolveRuntimeProfileSelector(flagSelector string) string {
+	if selector := strings.TrimSpace(flagSelector); selector != "" {
+		return selector
+	}
+	return authpkg.EnvironmentProfile()
 }
 
 func normalizeProcessProfileArgs() func() {

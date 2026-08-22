@@ -98,6 +98,7 @@ refresh_token 单设备独占，远程刷新后源设备凭证失效。
 | 变量 | 说明 |
 |------|------|
 | `DWS_CONFIG_DIR` | 覆盖默认配置目录 |
+| `DWS_PROFILE` | 为当前 Agent 进程及继承环境的 `dws` 子进程指定默认身份；使用 `profile list` 返回的稳定 `corpId:userId`。显式 `--profile` 优先，未设置时回退到当前配置目录的 `currentProfile` |
 | `DWS_<PRODUCT>_MCP_URL` | 本地开发时覆盖指定产品 MCP endpoint |
 | `DWS_CLIENT_ID` | 覆盖 OAuth Client ID (DingTalk AppKey) |
 | `DWS_CLIENT_SECRET` | 覆盖 OAuth Client Secret (DingTalk AppSecret) |
