@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,6 +33,14 @@ func TestDefaultLocalRunnerRuntimeProviderIsProduction(t *testing.T) {
 	if !ok || production.credentials == nil || production.configs == nil || production.oauth == nil || production.ownerIdentity == nil {
 		t.Fatal("default LocalRunner runtime dependencies are incomplete")
 	}
+}
+
+func localRunnerTestSessionStoreKey(options localRunnerLocalAgentOptions) string {
+	field := reflect.ValueOf(options).FieldByName("SessionStoreKey")
+	if !field.IsValid() || field.Kind() != reflect.String {
+		return ""
+	}
+	return field.String()
 }
 
 func TestProductionLocalRunnerRuntimeUsesDEAPOpenAPIConfigFile(t *testing.T) {
@@ -912,6 +921,7 @@ func TestProductionLocalRunnerStartLocalRunsSharedCodexBackendWithStableWorkDirI
 	var gotMemory bool
 	var gotYolo bool
 	var gotTimeout time.Duration
+	var gotSessionStoreKey string
 	testseam.Swap(t, &localRunnerLocalAgentStarter, func(_ context.Context, agentRef string, options localRunnerLocalAgentOptions) (*localRunnerOpenCodeAgent, error) {
 		gotAgentRef = agentRef
 		gotWorkDir = options.WorkDir
@@ -919,6 +929,7 @@ func TestProductionLocalRunnerStartLocalRunsSharedCodexBackendWithStableWorkDirI
 		gotMemory = options.Memory
 		gotYolo = options.Yolo
 		gotTimeout = options.Timeout
+		gotSessionStoreKey = localRunnerTestSessionStoreKey(options)
 		agent, err := startLocalRunnerLocalAgentWithBackend(backend, "127.0.0.1:0", agentRef)
 		started = agent
 		return agent, err
@@ -955,6 +966,9 @@ func TestProductionLocalRunnerStartLocalRunsSharedCodexBackendWithStableWorkDirI
 	}
 	if gotAgentRef != "codex" || gotWorkDir != workDir || gotModel != "provider/model" || !gotMemory || gotYolo || gotTimeout != 11*time.Second {
 		t.Fatalf("shared starter ref=%q workdir=%q model=%q memory=%v yolo=%v timeout=%v", gotAgentRef, gotWorkDir, gotModel, gotMemory, gotYolo, gotTimeout)
+	}
+	if gotSessionStoreKey != "localrunner-"+wantLocalAgentID {
+		t.Fatalf("shared starter session store key = %q, want %q", gotSessionStoreKey, "localrunner-"+wantLocalAgentID)
 	}
 	if createRequest.LocalAgentID != wantLocalAgentID || createRequest.DisplayName != "DWS Codex" {
 		t.Fatalf("Codex create identity = %q/%q", createRequest.LocalAgentID, createRequest.DisplayName)
@@ -1105,6 +1119,9 @@ func TestProductionLocalRunnerStartLocalResumesStoredOpenCodeWithoutCreateOrUpda
 		restartCalls++
 		if rawOrigin != stored.LoopbackBaseURL || agentRef != localRunnerOpenCodeRef || options.WorkDir != workDir || options.Model != "provider/model" {
 			t.Fatalf("OpenCode restart options = origin %q ref %q options %#v", rawOrigin, agentRef, options)
+		}
+		if got := localRunnerTestSessionStoreKey(options); got != "localrunner-"+stored.LocalAgentID {
+			t.Fatalf("OpenCode restart session store key = %q, want %q", got, "localrunner-"+stored.LocalAgentID)
 		}
 		parsed, err := url.Parse(rawOrigin)
 		if err != nil {

@@ -7,7 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -241,9 +244,16 @@ func TestLocalRunnerOpenCodeAgentPreservesOpaqueNonblankContextID(t *testing.T) 
 }
 
 func TestLocalRunnerOpenCodeAgentRejectsUnsupportedPartsAndRedactsFailures(t *testing.T) {
-	const sensitive = "sensitive prompt backend body and password"
-	backend := &fakeLocalRunnerOpenCodeBackend{err: errors.New(sensitive)}
-	agent, err := startLocalRunnerOpenCodeAgentWithBackend(backend, "127.0.0.1:0")
+	const sensitivePrompt = "sensitive prompt backend body"
+	const sensitivePassword = "password-value-123"
+	const sensitiveToken = "token-value-456"
+	const sensitiveAPIKey = "api-key-value-789"
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	backend := &fakeLocalRunnerOpenCodeBackend{err: errors.New("Qoder process exited: password=" + sensitivePassword + " Authorization: Bearer " + sensitiveToken + " api_key=" + sensitiveAPIKey + " prompt=" + sensitivePrompt)}
+	agent, err := startLocalRunnerLocalAgentWithBackend(backend, "127.0.0.1:0", "qoder")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,15 +267,105 @@ func TestLocalRunnerOpenCodeAgentRejectsUnsupportedPartsAndRedactsFailures(t *te
 		t.Fatalf("unsupported part response status=%d body=%s", response.StatusCode, body)
 	}
 
-	failed := []byte(`{"jsonrpc":"2.0","id":2,"method":"message/send","params":{"message":{"kind":"message","role":"user","messageId":"message","parts":[{"kind":"text","text":"` + sensitive + `"}]}}}`)
+	failed := []byte(`{"jsonrpc":"2.0","id":2,"method":"message/send","params":{"message":{"kind":"message","role":"user","messageId":"message","parts":[{"kind":"text","text":"` + sensitivePrompt + `"}]}}}`)
 	response = postLocalRunnerOpenCode(t, agent.RPCURL(), failed)
 	body, _ = io.ReadAll(response.Body)
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"code":-32000`) || !strings.Contains(string(body), `"message":"Local agent request failed"`) {
 		t.Fatalf("backend failure response status=%d body=%s", response.StatusCode, body)
 	}
-	if strings.Contains(string(body), sensitive) {
+	if strings.Contains(string(body), sensitivePrompt) || strings.Contains(string(body), sensitivePassword) || strings.Contains(string(body), sensitiveToken) || strings.Contains(string(body), sensitiveAPIKey) {
 		t.Fatalf("backend failure leaked sensitive content: %s", body)
+	}
+	logged := logs.String()
+	for _, want := range []string{"localrunner.backend.failure", `"harness":"qoder"`, `"phase":"prompt"`, `"category":"process_exit"`, `"reason":"backend process exited"`, `"fingerprint":"`} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("backend failure log missing %q: %s", want, logged)
+		}
+	}
+	for _, forbidden := range []string{sensitivePrompt, sensitivePassword, sensitiveToken, sensitiveAPIKey, "Bearer"} {
+		if strings.Contains(logged, forbidden) {
+			t.Fatalf("backend failure log leaked %q: %s", forbidden, logged)
+		}
+	}
+}
+
+func TestLocalRunnerQoderSessionMappingSurvivesRestartOnlyWithMemory(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		memory    bool
+		wantSame  bool
+		wantStore bool
+	}{
+		{name: "memory enabled", memory: true, wantSame: true, wantStore: true},
+		{name: "memory disabled", memory: false, wantSame: false, wantStore: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configDir := t.TempDir()
+			workDir := t.TempDir()
+			stubDir := t.TempDir()
+			sessionLog := filepath.Join(stubDir, "sessions.log")
+			scriptPath := filepath.Join(stubDir, "qoder-stub.py")
+			script := `import json
+import os
+import sys
+
+for raw in sys.stdin:
+    raw = raw.strip()
+    if not raw:
+        continue
+    message = json.loads(raw)
+    if message.get("type") == "control_request":
+        print(json.dumps({"type":"control_response","response":{"subtype":"success","request_id":message.get("request_id", "")}}), flush=True)
+        continue
+    if message.get("type") == "user":
+        with open(os.environ["DWS_QODER_SESSION_LOG"], "a", encoding="utf-8") as output:
+            output.write(message.get("session_id", "") + "\n")
+        print(json.dumps({"type":"result","subtype":"success","result":"ok"}), flush=True)
+`
+			if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			binPath := filepath.Join(stubDir, "qodercli")
+			bin := "#!/bin/sh\nexec python3 \"$DWS_QODER_STUB\" \"$@\"\n"
+			if err := os.WriteFile(binPath, []byte(bin), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("DWS_CONFIG_DIR", configDir)
+			t.Setenv("DWS_CONNECT_NO_INSTALL", "1")
+			t.Setenv("DWS_AGENT_CMD", "")
+			t.Setenv("DWS_QODER_STUB", scriptPath)
+			t.Setenv("DWS_QODER_SESSION_LOG", sessionLog)
+			t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			for requestID := 1; requestID <= 2; requestID++ {
+				agent, err := startLocalRunnerLocalAgent(context.Background(), "qoder", localRunnerLocalAgentOptions{WorkDir: workDir, Memory: test.memory})
+				if err != nil {
+					t.Fatal(err)
+				}
+				response := postLocalRunnerOpenCode(t, agent.RPCURL(), []byte(`{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"kind":"message","role":"user","messageId":"message","contextId":"a2a-context-1","parts":[{"kind":"text","text":"hello"}]}}}`))
+				body, readErr := io.ReadAll(response.Body)
+				response.Body.Close()
+				_ = agent.Close()
+				if readErr != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"result"`) {
+					t.Fatalf("request %d status=%d body=%s err=%v", requestID, response.StatusCode, body, readErr)
+				}
+			}
+
+			rawSessions, err := os.ReadFile(sessionLog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sessions := strings.Fields(string(rawSessions))
+			if len(sessions) != 2 || (sessions[0] == sessions[1]) != test.wantSame {
+				t.Fatalf("Qoder sessions after restart = %q, wantSame=%v", sessions, test.wantSame)
+			}
+			storePath := filepath.Join(configDir, "connect", "localrunner-"+localRunnerLocalAgentDefaultID("qoder", workDir), "sessions.json")
+			_, statErr := os.Stat(storePath)
+			if (statErr == nil) != test.wantStore {
+				t.Fatalf("session store %q exists=%v error=%v, want %v", storePath, statErr == nil, statErr, test.wantStore)
+			}
+		})
 	}
 }
 
