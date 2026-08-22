@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
@@ -245,14 +246,18 @@ func TestLocalRunnerOpenCodeAgentPreservesOpaqueNonblankContextID(t *testing.T) 
 
 func TestLocalRunnerOpenCodeAgentRejectsUnsupportedPartsAndRedactsFailures(t *testing.T) {
 	const sensitivePrompt = "sensitive prompt backend body"
+	const sensitiveContext = "a2a-context-sensitive-123"
+	const sensitiveSession = "native-session-sensitive-456"
 	const sensitivePassword = "password-value-123"
 	const sensitiveToken = "token-value-456"
+	const sensitiveSecret = "secret-value-789"
+	const sensitiveCredential = "credential-value-012"
 	const sensitiveAPIKey = "api-key-value-789"
 	var logs bytes.Buffer
 	previousLogger := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
-	backend := &fakeLocalRunnerOpenCodeBackend{err: errors.New("Qoder process exited: password=" + sensitivePassword + " Authorization: Bearer " + sensitiveToken + " api_key=" + sensitiveAPIKey + " prompt=" + sensitivePrompt)}
+	backend := &fakeLocalRunnerOpenCodeBackend{err: errors.New("Qoder process exited: not logged in; password=" + sensitivePassword + "; token=" + sensitiveToken + "; secret=" + sensitiveSecret + "; credential=" + sensitiveCredential + "; Authorization: Bearer " + sensitiveToken + "; api_key=" + sensitiveAPIKey + "; session_id=" + sensitiveSession + "; request=" + sensitivePrompt + "; conversation=" + sensitiveContext + "; " + strings.Repeat("diagnostic ", 80))}
 	agent, err := startLocalRunnerLocalAgentWithBackend(backend, "127.0.0.1:0", "qoder")
 	if err != nil {
 		t.Fatal(err)
@@ -267,25 +272,48 @@ func TestLocalRunnerOpenCodeAgentRejectsUnsupportedPartsAndRedactsFailures(t *te
 		t.Fatalf("unsupported part response status=%d body=%s", response.StatusCode, body)
 	}
 
-	failed := []byte(`{"jsonrpc":"2.0","id":2,"method":"message/send","params":{"message":{"kind":"message","role":"user","messageId":"message","parts":[{"kind":"text","text":"` + sensitivePrompt + `"}]}}}`)
+	failed := []byte(`{"jsonrpc":"2.0","id":2,"method":"message/send","params":{"message":{"kind":"message","role":"user","messageId":"message","contextId":"` + sensitiveContext + `","parts":[{"kind":"text","text":"` + sensitivePrompt + `"}]}}}`)
 	response = postLocalRunnerOpenCode(t, agent.RPCURL(), failed)
 	body, _ = io.ReadAll(response.Body)
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"code":-32000`) || !strings.Contains(string(body), `"message":"Local agent request failed"`) {
 		t.Fatalf("backend failure response status=%d body=%s", response.StatusCode, body)
 	}
-	if strings.Contains(string(body), sensitivePrompt) || strings.Contains(string(body), sensitivePassword) || strings.Contains(string(body), sensitiveToken) || strings.Contains(string(body), sensitiveAPIKey) {
+	if strings.Contains(string(body), sensitivePrompt) || strings.Contains(string(body), sensitiveContext) || strings.Contains(string(body), sensitiveSession) || strings.Contains(string(body), sensitivePassword) || strings.Contains(string(body), sensitiveToken) || strings.Contains(string(body), sensitiveSecret) || strings.Contains(string(body), sensitiveCredential) || strings.Contains(string(body), sensitiveAPIKey) {
 		t.Fatalf("backend failure leaked sensitive content: %s", body)
 	}
 	logged := logs.String()
-	for _, want := range []string{"localrunner.backend.failure", `"harness":"qoder"`, `"phase":"prompt"`, `"category":"process_exit"`, `"reason":"backend process exited"`, `"fingerprint":"`} {
-		if !strings.Contains(logged, want) {
-			t.Fatalf("backend failure log missing %q: %s", want, logged)
+	var failureRecord map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logged), "\n") {
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) == nil && record["msg"] == "localrunner.backend.failure" {
+			failureRecord = record
+			break
 		}
 	}
-	for _, forbidden := range []string{sensitivePrompt, sensitivePassword, sensitiveToken, sensitiveAPIKey, "Bearer"} {
+	if failureRecord == nil {
+		t.Fatalf("backend failure log missing: %s", logged)
+	}
+	for key, want := range map[string]string{"harness": "qoder", "phase": "prompt", "category": "process_exit", "reason": "backend process exited"} {
+		if failureRecord[key] != want {
+			t.Fatalf("backend failure log %s = %#v, want %q: %#v", key, failureRecord[key], want, failureRecord)
+		}
+	}
+	detail, _ := failureRecord["detail"].(string)
+	if !strings.Contains(detail, "Qoder process exited") || !strings.Contains(detail, "not logged in") || utf8.RuneCountInString(detail) > 240 {
+		t.Fatalf("backend failure detail = %q, want actionable bounded summary", detail)
+	}
+	if fingerprint, _ := failureRecord["fingerprint"].(string); !strings.HasPrefix(fingerprint, "sha256:") {
+		t.Fatalf("backend failure fingerprint = %#v", failureRecord["fingerprint"])
+	}
+	for _, forbidden := range []string{sensitivePrompt, sensitiveContext, sensitiveSession, sensitivePassword, sensitiveToken, sensitiveSecret, sensitiveCredential, sensitiveAPIKey} {
 		if strings.Contains(logged, forbidden) {
-			t.Fatalf("backend failure log leaked %q: %s", forbidden, logged)
+			t.Fatalf("backend logs leaked %q: %s", forbidden, logged)
+		}
+	}
+	for _, forbidden := range []string{"password", "token", "secret", "credential", "api_key", "authorization", "bearer", "session_id", "prompt"} {
+		if strings.Contains(strings.ToLower(detail), forbidden) {
+			t.Fatalf("backend failure detail retained sensitive marker %q: %s", forbidden, detail)
 		}
 	}
 }
