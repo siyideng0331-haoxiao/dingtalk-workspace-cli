@@ -192,13 +192,14 @@ func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, op
 			}
 		}
 		var agent *localRunnerOpenCodeAgent
+		sessionStoreKey := localRunnerSessionStoreKey(storedLocalAgentID)
 		if stored != nil {
 			agent, err = localRunnerLocalAgentRestarter(ctx, stored.LoopbackBaseURL, agentRef, localRunnerLocalAgentOptions{
-				WorkDir: workDir, Model: options.Model, AgentCommand: options.AgentCommand, Memory: options.Memory, Yolo: options.Yolo, Timeout: options.AgentTimeout,
+				WorkDir: workDir, Model: options.Model, AgentCommand: options.AgentCommand, SessionStoreKey: sessionStoreKey, Memory: options.Memory, Yolo: options.Yolo, Timeout: options.AgentTimeout,
 			})
 		} else {
 			agent, err = localRunnerLocalAgentStarter(ctx, agentRef, localRunnerLocalAgentOptions{
-				WorkDir: workDir, Model: options.Model, AgentCommand: options.AgentCommand, Memory: options.Memory, Yolo: options.Yolo, Timeout: options.AgentTimeout,
+				WorkDir: workDir, Model: options.Model, AgentCommand: options.AgentCommand, SessionStoreKey: sessionStoreKey, Memory: options.Memory, Yolo: options.Yolo, Timeout: options.AgentTimeout,
 			})
 		}
 		if err != nil {

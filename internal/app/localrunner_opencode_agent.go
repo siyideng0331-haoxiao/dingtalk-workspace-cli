@@ -16,10 +16,13 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"iter"
+	"log/slog"
 	"mime"
 	"net"
 	"net/http"
@@ -48,6 +51,7 @@ type localRunnerLocalAgentOptions struct {
 	WorkDir string
 	Model string
 	AgentCommand string
+	SessionStoreKey string
 	Memory bool
 	Yolo bool
 	Timeout time.Duration
@@ -64,6 +68,7 @@ type localRunnerOpenCodeBackend interface {
 type localRunnerA2AExecutor struct {
 	backend        localRunnerOpenCodeBackend
 	defaultContext string
+	harness        string
 }
 
 var _ a2asrv.AgentExecutor = (*localRunnerA2AExecutor)(nil)
@@ -98,10 +103,12 @@ func (e *localRunnerA2AExecutor) Execute(ctx context.Context, execCtx *a2asrv.Ex
 		}
 		reply, err := e.backend.Prompt(ctx, contextID, prompt)
 		if err != nil {
+			localRunnerLogBackendFailure(ctx, e.harness, "prompt", err)
 			yield(nil, localRunnerA2ASafeError(err))
 			return
 		}
 		if strings.TrimSpace(reply) == "" {
+			localRunnerLogBackendFailure(ctx, e.harness, "prompt", errors.New("empty backend reply"))
 			yield(nil, a2a.NewError(a2a.ErrServerError, "Local agent request failed"))
 			return
 		}
@@ -129,6 +136,48 @@ func localRunnerA2ASafeError(err error) error {
 		return a2a.NewError(a2a.ErrServerError, "Local agent request timed out")
 	default:
 		return a2a.NewError(a2a.ErrServerError, "Local agent request failed")
+	}
+}
+
+func localRunnerLogBackendFailure(ctx context.Context, harness, phase string, err error) {
+	if err == nil {
+		return
+	}
+	category, reason := localRunnerBackendFailureReason(err)
+	digest := sha256.Sum256([]byte(err.Error()))
+	slog.DebugContext(ctx, "localrunner.backend.failure",
+		"harness", strings.ToLower(strings.TrimSpace(harness)),
+		"phase", phase,
+		"category", category,
+		"reason", reason,
+		"error_type", fmt.Sprintf("%T", err),
+		"fingerprint", fmt.Sprintf("sha256:%x", digest[:8]),
+	)
+}
+
+func localRunnerBackendFailureReason(err error) (string, string) {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled", "backend request canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout", "backend request timed out"
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "empty backend reply"):
+		return "empty_reply", "backend returned an empty reply"
+	case strings.Contains(message, "initialize"), strings.Contains(message, "初始化"):
+		return "initialization", "backend initialization failed"
+	case strings.Contains(message, "broken pipe"), strings.Contains(message, "write"), strings.Contains(message, "写入"):
+		return "request_write", "backend request write failed"
+	case strings.Contains(message, "stdout"), strings.Contains(message, "read"), strings.Contains(message, "读取"):
+		return "response_read", "backend response read failed"
+	case strings.Contains(message, "start"), strings.Contains(message, "启动"):
+		return "startup", "backend process startup failed"
+	case strings.Contains(message, "exit"), strings.Contains(message, "exited"), strings.Contains(message, "退出"), strings.Contains(message, "status"):
+		return "process_exit", "backend process exited"
+	default:
+		return "backend", "backend request failed"
 	}
 }
 
@@ -160,8 +209,12 @@ func startLocalRunnerLocalAgentAt(ctx context.Context, rawOrigin, agentRef strin
 }
 
 func startLocalRunnerLocalAgentOn(ctx context.Context, agentRef string, options localRunnerLocalAgentOptions, listenAddress string) (*localRunnerOpenCodeAgent, error) {
+	sessionStoreKey := strings.TrimSpace(options.SessionStoreKey)
+	if sessionStoreKey == "" {
+		sessionStoreKey = localRunnerSessionStoreKey(localRunnerLocalAgentDefaultID(agentRef, options.WorkDir))
+	}
 	backend, err := helpers.StartLocalAgentBackend(ctx, helpers.LocalAgentBackendOptions{
-		Channel: agentRef, AgentCommand: options.AgentCommand, WorkDir: options.WorkDir, Model: options.Model, Memory: options.Memory, Yolo: options.Yolo, Timeout: options.Timeout,
+		Channel: agentRef, ClientID: sessionStoreKey, AgentCommand: options.AgentCommand, WorkDir: options.WorkDir, Model: options.Model, Memory: options.Memory, Yolo: options.Yolo, Timeout: options.Timeout,
 	})
 	if err != nil {
 		return nil, err
@@ -206,7 +259,7 @@ func startLocalRunnerLocalAgentWithBackend(backend localRunnerOpenCodeBackend, l
 		}},
 	}
 	cardProducer := localRunnerCompatCardProducer{AgentCardProducer: a2av0.NewStaticAgentCardProducer(card)}
-	executor := &localRunnerA2AExecutor{backend: backend, defaultContext: "localrunner-agent-" + uuid.NewString()}
+	executor := &localRunnerA2AExecutor{backend: backend, defaultContext: "localrunner-agent-" + uuid.NewString(), harness: agentRef}
 	rpcHandler := a2av0.NewJSONRPCHandler(a2asrv.NewHandler(executor))
 	cardHandler := a2asrv.NewAgentCardHandler(cardProducer)
 
@@ -227,6 +280,14 @@ func startLocalRunnerLocalAgentWithBackend(backend localRunnerOpenCodeBackend, l
 		close(agent.done)
 	}()
 	return agent, nil
+}
+
+func localRunnerSessionStoreKey(localAgentID string) string {
+	localAgentID = strings.TrimSpace(localAgentID)
+	if localAgentID == "" {
+		return ""
+	}
+	return "localrunner-" + localAgentID
 }
 
 func localRunnerLocalAgentDisplayName(agentRef string) (string, bool) {
