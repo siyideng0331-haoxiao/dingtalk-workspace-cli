@@ -99,7 +99,8 @@ DWS_CONFIG_DIR=/path/to/agent-a/.dws DWS_PROFILE=ding-corp:987654 dws auth statu
 
 - 2026-08-23：`login-dws` 在 exchange 前从当前 MCP `/cli/clientId` 自动取得并注入 OAuth ClientID。
   原因：AuthCode 兑换必须使用签发它的 DWS OAuth 应用身份，调用方和 OpenAPI 响应不应感知或传递
-  ClientID。
+  ClientID；隐藏的 `auth exchange` 调试切面也复用同一注入方式，确保手动 AuthCode 验收与一键登录
+  走相同的兑换端点。
 - 2026-08-22：新增 `--auth-code + --corp-id + --uid` 调试切面，并将精确 profile 的登录/刷新限制为
   只写精确身份槽位。原因：复用相同 exchange 流程验收已有 AuthCode，同时避免同组织数字员工覆盖
   操作人的全局兼容登录态。
