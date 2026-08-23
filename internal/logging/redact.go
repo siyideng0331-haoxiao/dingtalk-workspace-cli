@@ -28,10 +28,10 @@ import (
 
 var (
 	freeTextBearerPattern = regexp.MustCompile(`(?i)\bbearer[[:space:]]+[A-Za-z0-9._~+/=-]+`)
-	freeTextSensitivePairPattern = regexp.MustCompile(`(?i)["']?(password|passwd|pwd|token|secret|credential|api[_-]?key|authorization|context([_-]?id)?|session([_-]?id)?|prompt)["']?[[:space:]]*[:=][[:space:]]*("[^"\r\n]*"|'[^'\r\n]*'|[^[:space:],;&]+)`)
-	freeTextSensitiveFlagPattern = regexp.MustCompile(`(?i)--(password|passwd|pwd|token|secret|credential|api[_-]?key|authorization|context([_-]?id)?|session([_-]?id)?|prompt)[[:space:]]+("[^"\r\n]*"|'[^'\r\n]*'|[^[:space:],;&]+)`)
+	freeTextSensitivePairPattern = regexp.MustCompile(`(?i)["']?(password|passwd|pwd|token|secret|credential|cookie|api[_-]?key|authorization|context([_-]?id)?|session([_-]?id)?|prompt)["']?[[:space:]]*[:=][[:space:]]*("[^"\r\n]*"|'[^'\r\n]*'|[^[:space:],;&]+)`)
+	freeTextSensitiveFlagPattern = regexp.MustCompile(`(?i)--(password|passwd|pwd|token|secret|credential|cookie|api[_-]?key|authorization|context([_-]?id)?|session([_-]?id)?|prompt)[[:space:]]+("[^"\r\n]*"|'[^'\r\n]*'|[^[:space:],;&]+)`)
 	freeTextUUIDPattern = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
-	freeTextSensitiveMarkerPattern = regexp.MustCompile(`(?i)\b(password|passwd|pwd|token|secret|credential|authorization|bearer|context|session|prompt)\b|api[_-]?key`)
+	freeTextSensitiveMarkerPattern = regexp.MustCompile(`(?i)\b(password|passwd|pwd|token|secret|credential|cookie|authorization|bearer|context|session|prompt)\b|api[_-]?key`)
 )
 
 // sensitiveKeys are header/field names whose values must be redacted in logs.
@@ -124,6 +124,17 @@ func SanitizeArguments(args map[string]any, maxBytes int) string {
 // such as the current prompt and A2A context ID. If a sensitive marker remains
 // after sanitization, the function fails closed with an empty result.
 func SanitizeFreeText(text string, exactSecrets []string, maxRunes int) string {
+	return sanitizeFreeText(text, exactSecrets, maxRunes, true)
+}
+
+// SanitizeMessageText applies the same fail-closed secret redaction as
+// SanitizeFreeText while preserving ordinary whitespace in delivered message
+// text, including the leading space of an appended streaming delta.
+func SanitizeMessageText(text string, exactSecrets []string, maxRunes int) string {
+	return sanitizeFreeText(text, exactSecrets, maxRunes, false)
+}
+
+func sanitizeFreeText(text string, exactSecrets []string, maxRunes int, collapseWhitespace bool) string {
 	if maxRunes <= 0 {
 		return ""
 	}
@@ -142,12 +153,17 @@ func SanitizeFreeText(text string, exactSecrets []string, maxRunes int) string {
 	sanitized = freeTextUUIDPattern.ReplaceAllString(sanitized, "[redacted]")
 	sanitized = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
+			if !collapseWhitespace && (r == '\n' || r == '\t') {
+				return r
+			}
 			return ' '
 		}
 		return r
 	}, sanitized)
-	sanitized = strings.Join(strings.Fields(sanitized), " ")
-	if sanitized == "" || freeTextSensitiveMarkerPattern.MatchString(sanitized) {
+	if collapseWhitespace {
+		sanitized = strings.Join(strings.Fields(sanitized), " ")
+	}
+	if strings.TrimSpace(sanitized) == "" || freeTextSensitiveMarkerPattern.MatchString(sanitized) {
 		return ""
 	}
 	runes := []rune(sanitized)

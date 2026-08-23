@@ -29,7 +29,9 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/helpers"
 	dwslogging "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/logging"
@@ -46,7 +48,10 @@ const (
 	localRunnerOpenCodeCardPath     = a2asrv.WellKnownAgentCardPath
 	localRunnerOpenCodeRPCPath      = "/rpc"
 	localRunnerOpenCodeMaxBodyBytes = 64 << 10
+	localRunnerA2AMessageLogMaxRunes = 8192
 )
+
+var localRunnerA2AContentDebugEnabled atomic.Bool
 
 type localRunnerLocalAgentOptions struct {
 	WorkDir string
@@ -103,7 +108,13 @@ func (e *localRunnerA2AExecutor) Execute(ctx context.Context, execCtx *a2asrv.Ex
 		if strings.TrimSpace(contextID) == "" {
 			contextID = e.defaultContext
 		}
-		if localRunnerA2AStreamingCall(ctx) {
+		streaming := localRunnerA2AStreamingCall(ctx)
+		mode := "sync"
+		if streaming {
+			mode = "stream"
+		}
+		localRunnerLogA2AMessage(ctx, "localrunner.a2a.message.inbound", e.harness, mode, prompt, contextID, execCtx.Message.ID, 0, false, false)
+		if streaming {
 			e.executeStream(ctx, execCtx, contextID, prompt, yield)
 			return
 		}
@@ -120,7 +131,9 @@ func (e *localRunnerA2AExecutor) Execute(ctx context.Context, execCtx *a2asrv.Ex
 		}
 		message := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(reply))
 		message.ContextID = contextID
-		yield(message, nil)
+		if yield(message, nil) {
+			localRunnerLogA2AMessage(ctx, "localrunner.a2a.message.outbound", e.harness, mode, reply, contextID, execCtx.Message.ID, 1, false, true)
+		}
 	}
 }
 
@@ -163,6 +176,28 @@ func localRunnerLogBackendFailure(ctx context.Context, harness, phase, prompt, c
 		"detail", detail,
 		"error_type", fmt.Sprintf("%T", err),
 		"fingerprint", fmt.Sprintf("sha256:%x", digest[:8]),
+	)
+}
+
+func localRunnerLogA2AMessage(ctx context.Context, eventName, harness, mode, content, threadID, messageID string, sequence int, appendPart, last bool) {
+	if !localRunnerA2AContentDebugEnabled.Load() {
+		return
+	}
+	sanitized := dwslogging.SanitizeMessageText(content, []string{threadID, messageID}, localRunnerA2AMessageLogMaxRunes)
+	if sanitized == "" {
+		sanitized = "[redacted]"
+	}
+	digest := sha256.Sum256([]byte(threadID + "\x00" + messageID))
+	slog.DebugContext(ctx, eventName,
+		"harness", strings.ToLower(strings.TrimSpace(harness)),
+		"mode", mode,
+		"sequence", sequence,
+		"append", appendPart,
+		"last", last,
+		"content", sanitized,
+		"content_bytes", len(content),
+		"truncated", utf8.RuneCountInString(content) > localRunnerA2AMessageLogMaxRunes,
+		"turn_hash", fmt.Sprintf("sha256:%x", digest[:8]),
 	)
 }
 

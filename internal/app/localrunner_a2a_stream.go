@@ -136,6 +136,7 @@ func (e *localRunnerA2AExecutor) executeStream(ctx context.Context, execCtx *a2a
 		if !yield(event, nil) {
 			return context.Canceled
 		}
+		localRunnerLogA2AMessage(ctx, "localrunner.a2a.message.outbound", e.harness, "stream", text, contextID, execCtx.Message.ID, artifactEvents+1, appendPart, last)
 		emitted = snapshot
 		artifactEvents++
 		return nil
