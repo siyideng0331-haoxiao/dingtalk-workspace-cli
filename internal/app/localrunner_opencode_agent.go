@@ -114,6 +114,7 @@ func (e *localRunnerA2AExecutor) Execute(ctx context.Context, execCtx *a2asrv.Ex
 			mode = "stream"
 		}
 		localRunnerLogA2AMessage(ctx, "localrunner.a2a.message.inbound", e.harness, mode, prompt, contextID, execCtx.Message.ID, 0, false, false)
+		localRunnerLogA2AInboundEvent(ctx, e.harness, mode, execCtx.Message, contextID, execCtx.Message.ID)
 		eventSequence := 0
 		deliveredYield := func(event a2a.Event, eventErr error) bool {
 			delivered := yield(event, eventErr)
@@ -211,13 +212,21 @@ func localRunnerLogA2AMessage(ctx context.Context, eventName, harness, mode, con
 }
 
 func localRunnerLogA2AEvent(ctx context.Context, harness, mode string, event a2a.Event, threadID, messageID string, sequence int) {
+	localRunnerLogA2AEventRecord(ctx, "localrunner.a2a.event.outbound", harness, mode, event, threadID, messageID, sequence)
+}
+
+func localRunnerLogA2AInboundEvent(ctx context.Context, harness, mode string, event a2a.Event, threadID, messageID string) {
+	localRunnerLogA2AEventRecord(ctx, "localrunner.a2a.event.inbound", harness, mode, event, threadID, messageID, 1)
+}
+
+func localRunnerLogA2AEventRecord(ctx context.Context, eventName, harness, mode string, event a2a.Event, threadID, messageID string, sequence int) {
 	if !localRunnerA2AContentDebugEnabled.Load() || event == nil {
 		return
 	}
 	eventType := localRunnerA2AEventType(event)
 	eventJSON, eventBytes, truncated := localRunnerSafeA2AEventJSON(event, eventType, []string{threadID, messageID})
 	digest := sha256.Sum256([]byte(threadID + "\x00" + messageID))
-	slog.DebugContext(ctx, "localrunner.a2a.event.outbound",
+	slog.DebugContext(ctx, eventName,
 		"harness", strings.ToLower(strings.TrimSpace(harness)),
 		"mode", mode,
 		"sequence", sequence,
@@ -444,9 +453,15 @@ func startLocalRunnerLocalAgentOn(ctx context.Context, agentRef string, options 
 	if sessionStoreKey == "" {
 		sessionStoreKey = localRunnerSessionStoreKey(localRunnerLocalAgentDefaultID(agentRef, options.WorkDir))
 	}
-	backend, err := helpers.StartLocalAgentBackend(ctx, helpers.LocalAgentBackendOptions{
-		Channel: agentRef, ClientID: sessionStoreKey, AgentCommand: options.AgentCommand, WorkDir: options.WorkDir, Model: options.Model, Memory: options.Memory, Yolo: options.Yolo, Timeout: options.Timeout,
-	})
+	var backend localRunnerOpenCodeBackend
+	var err error
+	if isLocalRunnerDedicatedHarness(agentRef) {
+		backend, err = startLocalRunnerHarnessBackend(ctx, agentRef, options, sessionStoreKey)
+	} else {
+		backend, err = helpers.StartLocalAgentBackend(ctx, helpers.LocalAgentBackendOptions{
+			Channel: agentRef, ClientID: sessionStoreKey, AgentCommand: options.AgentCommand, WorkDir: options.WorkDir, Model: options.Model, Memory: options.Memory, Yolo: options.Yolo, Timeout: options.Timeout,
+		})
+	}
 	if err != nil {
 		return nil, err
 	}

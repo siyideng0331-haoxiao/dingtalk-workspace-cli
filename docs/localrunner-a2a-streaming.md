@@ -25,11 +25,24 @@ dws --debug deap runtime start-local --harness qoder --work-dir ./project
 
 `localrunner.a2a.message.inbound` records the merged text of one valid user message. For synchronous Send, `localrunner.a2a.message.outbound` records the final Agent text only after it is yielded. For Streaming, an outbound event is recorded only after each artifact update is yielded, and its `content` is the delivered delta or replacement rather than the accumulated Harness snapshot. Empty `working` heartbeats do not produce content events.
 
-`localrunner.a2a.event.outbound` records every successfully yielded outbound A2A event. Synchronous Send produces one `message` event; Streaming records the ordered `task`, `status-update`, and `artifact-update` sequence, including `working` heartbeats and the terminal status. `sequence` starts at 1 for each request, while `event_type` and `kind` identify the wire event. `event_json` is a parseable, sanitized JSON serialization of the compatibility-wire result; use it instead of the text-only message event when reconstructing a frame sequence.
+`localrunner.a2a.event.inbound` records the complete accepted compatibility-wire user message before Harness dispatch. `localrunner.a2a.event.outbound` records every successfully yielded outbound A2A event. Synchronous Send produces one outbound `message` event; Streaming records the ordered `task`, `status-update`, and `artifact-update` sequence, including `working` heartbeats and the terminal status. Each direction uses a stable sequence beginning at 1 for the request, while `event_type` and `kind` identify the wire event. `event_json` is a parseable, sanitized JSON serialization of the compatibility-wire object; use these event records instead of the text-only message events when reconstructing a frame sequence.
 
 These message and event logs are disabled unless `--debug` is explicitly set, including in the diagnostic file logger. Values matching authorization, cookie, token, credential, API key, context, session, prompt, or Bearer patterns are redacted through the shared free-text sanitizer. Identity-shaped JSON fields are preserved structurally but their values are replaced with `[redacted]`; context, session, message, task, artifact, and request identifiers are never recorded directly. `turn_hash` is an irreversible short SHA-256 correlation value. Message events report `content_bytes`; serialized events report `event_bytes`. Both limit their sanitized value to 8,192 Unicode characters and set `truncated=true` when the original exceeds that limit. A truncated `event_json` remains valid JSON with a sanitized preview. Streaming message logs only delivered deltas/replacements so growing snapshots do not create quadratic log volume.
 
-## Harness adapters
+## LocalRunner-owned Harness lifecycle
+
+LocalRunner owns dedicated transport implementations under `internal/app`; it does not change or wrap the shared DevConnect forwarders. `start-local` synchronously prewarms the selected transport before publishing an A2A endpoint. A missing binary, rejected initialization, exited process, or unhealthy server therefore fails startup instead of waiting for the first user request. Stopping the Runner closes every process or server it owns.
+
+| Harness | LocalRunner-owned transport | Context isolation |
+|---|---|---|
+| Qoder | One persistent `qodercli` streaming-input/stream-json process. | A2A context maps to a stable native `session_id`; turns are serialized over the process. |
+| Codex | One initialized `codex app-server --stdio` process for the Runner lifetime. | A2A context maps to a native thread; app-server calls are serialized without restarting the server per turn. |
+| OpenCode | One authenticated loopback `opencode serve` process owned by the Runner. | A2A context maps to a native OpenCode session. |
+| Claude Code | A bounded context-owned process pool using streaming input/output; one prewarmed process is claimed by the first context. | Each A2A context receives its own resident process/session because one Claude streaming-input process is one conversation. |
+
+When memory is enabled, context-to-native-session identity is stored below the profile-scoped DWS config directory so a normal Runner restart can resume the native conversation. Disabling memory keeps mappings in the current process only. The dedicated transports do not introduce a remote HTTP wrapper; OpenCode's loopback server is its official local transport.
+
+## DevConnect compatibility
 
 | Harness | Incremental source | Existing DevConnect robot behavior |
 |---|---|---|
@@ -60,3 +73,5 @@ The 90-second policy is streaming-only. It must not be installed through the A2A
 | 2026-08-23 | Defined Streaming Tunnel `request_start.deadlineEpochMs=0` as no absolute deadline while retaining positive absolute deadlines and rejecting negative values. | OpenAPI streaming requests must reach LocalRunner without reintroducing the removed total-duration limit, while cancellation and non-streaming deadline semantics remain explicit and interoperable. |
 | 2026-08-24 | Removed inbound user-role history from the submitted LocalRunner streaming Task while keeping the Task lifecycle and assistant artifacts unchanged. | Some A2A consumers render submitted Task history as visible Agent output, which repeated the user's question before the actual Harness answer. |
 | 2026-08-24 | Added debug-only sanitized serialization logs for every successfully yielded LocalRunner A2A event, with stable per-request sequence numbers and bounded valid JSON. | Remote frame debugging needs the complete Task/status/artifact order, while credentials and raw identity values must never enter logs. |
+| 2026-08-24 | Moved the four LocalRunner Harness transports to dedicated, synchronously prewarmed Runner-owned lifecycles while leaving shared DevConnect production code unchanged. | Long-lived app-server/streaming-input/server processes remove per-turn cold starts, startup failures become observable before endpoint publication, and context-specific native sessions remain isolated. |
+| 2026-08-24 | Added debug-only full inbound compatibility-wire event serialization with the same recursive redaction and valid-JSON truncation used for outbound events. | Remote diagnosis needs the accepted request object as well as the delivered response sequence, without exposing credentials or raw A2A/native identifiers. |
