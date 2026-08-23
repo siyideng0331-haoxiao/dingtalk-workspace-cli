@@ -23,6 +23,10 @@ import (
 type fakeLocalRunnerOpenCodeBackend struct {
 	mu         sync.Mutex
 	calls      []localRunnerOpenCodePromptCall
+	streamCalls []localRunnerOpenCodePromptCall
+	streamSnapshots []string
+	streamReply string
+	streamErr error
 	reply      string
 	err        error
 	closeCalls int
@@ -38,6 +42,24 @@ func (f *fakeLocalRunnerOpenCodeBackend) Prompt(_ context.Context, sessionKey, p
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, localRunnerOpenCodePromptCall{sessionKey: sessionKey, prompt: prompt})
 	return f.reply, f.err
+}
+
+func (f *fakeLocalRunnerOpenCodeBackend) Stream(_ context.Context, sessionKey, prompt string, onDelta func(string)) (string, error) {
+	f.mu.Lock()
+	f.streamCalls = append(f.streamCalls, localRunnerOpenCodePromptCall{sessionKey: sessionKey, prompt: prompt})
+	snapshots := append([]string(nil), f.streamSnapshots...)
+	reply := f.streamReply
+	err := f.streamErr
+	if reply == "" && err == nil {
+		reply = f.reply
+	}
+	f.mu.Unlock()
+	for _, snapshot := range snapshots {
+		if onDelta != nil {
+			onDelta(snapshot)
+		}
+	}
+	return reply, err
 }
 
 func (f *fakeLocalRunnerOpenCodeBackend) Close() error {
@@ -116,7 +138,11 @@ func TestLocalRunnerOfficialA2AAdapterIsSharedAcrossLocalAgentChannels(t *testin
 }
 
 func TestLocalRunnerOpenCodeAgentServesCardSendAndFinalStream(t *testing.T) {
-	backend := &fakeLocalRunnerOpenCodeBackend{reply: "OpenCode final answer"}
+	backend := &fakeLocalRunnerOpenCodeBackend{
+		reply: "OpenCode final answer",
+		streamSnapshots: []string{"OpenCode", "OpenCode streaming"},
+		streamReply: "OpenCode streaming answer",
+	}
 	agent, err := startLocalRunnerOpenCodeAgentWithBackend(backend, "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -199,9 +225,156 @@ func TestLocalRunnerOpenCodeAgentServesCardSendAndFinalStream(t *testing.T) {
 	}
 	streamBody, err = io.ReadAll(bufio.NewReader(response.Body))
 	response.Body.Close()
-	if err != nil || strings.Count(string(streamBody), "data: ") != 1 || !strings.Contains(string(streamBody), `"text":"OpenCode final answer"`) {
+	if err != nil {
 		t.Fatalf("official SSE body = %q err=%v", streamBody, err)
 	}
+	events := decodeLocalRunnerSSEEvents(t, streamBody)
+	if len(events) < 5 {
+		t.Fatalf("official SSE events = %d, want task lifecycle and incremental artifacts: %s", len(events), streamBody)
+	}
+	wantKinds := []string{"task", "status-update", "artifact-update", "artifact-update", "status-update"}
+	for index, want := range wantKinds {
+		if got := events[index]["kind"]; got != want {
+			t.Fatalf("official SSE event %d kind = %#v, want %q: %s", index, got, want, streamBody)
+		}
+	}
+	if state := nestedString(events[0], "status", "state"); state != "submitted" {
+		t.Fatalf("submitted task state = %q: %s", state, streamBody)
+	}
+	if state := nestedString(events[1], "status", "state"); state != "working" {
+		t.Fatalf("working task state = %q: %s", state, streamBody)
+	}
+	if text := nestedString(events[2], "artifact", "parts", "0", "text"); text != "OpenCode" {
+		t.Fatalf("first artifact text = %q: %s", text, streamBody)
+	}
+	if text := nestedString(events[3], "artifact", "parts", "0", "text"); text != " streaming answer" || events[3]["append"] != true {
+		t.Fatalf("incremental artifact = %#v: %s", events[3], streamBody)
+	}
+	if state := nestedString(events[len(events)-1], "status", "state"); state != "completed" {
+		t.Fatalf("completed task state = %q: %s", state, streamBody)
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if len(backend.calls) != 1 || len(backend.streamCalls) != 1 || backend.streamCalls[0].sessionKey != "context-1" || backend.streamCalls[0].prompt != "first\nsecond" {
+		t.Fatalf("prompt calls = %#v stream calls = %#v", backend.calls, backend.streamCalls)
+	}
+}
+
+func TestLocalRunnerArtifactDeltaUsesSuffixAndFallsBackToReplacement(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		previous string
+		next string
+		wantText string
+		wantAppend bool
+	}{
+		{name: "first snapshot", next: "hello", wantText: "hello"},
+		{name: "prefix growth", previous: "hello", next: "hello world", wantText: " world", wantAppend: true},
+		{name: "rewrite", previous: "hello world", next: "hello there", wantText: "hello there"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			text, appendPart := localRunnerArtifactDelta(test.previous, test.next)
+			if text != test.wantText || appendPart != test.wantAppend {
+				t.Fatalf("localRunnerArtifactDelta(%q, %q) = (%q, %v), want (%q, %v)", test.previous, test.next, text, appendPart, test.wantText, test.wantAppend)
+			}
+		})
+	}
+}
+
+func TestLocalRunnerRequiredHarnessesUseA2AStreamingExecutor(t *testing.T) {
+	for _, harness := range []string{"qoder", "codex", "opencode", "claudecode"} {
+		t.Run(harness, func(t *testing.T) {
+			backend := &fakeLocalRunnerOpenCodeBackend{
+				streamSnapshots: []string{"partial"},
+				streamReply: "partial final",
+			}
+			agent, err := startLocalRunnerLocalAgentWithBackend(backend, "127.0.0.1:0", harness)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer agent.Close()
+
+			body := []byte(`{"jsonrpc":"2.0","id":"stream-1","method":"message/stream","params":{"message":{"kind":"message","role":"user","messageId":"message-1","contextId":"context-1","parts":[{"kind":"text","text":"hello"}]}}}`)
+			response := postLocalRunnerOpenCode(t, agent.RPCURL(), body)
+			streamBody, readErr := io.ReadAll(response.Body)
+			response.Body.Close()
+			if readErr != nil || response.StatusCode != http.StatusOK {
+				t.Fatalf("stream status=%d body=%s err=%v", response.StatusCode, streamBody, readErr)
+			}
+			events := decodeLocalRunnerSSEEvents(t, streamBody)
+			if len(events) < 5 || nestedString(events[2], "artifact", "parts", "0", "text") != "partial" || nestedString(events[len(events)-1], "status", "state") != "completed" {
+				t.Fatalf("%s stream lifecycle = %#v", harness, events)
+			}
+			backend.mu.Lock()
+			streamCalls := len(backend.streamCalls)
+			promptCalls := len(backend.calls)
+			backend.mu.Unlock()
+			if streamCalls != 1 || promptCalls != 0 {
+				t.Fatalf("%s stream calls=%d prompt calls=%d", harness, streamCalls, promptCalls)
+			}
+		})
+	}
+}
+
+func TestLocalRunnerA2AStreamingBackendFailureEndsTaskWithoutLeakingJSONRPCError(t *testing.T) {
+	backend := &fakeLocalRunnerOpenCodeBackend{streamErr: errors.New("backend failed after stream start")}
+	agent, err := startLocalRunnerLocalAgentWithBackend(backend, "127.0.0.1:0", "qoder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agent.Close()
+
+	body := []byte(`{"jsonrpc":"2.0","id":"stream-1","method":"message/stream","params":{"message":{"kind":"message","role":"user","messageId":"message-1","parts":[{"kind":"text","text":"hello"}]}}}`)
+	response := postLocalRunnerOpenCode(t, agent.RPCURL(), body)
+	streamBody, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("stream status=%d body=%s err=%v", response.StatusCode, streamBody, readErr)
+	}
+	events := decodeLocalRunnerSSEEvents(t, streamBody)
+	if len(events) != 3 || nestedString(events[2], "status", "state") != "failed" || nestedString(events[2], "status", "message", "parts", "0", "text") != "Local agent request failed" {
+		t.Fatalf("failed stream lifecycle = %#v body=%s", events, streamBody)
+	}
+	if bytes.Contains(streamBody, []byte("backend failed")) || bytes.Contains(streamBody, []byte(`"error"`)) {
+		t.Fatalf("failed stream exposed backend/JSON-RPC error: %s", streamBody)
+	}
+}
+
+func decodeLocalRunnerSSEEvents(t *testing.T, body []byte) []map[string]any {
+	t.Helper()
+	var events []map[string]any
+	for _, line := range strings.Split(string(body), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var envelope struct {
+			Result map[string]any `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &envelope); err != nil {
+			t.Fatalf("decode SSE event %q: %v", line, err)
+		}
+		events = append(events, envelope.Result)
+	}
+	return events
+}
+
+func nestedString(value any, path ...string) string {
+	current := value
+	for _, key := range path {
+		switch item := current.(type) {
+		case map[string]any:
+			current = item[key]
+		case []any:
+			if key != "0" || len(item) == 0 {
+				return ""
+			}
+			current = item[0]
+		default:
+			return ""
+		}
+	}
+	text, _ := current.(string)
+	return text
 }
 
 func TestLocalRunnerOpenCodeAgentUsesStablePerInstanceDefaultContext(t *testing.T) {

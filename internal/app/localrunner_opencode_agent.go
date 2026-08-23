@@ -63,6 +63,7 @@ var localRunnerLocalAgentRestarter = startLocalRunnerLocalAgentAt
 
 type localRunnerOpenCodeBackend interface {
 	Prompt(context.Context, string, string) (string, error)
+	Stream(context.Context, string, string, func(string)) (string, error)
 	Close() error
 }
 
@@ -101,6 +102,10 @@ func (e *localRunnerA2AExecutor) Execute(ctx context.Context, execCtx *a2asrv.Ex
 		contextID := execCtx.Message.ContextID
 		if strings.TrimSpace(contextID) == "" {
 			contextID = e.defaultContext
+		}
+		if localRunnerA2AStreamingCall(ctx) {
+			e.executeStream(ctx, execCtx, contextID, prompt, yield)
+			return
 		}
 		reply, err := e.backend.Prompt(ctx, contextID, prompt)
 		if err != nil {

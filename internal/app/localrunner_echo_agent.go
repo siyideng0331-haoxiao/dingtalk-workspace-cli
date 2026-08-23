@@ -31,6 +31,14 @@ func (localRunnerTestEchoBackend) Prompt(_ context.Context, _ string, prompt str
 	return prompt, nil
 }
 
+func (localRunnerTestEchoBackend) Stream(ctx context.Context, contextID, prompt string, onDelta func(string)) (string, error) {
+	reply, err := (localRunnerTestEchoBackend{}).Prompt(ctx, contextID, prompt)
+	if err == nil && onDelta != nil {
+		onDelta(reply)
+	}
+	return reply, err
+}
+
 func (localRunnerTestEchoBackend) Close() error { return nil }
 
 func startLocalRunnerTestEchoAgent() (*localRunnerBuiltInAgent, error) {

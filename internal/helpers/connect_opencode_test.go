@@ -109,9 +109,7 @@ func TestOpencodeForwarderUsesServerSessionAPI(t *testing.T) {
 		server:   &opencodeServer{baseURL: ts.URL, httpClient: ts.Client()},
 	}
 
-	reply, err := f.forwardStream(context.Background(), "conv-1", "hi", func(string) {
-		t.Fatal("opencode server mode must not stream deltas")
-	})
+	reply, err := f.forwardStream(context.Background(), "conv-1", "hi", nil)
 	if err != nil {
 		t.Fatalf("first forward: %v", err)
 	}
@@ -137,6 +135,82 @@ func TestOpencodeForwarderUsesServerSessionAPI(t *testing.T) {
 	}
 	if f.canStream() {
 		t.Fatal("opencode server mode should be one-shot for group chat replies")
+	}
+}
+
+func TestOpencodeForwarderStreamsAsyncWithPollingFallbackWithoutEnablingRobotCards(t *testing.T) {
+	dir := t.TempDir()
+	var userMessageID string
+	messagePolls := 0
+	asyncCalls := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/global/health":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"healthy":true,"version":"test"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/session":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"ses_stream"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/event":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"type\":\"server.connected\",\"properties\":{}}\n\n"))
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		case r.Method == http.MethodPost && r.URL.Path == "/session/ses_stream/prompt_async":
+			var body struct {
+				MessageID string `json:"messageID"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			userMessageID = body.MessageID
+			asyncCalls++
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/session/ses_stream/message":
+			messagePolls++
+			text := "Open"
+			completed := ""
+			if messagePolls >= 2 {
+				text = "OpenCode"
+			}
+			if messagePolls >= 3 {
+				completed = `,"completed":3`
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"info":{"id":"msg_assistant","role":"assistant","parentID":"` + userMessageID + `","time":{"created":1` + completed + `}},"parts":[{"type":"text","text":"` + text + `"}]}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/session/status":
+			w.Header().Set("Content-Type", "application/json")
+			if messagePolls < 3 {
+				_, _ = w.Write([]byte(`{"ses_stream":{"type":"busy"}}`))
+			} else {
+				_, _ = w.Write([]byte(`{}`))
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+	f := &opencodeForwarder{
+		bin: "opencode", timeout: 5 * time.Second, workDir: dir,
+		sessions: newOpencodeSessions(""),
+		server: &opencodeServer{baseURL: ts.URL, httpClient: ts.Client()},
+	}
+	var snapshots []string
+	reply, err := f.forwardStream(context.Background(), "conv-stream", "hi", func(snapshot string) {
+		snapshots = append(snapshots, snapshot)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply != "OpenCode" || len(snapshots) < 2 || snapshots[0] != "Open" || snapshots[len(snapshots)-1] != "OpenCode" {
+		t.Fatalf("reply=%q snapshots=%q", reply, snapshots)
+	}
+	if asyncCalls != 1 || messagePolls < 3 || userMessageID == "" {
+		t.Fatalf("asyncCalls=%d messagePolls=%d userMessageID=%q", asyncCalls, messagePolls, userMessageID)
+	}
+	if f.canStream() {
+		t.Fatal("A2A-only OpenCode streaming must not enable DevConnect robot card streaming")
 	}
 }
 

@@ -14,6 +14,7 @@
 package helpers
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -115,12 +116,20 @@ func (f *opencodeForwarder) forwardWithAttachments(ctx context.Context, convID, 
 	return f.forwardStreamWithAttachments(ctx, convID, text, attachments, nil)
 }
 
-func (f *opencodeForwarder) forwardStream(ctx context.Context, convID, text string, _ func(string)) (string, error) {
-	return f.forwardStreamWithAttachments(ctx, convID, text, nil, nil)
+func (f *opencodeForwarder) forwardStream(ctx context.Context, convID, text string, onDelta func(string)) (string, error) {
+	return f.forwardStreamWithAttachments(ctx, convID, text, nil, onDelta)
 }
 
-func (f *opencodeForwarder) forwardStreamWithAttachments(ctx context.Context, convID, text string, attachments []connectMediaAttachment, _ func(string)) (string, error) {
-	reply, err := f.forwardRawWithAttachments(ctx, convID, text, attachments)
+func (f *opencodeForwarder) forwardStreamWithAttachments(ctx context.Context, convID, text string, attachments []connectMediaAttachment, onDelta func(string)) (string, error) {
+	var reply string
+	var err error
+	if onDelta == nil {
+		reply, err = f.forwardRawWithAttachments(ctx, convID, text, attachments)
+	} else {
+		reply, err = f.forwardRawStreamWithAttachments(ctx, convID, text, attachments, func(snapshot string) {
+			onDelta(brandReply(f.name(), snapshot))
+		})
+	}
 	if err != nil {
 		return "", err
 	}
@@ -131,6 +140,22 @@ func (f *opencodeForwarder) forwardStreamWithAttachments(ctx context.Context, co
 		return opencodeNoTextReply, nil
 	}
 	return brandReply(f.name(), reply), nil
+}
+
+func (f *opencodeForwarder) forwardRawStreamWithAttachments(ctx context.Context, convID, text string, attachments []connectMediaAttachment, onDelta func(string)) (string, error) {
+	ctx, cancel := applyTimeout(ctx, f.timeout)
+	defer cancel()
+
+	client, err := f.server.ensure(ctx)
+	if err != nil {
+		return "", err
+	}
+	reply, err := f.forwardRawStreamWithClient(ctx, client, convID, text, attachments, onDelta)
+	if errors.Is(err, errOpencodeSessionMissing) && f.sessions != nil {
+		f.sessions.reset(convID)
+		reply, err = f.forwardRawStreamWithClient(ctx, client, convID, text, attachments, onDelta)
+	}
+	return reply, err
 }
 
 func (f *opencodeForwarder) forwardRaw(ctx context.Context, convID, text string) (string, error) {
@@ -168,6 +193,26 @@ func (f *opencodeForwarder) forwardWithClient(ctx context.Context, client *openc
 }
 
 func (f *opencodeForwarder) forwardRawWithClient(ctx context.Context, client *opencodeHTTPClient, convID, text string, attachments []connectMediaAttachment) (string, error) {
+	sessionID, err := f.opencodeSession(ctx, client, convID)
+	if err != nil {
+		return "", err
+	}
+	reply, err := client.sendMessageWithAttachments(ctx, sessionID, text, f.model, attachments)
+	if err != nil {
+		return "", err
+	}
+	return reply, nil
+}
+
+func (f *opencodeForwarder) forwardRawStreamWithClient(ctx context.Context, client *opencodeHTTPClient, convID, text string, attachments []connectMediaAttachment, onDelta func(string)) (string, error) {
+	sessionID, err := f.opencodeSession(ctx, client, convID)
+	if err != nil {
+		return "", err
+	}
+	return client.streamMessageWithAttachments(ctx, sessionID, text, f.model, attachments, onDelta)
+}
+
+func (f *opencodeForwarder) opencodeSession(ctx context.Context, client *opencodeHTTPClient, convID string) (string, error) {
 	sessionID := ""
 	if f.sessions != nil {
 		sessionID = f.sessions.id(convID)
@@ -182,11 +227,7 @@ func (f *opencodeForwarder) forwardRawWithClient(ctx context.Context, client *op
 			f.sessions.set(convID, sessionID)
 		}
 	}
-	reply, err := client.sendMessageWithAttachments(ctx, sessionID, text, f.model, attachments)
-	if err != nil {
-		return "", err
-	}
-	return reply, nil
+	return sessionID, nil
 }
 
 func (f *opencodeForwarder) name() string { return "opencode" }
@@ -506,6 +547,17 @@ func (c *opencodeHTTPClient) deleteSession(ctx context.Context, sessionID string
 }
 
 func (c *opencodeHTTPClient) sendMessageWithAttachments(ctx context.Context, sessionID, text, model string, attachments []connectMediaAttachment) (string, error) {
+	body := opencodeMessageBody(text, model, attachments)
+	var out struct {
+		Parts []opencodePart `json:"parts"`
+	}
+	if err := c.doJSON(ctx, http.MethodPost, "/session/"+sessionID+"/message", body, &out); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(opencodePartsText(out.Parts)), nil
+}
+
+func opencodeMessageBody(text, model string, attachments []connectMediaAttachment) map[string]any {
 	parts := []map[string]any{{"type": "text", "text": text}}
 	for _, attachment := range attachments {
 		path := strings.TrimSpace(attachment.LocalPath)
@@ -530,13 +582,168 @@ func (c *opencodeHTTPClient) sendMessageWithAttachments(ctx context.Context, ses
 	if m := opencodeModelRef(model); m != nil {
 		body["model"] = m
 	}
-	var out struct {
-		Parts []opencodePart `json:"parts"`
+	return body
+}
+
+type opencodeMessageRecord struct {
+	Info struct {
+		ID string `json:"id"`
+		Role string `json:"role"`
+		ParentID string `json:"parentID"`
+		Time struct {
+			Completed *int64 `json:"completed"`
+		} `json:"time"`
+		Error json.RawMessage `json:"error"`
+	} `json:"info"`
+	Parts []opencodePart `json:"parts"`
+}
+
+func (c *opencodeHTTPClient) streamMessageWithAttachments(ctx context.Context, sessionID, text, model string, attachments []connectMediaAttachment, onDelta func(string)) (string, error) {
+	eventSignal, eventReady := c.watchSessionEvents(ctx, sessionID)
+	select {
+	case <-eventReady:
+	case <-time.After(time.Second):
+	case <-ctx.Done():
+		return "", ctx.Err()
 	}
-	if err := c.doJSON(ctx, http.MethodPost, "/session/"+sessionID+"/message", body, &out); err != nil {
+
+	body := opencodeMessageBody(text, model, attachments)
+	userMessageID := "msg_" + randomHex(12)
+	body["messageID"] = userMessageID
+	if err := c.doJSON(ctx, http.MethodPost, "/session/"+sessionID+"/prompt_async", body, nil); err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(opencodePartsText(out.Parts)), nil
+	completed := false
+	defer func() {
+		if completed {
+			return
+		}
+		abortContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = c.doJSON(abortContext, http.MethodPost, "/session/"+sessionID+"/abort", nil, nil)
+	}()
+
+	ticker := time.NewTicker(opencodeServerPollInterval)
+	defer ticker.Stop()
+	lastSnapshot := ""
+	seenBusy := false
+	for {
+		snapshot, assistantCompleted, found, err := c.opencodeAssistantSnapshot(ctx, sessionID, userMessageID)
+		if err != nil {
+			return "", err
+		}
+		if snapshot != "" && snapshot != lastSnapshot {
+			lastSnapshot = snapshot
+			if onDelta != nil {
+				onDelta(snapshot)
+			}
+		}
+		busy, present, err := c.opencodeSessionBusy(ctx, sessionID)
+		if err != nil {
+			return "", err
+		}
+		seenBusy = seenBusy || busy
+		if found && assistantCompleted {
+			completed = true
+			return lastSnapshot, nil
+		}
+		if found && seenBusy && !present && strings.TrimSpace(lastSnapshot) != "" {
+			completed = true
+			return lastSnapshot, nil
+		}
+		select {
+		case <-eventSignal:
+		case <-ticker.C:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+}
+
+func (c *opencodeHTTPClient) opencodeAssistantSnapshot(ctx context.Context, sessionID, userMessageID string) (string, bool, bool, error) {
+	var messages []opencodeMessageRecord
+	if err := c.doJSON(ctx, http.MethodGet, "/session/"+sessionID+"/message?limit=100", nil, &messages); err != nil {
+		return "", false, false, err
+	}
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.Info.Role != "assistant" || message.Info.ParentID != userMessageID {
+			continue
+		}
+		if len(message.Info.Error) > 0 && string(message.Info.Error) != "null" {
+			return "", false, true, errors.New("opencode assistant request failed")
+		}
+		return strings.TrimSpace(opencodePartsText(message.Parts)), message.Info.Time.Completed != nil, true, nil
+	}
+	return "", false, false, nil
+}
+
+func (c *opencodeHTTPClient) opencodeSessionBusy(ctx context.Context, sessionID string) (bool, bool, error) {
+	var statuses map[string]struct {
+		Type string `json:"type"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/session/status", nil, &statuses); err != nil {
+		return false, false, err
+	}
+	status, present := statuses[sessionID]
+	return present && status.Type == "busy", present, nil
+}
+
+func (c *opencodeHTTPClient) watchSessionEvents(ctx context.Context, sessionID string) (<-chan struct{}, <-chan struct{}) {
+	signals := make(chan struct{}, 1)
+	ready := make(chan struct{})
+	var readyOnce sync.Once
+	markReady := func() { readyOnce.Do(func() { close(ready) }) }
+	go func() {
+		defer markReady()
+		if strings.TrimSpace(c.baseURL) == "" {
+			return
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.baseURL, "/")+"/event", nil)
+		if err != nil {
+			return
+		}
+		req.Header.Set("Accept", "text/event-stream")
+		if c.password != "" {
+			req.SetBasicAuth(c.username, c.password)
+		}
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return
+		}
+		markReady()
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			var event struct {
+				Type string `json:"type"`
+				Properties map[string]any `json:"properties"`
+				Data map[string]any `json:"data"`
+			}
+			if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event) != nil {
+				continue
+			}
+			properties := event.Properties
+			if properties == nil {
+				properties = event.Data
+			}
+			if value, _ := properties["sessionID"].(string); value == sessionID {
+				select {
+				case signals <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}()
+	return signals, ready
 }
 
 func (c *opencodeHTTPClient) doJSON(ctx context.Context, method, path string, in any, out any) error {
