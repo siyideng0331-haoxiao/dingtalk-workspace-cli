@@ -29,7 +29,7 @@ func DecodeRequestStartAttributes(attributes map[string]json.RawMessage) (*Reque
 	if json.Unmarshal(attributes["method"], &result.Method) != nil || json.Unmarshal(attributes["path"], &result.Path) != nil || json.Unmarshal(attributes["query"], &result.Query) != nil || json.Unmarshal(attributes["contentLength"], &result.ContentLength) != nil || json.Unmarshal(attributes["deadlineEpochMs"], &result.DeadlineEpochMs) != nil {
 		return nil, ErrTunnelProtocol
 	}
-	if strings.TrimSpace(result.Method) == "" || !strings.HasPrefix(result.Path, "/") || strings.HasPrefix(result.Query, "?") || result.ContentLength < 0 || result.DeadlineEpochMs <= 0 {
+	if strings.TrimSpace(result.Method) == "" || !strings.HasPrefix(result.Path, "/") || strings.HasPrefix(result.Query, "?") || result.ContentLength < 0 || result.DeadlineEpochMs < 0 {
 		return nil, ErrTunnelProtocol
 	}
 	headers, err := decodeFrozenHeaders(attributes["headers"])

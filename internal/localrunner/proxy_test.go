@@ -44,6 +44,110 @@ func TestRequestAndResponseStartAttributesUseFrozenShape(t *testing.T) {
 	}
 }
 
+func TestDecodeRequestStartDeadlineSemantics(t *testing.T) {
+	for name, test := range map[string]struct {
+		deadline int64
+		valid    bool
+	}{
+		"zero has no absolute deadline": {deadline: 0, valid: true},
+		"positive is absolute deadline": {deadline: time.Now().Add(time.Minute).UnixMilli(), valid: true},
+		"negative is invalid":           {deadline: -1, valid: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			frame := validRequestStartFrame("request-1", 0)
+			frame.Attributes["deadlineEpochMs"] = json.RawMessage(jsonInt64(test.deadline))
+			attributes, err := DecodeRequestStartAttributes(frame.Attributes)
+			if test.valid {
+				if err != nil || attributes.DeadlineEpochMs != test.deadline {
+					t.Fatalf("deadline = %d, attributes = %#v, error = %v", test.deadline, attributes, err)
+				}
+				return
+			}
+			if err != ErrTunnelProtocol {
+				t.Fatalf("deadline = %d, error = %v", test.deadline, err)
+			}
+		})
+	}
+}
+
+func TestLocalA2AProxyRequestStartDeadlineSemantics(t *testing.T) {
+	for name, test := range map[string]struct {
+		deadline    int64
+		wantDeadline bool
+		wantInvalid  bool
+	}{
+		"zero has no absolute deadline": {deadline: 0},
+		"positive is absolute deadline": {deadline: time.Now().Add(time.Minute).UnixMilli(), wantDeadline: true},
+		"negative is invalid":           {deadline: -1, wantInvalid: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			started := make(chan context.Context, 1)
+			stopped := make(chan error, 1)
+			proxy, err := NewLocalA2AProxy(LocalA2AProxyConfig{
+				TargetURL: "http://127.0.0.1:8080/rpc",
+				HTTPClient: contextCapturingDoer{started: started, stopped: stopped},
+				MaxConcurrent: 1,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			writer := newRecordingProxyWriter()
+			start := validRequestStartFrame("request-1", 0)
+			start.Attributes["deadlineEpochMs"] = json.RawMessage(jsonInt64(test.deadline))
+			if err := proxy.HandleFrame(context.Background(), start, writer); err != nil {
+				t.Fatal(err)
+			}
+
+			if test.wantInvalid {
+				frames := writer.Frames()
+				if len(frames) != 1 || frames[0].Type != FrameError || string(frames[0].Attributes["code"]) != `"frame_malformed"` {
+					t.Fatalf("negative deadline frames = %#v", frames)
+				}
+				return
+			}
+			if frames := writer.Frames(); len(frames) != 0 {
+				t.Fatalf("valid deadline produced error frames = %#v", frames)
+			}
+
+			var requestContext context.Context
+			select {
+			case requestContext = <-started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("local request did not start")
+			}
+			deadline, hasDeadline := requestContext.Deadline()
+			if hasDeadline != test.wantDeadline {
+				t.Fatalf("context deadline present = %v, want %v", hasDeadline, test.wantDeadline)
+			}
+			if test.wantDeadline && deadline.UnixMilli() != test.deadline {
+				t.Fatalf("context deadline = %d, want %d", deadline.UnixMilli(), test.deadline)
+			}
+
+			cancel := validFrame(FrameCancel)
+			cancel.RequestID = start.RequestID
+			if err := proxy.HandleFrame(context.Background(), cancel, writer); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-stopped:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("local request stopped with %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("explicit cancel did not stop local request")
+			}
+			if proxy.InflightCount() != 0 {
+				t.Fatalf("inflight = %d", proxy.InflightCount())
+			}
+			for _, frame := range writer.Frames() {
+				if frame.Type == FrameError && string(frame.Attributes["code"]) == `"frame_malformed"` {
+					t.Fatalf("valid deadline produced frame_malformed: %#v", frame)
+				}
+			}
+		})
+	}
+}
+
 func TestLocalA2AProxyStreamsResponseAndStripsSensitiveHeaders(t *testing.T) {
 	releaseResponse := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -294,6 +398,18 @@ type cancelAwareDoer struct {
 func (d cancelAwareDoer) Do(request *http.Request) (*http.Response, error) {
 	close(d.started)
 	<-request.Context().Done()
+	return nil, request.Context().Err()
+}
+
+type contextCapturingDoer struct {
+	started chan context.Context
+	stopped chan error
+}
+
+func (d contextCapturingDoer) Do(request *http.Request) (*http.Response, error) {
+	d.started <- request.Context()
+	<-request.Context().Done()
+	d.stopped <- request.Context().Err()
 	return nil, request.Context().Err()
 }
 
