@@ -12,11 +12,12 @@ import (
 )
 
 func TestClientIssuesGrantWithOperatorBearer(t *testing.T) {
-	var receivedMethod, receivedPath, receivedAuth, receivedBody string
+	var receivedMethod, receivedPath, receivedAuth, receivedContentType, receivedBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedMethod = r.Method
 		receivedPath = r.URL.EscapedPath()
 		receivedAuth = r.Header.Get("Authorization")
+		receivedContentType = r.Header.Get("Content-Type")
 		raw, _ := io.ReadAll(r.Body)
 		receivedBody = string(raw)
 		w.Header().Set("Content-Type", "application/json")
@@ -29,7 +30,7 @@ func TestClientIssuesGrantWithOperatorBearer(t *testing.T) {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 
-	grant, err := client.Issue(context.Background(), "employee/1")
+	grant, err := client.Issue(context.Background(), "employee/1", "mcp-client-id")
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
@@ -43,8 +44,11 @@ func TestClientIssuesGrantWithOperatorBearer(t *testing.T) {
 	if receivedAuth != "Bearer operator-token" {
 		t.Fatalf("authorization = %q", receivedAuth)
 	}
-	if receivedBody != "" {
-		t.Fatalf("body = %q, want empty", receivedBody)
+	if receivedContentType != "application/json" {
+		t.Fatalf("content type = %q, want application/json", receivedContentType)
+	}
+	if receivedBody != `{"clientId":"mcp-client-id"}` {
+		t.Fatalf("body = %q, want MCP client ID", receivedBody)
 	}
 	if grant.AssistantID != "employee/1" || grant.CorpID != "ding-corp" ||
 		grant.UID != "987654" || grant.AuthCode != "one-time-code" ||
@@ -80,7 +84,7 @@ func TestClientRefreshesRejectedOperatorBearerOnce(t *testing.T) {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 
-	if _, err := client.Issue(context.Background(), "employee-1"); err != nil {
+	if _, err := client.Issue(context.Background(), "employee-1", "mcp-client-id"); err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
 	if requests != 2 || tokens.refreshCalls != 1 || tokens.rejected != "stale-token" {
@@ -101,7 +105,7 @@ func TestClientRejectsMalformedGrantWithoutLeakingResponse(t *testing.T) {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 
-	_, err = client.Issue(context.Background(), "employee-1")
+	_, err = client.Issue(context.Background(), "employee-1", "mcp-client-id")
 	if err == nil {
 		t.Fatal("Issue() error = nil, want malformed response")
 	}
@@ -123,7 +127,7 @@ func TestClientReturnsStableServerErrorWithoutLeakingBody(t *testing.T) {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 
-	_, err = client.Issue(context.Background(), "employee-1")
+	_, err = client.Issue(context.Background(), "employee-1", "mcp-client-id")
 	if err == nil {
 		t.Fatal("Issue() error = nil, want server error")
 	}

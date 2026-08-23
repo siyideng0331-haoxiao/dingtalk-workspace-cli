@@ -17,7 +17,8 @@ dws deep manage login-dws --assistant-id <Assistant_ID>
 ## 预发准备
 
 登录命令复用 Local Runner 的 `deap_openapi_url` 配置，并从当前 `mcp_url` 的 `/cli/clientId`
-自动取得 AuthCode exchange 所需的 DWS OAuth ClientID。为目标 Agent 准备独立目录并指向预发：
+自动取得 DWS OAuth ClientID。该值会同时用于向 OpenAPI 申请 AuthCode 和后续 exchange，服务端不再维护
+另一份固定 ClientID。为目标 Agent 准备独立目录并指向预发：
 
 ```bash
 export DWS_CONFIG_DIR=/path/to/agent-a/.dws
@@ -97,6 +98,8 @@ DWS_CONFIG_DIR=/path/to/agent-a/.dws DWS_PROFILE=ding-corp:987654 dws auth statu
 
 ## 变更历史
 
+- 2026-08-23：`login-dws` 将 MCP ClientID 作为 AuthCode 申请参数传给 OpenAPI，并在 exchange 中复用
+  同一个值。原因：AuthCode 的签发应用与兑换应用必须一致，避免 CLI 与服务端分别配置导致漂移。
 - 2026-08-23：`login-dws` 在 exchange 前从当前 MCP `/cli/clientId` 自动取得并注入 OAuth ClientID。
   原因：AuthCode 兑换必须使用签发它的 DWS OAuth 应用身份，调用方和 OpenAPI 响应不应感知或传递
   ClientID。

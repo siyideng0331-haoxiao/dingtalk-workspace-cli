@@ -93,9 +93,10 @@ func NewClient(baseURL string, httpClient HTTPDoer,
 	}, nil
 }
 
-func (c *Client) Issue(ctx context.Context, assistantID string) (*Grant, error) {
+func (c *Client) Issue(ctx context.Context, assistantID, clientID string) (*Grant, error) {
 	assistantID = strings.TrimSpace(assistantID)
-	if assistantID == "" {
+	clientID = strings.TrimSpace(clientID)
+	if assistantID == "" || clientID == "" {
 		return nil, ErrClientInvalid
 	}
 	accessToken, err := c.tokenProvider.AccessToken(ctx)
@@ -106,7 +107,7 @@ func (c *Client) Issue(ctx context.Context, assistantID string) (*Grant, error) 
 	if accessToken == "" {
 		return nil, ErrClientInvalid
 	}
-	status, body, err := c.request(ctx, assistantID, accessToken)
+	status, body, err := c.request(ctx, assistantID, clientID, accessToken)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +120,7 @@ func (c *Client) Issue(ctx context.Context, assistantID string) (*Grant, error) 
 		if refreshed == "" {
 			return nil, ErrClientInvalid
 		}
-		status, body, err = c.request(ctx, assistantID, refreshed)
+		status, body, err = c.request(ctx, assistantID, clientID, refreshed)
 		if err != nil {
 			return nil, err
 		}
@@ -130,15 +131,22 @@ func (c *Client) Issue(ctx context.Context, assistantID string) (*Grant, error) 
 	return decodeGrant(assistantID, body)
 }
 
-func (c *Client) request(ctx context.Context, assistantID, accessToken string) (int, []byte, error) {
+func (c *Client) request(ctx context.Context, assistantID, clientID, accessToken string) (int, []byte, error) {
 	endpoint := c.baseURL + "/v1/assistant/digital-employees/" +
 		url.PathEscape(assistantID) + "/dws-auth-grants"
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, http.NoBody)
+	payload, err := json.Marshal(struct {
+		ClientID string `json:"clientId"`
+	}{ClientID: clientID})
+	if err != nil {
+		return 0, nil, ErrClientInvalid
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return 0, nil, ErrClientInvalid
 	}
 	request.Header.Set("Authorization", "Bearer "+accessToken)
 	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/json")
 	response, err := c.httpClient.Do(request)
 	if err != nil {
 		return 0, nil, err

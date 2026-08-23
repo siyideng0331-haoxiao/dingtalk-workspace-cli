@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,8 +22,12 @@ func TestLoginDWSUsesOperatorForGrantAndEmployeeForExchange(t *testing.T) {
 	t.Setenv("DWS_CONFIG_DIR", t.TempDir())
 	t.Setenv("DWS_PROFILE", "pending-employee-corp:pending-employee-uid")
 	t.Cleanup(func() { authpkg.SetRuntimeProfile("") })
+	var clientIDFetched atomic.Bool
 	testseam.Swap(t, &deapLoginDWSClientIDProvider,
-		func(context.Context) (string, error) { return "mcp-client-id", nil })
+		func(context.Context) (string, error) {
+			clientIDFetched.Store(true)
+			return "mcp-client-id", nil
+		})
 
 	grantClient := &recordingDWSGrantIssuer{
 		grant: &dwsauth.Grant{
@@ -32,6 +37,7 @@ func TestLoginDWSUsesOperatorForGrantAndEmployeeForExchange(t *testing.T) {
 			AuthCode:         "one-time-code",
 			ExpiresInSeconds: 300,
 		},
+		clientIDFetched: &clientIDFetched,
 	}
 	testseam.Swap(t, &deapLoginDWSGrantClientProvider,
 		func(string) (deapLoginDWSGrantIssuer, error) { return grantClient, nil })
@@ -64,6 +70,9 @@ func TestLoginDWSUsesOperatorForGrantAndEmployeeForExchange(t *testing.T) {
 
 	if grantClient.profile != "" {
 		t.Fatalf("grant profile = %q, want operator default selector", grantClient.profile)
+	}
+	if grantClient.clientID != "mcp-client-id" {
+		t.Fatalf("grant clientId = %q, want mcp-client-id", grantClient.clientID)
 	}
 	if exchangeProfile != "ding-corp:987654" {
 		t.Fatalf("exchange profile = %q, want exact employee selector", exchangeProfile)
@@ -212,11 +221,17 @@ func TestLoginDWSFetchesMCPClientIDBeforeInjectedAuthCodeExchange(t *testing.T) 
 }
 
 type recordingDWSGrantIssuer struct {
-	grant   *dwsauth.Grant
-	profile string
+	grant           *dwsauth.Grant
+	profile         string
+	clientID        string
+	clientIDFetched *atomic.Bool
 }
 
-func (i *recordingDWSGrantIssuer) Issue(context.Context, string) (*dwsauth.Grant, error) {
+func (i *recordingDWSGrantIssuer) Issue(_ context.Context, _, clientID string) (*dwsauth.Grant, error) {
 	i.profile = authpkg.RuntimeProfile()
+	i.clientID = clientID
+	if i.clientIDFetched != nil && !i.clientIDFetched.Load() {
+		return nil, fmt.Errorf("MCP client ID was not fetched before grant issuance")
+	}
 	return i.grant, nil
 }
