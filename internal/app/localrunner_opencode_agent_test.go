@@ -76,6 +76,38 @@ type controlledLocalRunnerStreamingBackend struct {
 	stopped chan error
 }
 
+type fakeLocalRunnerHarnessTransport struct {
+	mu sync.Mutex
+	warmCalls int
+	promptCalls []localRunnerOpenCodePromptCall
+	closeCalls int
+	warmErr error
+}
+
+func (f *fakeLocalRunnerHarnessTransport) Warm(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.warmCalls++
+	return f.warmErr
+}
+
+func (f *fakeLocalRunnerHarnessTransport) Prompt(_ context.Context, sessionKey, prompt string, onDelta func(string)) (string, error) {
+	f.mu.Lock()
+	f.promptCalls = append(f.promptCalls, localRunnerOpenCodePromptCall{sessionKey: sessionKey, prompt: prompt})
+	f.mu.Unlock()
+	if onDelta != nil {
+		onDelta("answer")
+	}
+	return "answer", nil
+}
+
+func (f *fakeLocalRunnerHarnessTransport) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closeCalls++
+	return nil
+}
+
 func newControlledLocalRunnerStreamingBackend() *controlledLocalRunnerStreamingBackend {
 	return &controlledLocalRunnerStreamingBackend{
 		started: make(chan context.Context, 1),
@@ -319,6 +351,7 @@ type localRunnerA2AMessageLogCapture struct {
 	raw string
 	records []map[string]any
 	eventRecords []map[string]any
+	inboundEventRecords []map[string]any
 }
 
 func captureLocalRunnerA2AMessageLogs(t *testing.T, debug bool, run func()) localRunnerA2AMessageLogCapture {
@@ -344,10 +377,161 @@ func captureLocalRunnerA2AMessageLogs(t *testing.T, debug bool, run func()) loca
 				capture.records = append(capture.records, record)
 			case "localrunner.a2a.event.outbound":
 				capture.eventRecords = append(capture.eventRecords, record)
+			case "localrunner.a2a.event.inbound":
+				capture.inboundEventRecords = append(capture.inboundEventRecords, record)
 			}
 		}
 	}
 	return capture
+}
+
+func TestLocalRunnerA2ADebugLogsCompleteInboundEventSafely(t *testing.T) {
+	const sensitiveContext = "a2a-context-sensitive-123"
+	const sensitiveMessage = "message-sensitive-456"
+	const sensitiveToken = "token-sensitive-789"
+	input := "inspect this request token=" + sensitiveToken
+	logs := captureLocalRunnerA2AMessageLogs(t, true, func() {
+		executor := &localRunnerA2AExecutor{backend: &fakeLocalRunnerOpenCodeBackend{reply: "safe answer"}, defaultContext: "default-context", harness: "codex"}
+		message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(input))
+		message.ContextID = sensitiveContext
+		message.ID = sensitiveMessage
+		execContext := &a2asrv.ExecutorContext{Message: message, ContextID: message.ContextID}
+		for _, err := range executor.Execute(context.Background(), execContext) {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if len(logs.inboundEventRecords) != 1 {
+		t.Fatalf("inbound event logs = %#v; raw=%s", logs.inboundEventRecords, logs.raw)
+	}
+	record := logs.inboundEventRecords[0]
+	if record["sequence"] != float64(1) || record["event_type"] != "message" || record["kind"] != "message" || record["truncated"] != false {
+		t.Fatalf("inbound event record = %#v", record)
+	}
+	raw, _ := record["event_json"].(string)
+	var event map[string]any
+	if json.Unmarshal([]byte(raw), &event) != nil || event["kind"] != "message" || nestedString(event, "parts", "0", "text") == "" {
+		t.Fatalf("inbound event_json is not a complete parseable message: %q", raw)
+	}
+	if event["contextId"] != "[redacted]" || event["messageId"] != "[redacted]" || !strings.Contains(raw, "inspect this request") {
+		t.Fatalf("inbound event_json redaction/content = %q", raw)
+	}
+	for _, forbidden := range []string{sensitiveContext, sensitiveMessage, sensitiveToken} {
+		if strings.Contains(logs.raw, forbidden) {
+			t.Fatalf("inbound event log leaked %q: %s", forbidden, logs.raw)
+		}
+	}
+}
+
+func TestLocalRunnerA2AInboundEventLogsRequireDebugAndBoundLongJSON(t *testing.T) {
+	longInput := "visible-inbound-" + strings.Repeat("界", 9000) + " cookie=long-cookie-secret"
+	for _, test := range []struct {
+		name string
+		debug bool
+		wantRecords int
+	}{
+		{name: "info suppressed", debug: false, wantRecords: 0},
+		{name: "debug bounded", debug: true, wantRecords: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logs := captureLocalRunnerA2AMessageLogs(t, test.debug, func() {
+				executor := &localRunnerA2AExecutor{backend: &fakeLocalRunnerOpenCodeBackend{reply: "answer"}, defaultContext: "default-context", harness: "opencode"}
+				message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(longInput))
+				execContext := &a2asrv.ExecutorContext{Message: message}
+				for _, err := range executor.Execute(context.Background(), execContext) {
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+			if len(logs.inboundEventRecords) != test.wantRecords {
+				t.Fatalf("inbound event records=%#v raw=%s", logs.inboundEventRecords, logs.raw)
+			}
+			if !test.debug {
+				return
+			}
+			record := logs.inboundEventRecords[0]
+			eventJSON, _ := record["event_json"].(string)
+			var event map[string]any
+			if record["truncated"] != true || record["event_bytes"].(float64) <= float64(len(eventJSON)) || utf8.RuneCountInString(eventJSON) > localRunnerA2AMessageLogMaxRunes || json.Unmarshal([]byte(eventJSON), &event) != nil {
+				t.Fatalf("bounded inbound event = %#v", record)
+			}
+			if strings.Contains(logs.raw, "long-cookie-secret") {
+				t.Fatalf("bounded inbound event leaked cookie: %s", logs.raw)
+			}
+		})
+	}
+}
+
+func TestLocalRunnerDedicatedHarnessPrewarmsAndRejectsExitedTransport(t *testing.T) {
+	stubDir := t.TempDir()
+	for _, binary := range []string{"qodercli", "codex", "opencode", "claude"} {
+		path := filepath.Join(stubDir, binary)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 17\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("DWS_CONNECT_NO_INSTALL", "1")
+	t.Setenv("DWS_AGENT_CMD", "")
+	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, harness := range []string{"qoder", "codex", "opencode", "claudecode"} {
+		t.Run(harness, func(t *testing.T) {
+			agent, err := startLocalRunnerLocalAgent(context.Background(), harness, localRunnerLocalAgentOptions{WorkDir: t.TempDir(), Memory: true, Timeout: time.Second})
+			if agent != nil {
+				_ = agent.Close()
+			}
+			if err == nil {
+				t.Fatalf("start-local %s accepted a transport that exited during synchronous prewarm", harness)
+			}
+		})
+	}
+}
+
+func TestLocalRunnerDedicatedHarnessLifecycleIsOwnedAndReused(t *testing.T) {
+	stubDir := t.TempDir()
+	for _, binary := range []string{"qodercli", "codex", "opencode", "claude"} {
+		path := filepath.Join(stubDir, binary)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	previousFactory := localRunnerHarnessTransportFactory
+	t.Cleanup(func() { localRunnerHarnessTransportFactory = previousFactory })
+	transports := make(map[string]*fakeLocalRunnerHarnessTransport)
+	localRunnerHarnessTransportFactory = func(options localRunnerHarnessOptions) (localRunnerHarnessTransport, error) {
+		transport := &fakeLocalRunnerHarnessTransport{}
+		transports[options.harness] = transport
+		return transport, nil
+	}
+	for _, harness := range []string{"qoder", "codex", "opencode", "claudecode"} {
+		backend, err := startLocalRunnerHarnessBackend(context.Background(), harness, localRunnerLocalAgentOptions{WorkDir: t.TempDir(), Memory: true}, "localrunner-test")
+		if err != nil {
+			t.Fatalf("start %s: %v", harness, err)
+		}
+		if _, err := backend.Prompt(context.Background(), "context-a", "first"); err != nil {
+			t.Fatalf("first %s prompt: %v", harness, err)
+		}
+		if _, err := backend.Stream(context.Background(), "context-a", "second", func(string) {}); err != nil {
+			t.Fatalf("second %s prompt: %v", harness, err)
+		}
+		if err := backend.Close(); err != nil {
+			t.Fatalf("close %s: %v", harness, err)
+		}
+		if err := backend.Close(); err != nil {
+			t.Fatalf("second close %s: %v", harness, err)
+		}
+		transport := transports[harness]
+		transport.mu.Lock()
+		warmCalls := transport.warmCalls
+		promptCalls := append([]localRunnerOpenCodePromptCall(nil), transport.promptCalls...)
+		closeCalls := transport.closeCalls
+		transport.mu.Unlock()
+		if warmCalls != 1 || len(promptCalls) != 2 || closeCalls != 1 {
+			t.Fatalf("%s lifecycle warm=%d prompts=%#v close=%d", harness, warmCalls, promptCalls, closeCalls)
+		}
+	}
 }
 
 func TestLocalRunnerOfficialA2AAdapterIsSharedAcrossLocalAgentChannels(t *testing.T) {
