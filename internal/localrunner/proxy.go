@@ -114,7 +114,13 @@ func (p *LocalA2AProxy) start(parent context.Context, frame TunnelFrame, writer 
 		}, 0, 0, false, "error", "frame_malformed")
 		return nil
 	}
-	requestContext, cancel := context.WithDeadline(parent, time.UnixMilli(attributes.DeadlineEpochMs))
+	var requestContext context.Context
+	var cancel context.CancelFunc
+	if attributes.DeadlineEpochMs == 0 {
+		requestContext, cancel = context.WithCancel(parent)
+	} else {
+		requestContext, cancel = context.WithDeadline(parent, time.UnixMilli(attributes.DeadlineEpochMs))
+	}
 	bodyReader, bodyWriter := io.Pipe()
 	request := &localProxyRequest{
 		ctx:           requestContext,
