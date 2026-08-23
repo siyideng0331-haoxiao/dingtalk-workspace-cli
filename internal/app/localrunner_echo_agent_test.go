@@ -85,7 +85,7 @@ func TestLocalRunnerTestEchoAgentServesCardSendAndStream(t *testing.T) {
 	}
 	streamResponse, err := io.ReadAll(bufio.NewReader(response.Body))
 	response.Body.Close()
-	if err != nil || !strings.Contains(string(streamResponse), "id: ") || strings.Count(string(streamResponse), "data: ") != 1 || !strings.Contains(string(streamResponse), `"text":"hello"`) {
+	if err != nil || !strings.Contains(string(streamResponse), "id: ") || strings.Count(string(streamResponse), "data: ") != 4 || !strings.Contains(string(streamResponse), `"kind":"task"`) || !strings.Contains(string(streamResponse), `"kind":"artifact-update"`) || !strings.Contains(string(streamResponse), `"text":"hello"`) || !strings.Contains(string(streamResponse), `"state":"completed"`) {
 		t.Fatalf("official SSE response = %q err=%v", streamResponse, err)
 	}
 }
@@ -115,7 +115,7 @@ func TestLocalRunnerTestEchoUsesOfficialCompatCardAndSSEEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(body, []byte("id: ")) || strings.Count(string(body), "data: ") != 1 {
+	if !bytes.Contains(body, []byte("id: ")) || strings.Count(string(body), "data: ") != 4 || !bytes.Contains(body, []byte(`"kind":"task"`)) || !bytes.Contains(body, []byte(`"kind":"artifact-update"`)) || !bytes.Contains(body, []byte(`"state":"completed"`)) {
 		t.Fatalf("test-echo SSE is not the official compat envelope: %q", body)
 	}
 }
