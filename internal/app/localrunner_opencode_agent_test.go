@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -68,6 +69,38 @@ func (f *fakeLocalRunnerOpenCodeBackend) Close() error {
 	f.closeCalls++
 	return nil
 }
+
+type controlledLocalRunnerStreamingBackend struct {
+	started chan context.Context
+	complete chan localRunnerA2AStreamResult
+	stopped chan error
+}
+
+func newControlledLocalRunnerStreamingBackend() *controlledLocalRunnerStreamingBackend {
+	return &controlledLocalRunnerStreamingBackend{
+		started: make(chan context.Context, 1),
+		complete: make(chan localRunnerA2AStreamResult, 1),
+		stopped: make(chan error, 1),
+	}
+}
+
+func (b *controlledLocalRunnerStreamingBackend) Prompt(context.Context, string, string) (string, error) {
+	return "", errors.New("unexpected synchronous prompt")
+}
+
+func (b *controlledLocalRunnerStreamingBackend) Stream(ctx context.Context, _, _ string, _ func(string)) (string, error) {
+	b.started <- ctx
+	select {
+	case completed := <-b.complete:
+		b.stopped <- nil
+		return completed.reply, completed.err
+	case <-ctx.Done():
+		b.stopped <- context.Cause(ctx)
+		return "", ctx.Err()
+	}
+}
+
+func (*controlledLocalRunnerStreamingBackend) Close() error { return nil }
 
 func TestLocalRunnerAgentExecutorUsesOfficialA2ATypes(t *testing.T) {
 	backend := &fakeLocalRunnerOpenCodeBackend{reply: "official reply"}
@@ -278,6 +311,166 @@ func TestLocalRunnerArtifactDeltaUsesSuffixAndFallsBackToReplacement(t *testing.
 				t.Fatalf("localRunnerArtifactDelta(%q, %q) = (%q, %v), want (%q, %v)", test.previous, test.next, text, appendPart, test.wantText, test.wantAppend)
 			}
 		})
+	}
+}
+
+func TestLocalRunnerA2AStreamingHeartbeatRefreshesNinetySecondLeaseUntilTerminal(t *testing.T) {
+	const streamActivityLease = 90 * time.Second
+	if localRunnerA2AStreamHeartbeatInterval != 15*time.Second || localRunnerA2AStreamHeartbeatInterval*6 != streamActivityLease {
+		t.Fatalf("stream heartbeat=%s lease=%s, want 15s heartbeat within 90s lease", localRunnerA2AStreamHeartbeatInterval, streamActivityLease)
+	}
+
+	backend := newControlledLocalRunnerStreamingBackend()
+	executor := &localRunnerA2AExecutor{backend: backend, defaultContext: "default-context", harness: "qoder"}
+	message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello"))
+	message.ContextID = "context-1"
+	execContext := &a2asrv.ExecutorContext{Message: message, ContextID: message.ContextID}
+	events := make(chan a2a.Event, 8)
+	done := make(chan struct{})
+	go func() {
+		executor.executeStream(context.Background(), execContext, message.ContextID, "hello", func(event a2a.Event, err error) bool {
+			if err != nil {
+				t.Errorf("stream event error: %v", err)
+				return false
+			}
+			events <- event
+			return true
+		})
+		close(done)
+	}()
+
+	if task, ok := (<-events).(*a2a.Task); !ok || task.Status.State != a2a.TaskStateSubmitted {
+		t.Fatalf("first stream event = %#v, want submitted task", task)
+	}
+	if status, ok := (<-events).(*a2a.TaskStatusUpdateEvent); !ok || status.Status.State != a2a.TaskStateWorking {
+		t.Fatalf("second stream event = %#v, want working status", status)
+	}
+	<-backend.started
+
+	select {
+	case event := <-events:
+		status, ok := event.(*a2a.TaskStatusUpdateEvent)
+		if !ok || status.Status.State != a2a.TaskStateWorking {
+			t.Fatalf("heartbeat event = %#v, want working status", event)
+		}
+	case <-time.After(localRunnerA2AStreamHeartbeatInterval + 2*time.Second):
+		t.Fatal("15s working heartbeat was not emitted")
+	}
+
+	backend.complete <- localRunnerA2AStreamResult{reply: "done"}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not stop after terminal backend result")
+	}
+
+	var terminal a2a.TaskState
+	for {
+		select {
+		case event := <-events:
+			if status, ok := event.(*a2a.TaskStatusUpdateEvent); ok {
+				terminal = status.Status.State
+			}
+		default:
+			if terminal != a2a.TaskStateCompleted {
+				t.Fatalf("terminal stream state = %q, want completed", terminal)
+			}
+			return
+		}
+	}
+}
+
+func TestLocalRunnerA2AStreamingCancellationStopsHeartbeatAndHarness(t *testing.T) {
+	backend := newControlledLocalRunnerStreamingBackend()
+	executor := &localRunnerA2AExecutor{backend: backend, defaultContext: "default-context", harness: "qoder"}
+	message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello"))
+	message.ContextID = "context-1"
+	execContext := &a2asrv.ExecutorContext{Message: message, ContextID: message.ContextID}
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan a2a.Event, 8)
+	done := make(chan struct{})
+	go func() {
+		executor.executeStream(ctx, execContext, message.ContextID, "hello", func(event a2a.Event, err error) bool {
+			if err != nil {
+				t.Errorf("stream event error: %v", err)
+				return false
+			}
+			events <- event
+			return true
+		})
+		close(done)
+	}()
+
+	<-events
+	<-events
+	<-backend.started
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not stop after explicit cancellation")
+	}
+	if cause := <-backend.stopped; !errors.Is(cause, context.Canceled) {
+		t.Fatalf("backend stop cause = %v, want context canceled", cause)
+	}
+
+	var terminal a2a.TaskState
+	for {
+		select {
+		case event := <-events:
+			if status, ok := event.(*a2a.TaskStatusUpdateEvent); ok {
+				terminal = status.Status.State
+			}
+		default:
+			if terminal != a2a.TaskStateCanceled {
+				t.Fatalf("terminal stream state = %q, want canceled", terminal)
+			}
+			return
+		}
+	}
+}
+
+func TestLocalRunnerA2AStreamingRequestDeadlineDoesNotBecomeHarnessDeadline(t *testing.T) {
+	backend := newControlledLocalRunnerStreamingBackend()
+	agent, err := startLocalRunnerLocalAgentWithBackend(backend, "127.0.0.1:0", "qoder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agent.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	body := strings.NewReader(`{"jsonrpc":"2.0","id":"stream-1","method":"message/stream","params":{"message":{"kind":"message","role":"user","messageId":"message-1","parts":[{"kind":"text","text":"hello"}]}}}`)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, agent.RPCURL(), body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+
+	harnessContext := <-backend.started
+	if deadline, ok := harnessContext.Deadline(); ok {
+		t.Fatalf("Harness context inherited request deadline %s", deadline)
+	}
+	<-ctx.Done()
+	select {
+	case <-harnessContext.Done():
+		t.Fatalf("Harness context stopped with request deadline: %v", context.Cause(harnessContext))
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	backend.complete <- localRunnerA2AStreamResult{reply: "done"}
+	select {
+	case cause := <-backend.stopped:
+		if cause != nil {
+			t.Fatalf("backend stopped with cause %v, want terminal completion", cause)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("backend did not finish after detached request deadline")
 	}
 }
 
