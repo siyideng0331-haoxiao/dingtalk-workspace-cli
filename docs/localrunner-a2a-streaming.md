@@ -13,6 +13,18 @@ For a valid streaming request, LocalRunner emits standard A2A events in this ord
 
 Harness output is treated as a visible-text snapshot. Prefix growth is emitted as an artifact append; a rewritten snapshot is emitted as a replacement. Updates are coalesced for 100 milliseconds, a `working` heartbeat is emitted every 15 seconds while no visible text changes, visible text is limited to 1 MiB, and one turn is limited to 1,024 artifact events. Backend error detail is logged only after the existing redaction pass; public A2A failures use stable generic task messages.
 
+## Debug message logs
+
+Run LocalRunner with the root `--debug` flag to see the sanitized message content handled by its shared A2A executor:
+
+```bash
+dws --debug deap runtime start-local --harness qoder --work-dir ./project
+```
+
+`localrunner.a2a.message.inbound` records the merged text of one valid user message. For synchronous Send, `localrunner.a2a.message.outbound` records the final Agent text only after it is yielded. For Streaming, an outbound event is recorded only after each artifact update is yielded, and its `content` is the delivered delta or replacement rather than the accumulated Harness snapshot. Empty `working` heartbeats do not produce content events.
+
+These content events are disabled unless `--debug` is explicitly set, including in the diagnostic file logger. Values matching authorization, cookie, token, credential, API key, context, session, prompt, or Bearer patterns are redacted through the shared free-text sanitizer. Context and message identifiers are never recorded directly; `turn_hash` is an irreversible short SHA-256 correlation value. Each event reports the original `content_bytes`, limits sanitized `content` to 8,192 Unicode characters, and sets `truncated=true` when the original text exceeds that limit. Streaming logs only delivered deltas/replacements so growing snapshots do not create quadratic log volume.
+
 ## Harness adapters
 
 | Harness | Incremental source | Existing DevConnect robot behavior |

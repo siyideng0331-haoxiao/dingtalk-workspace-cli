@@ -127,6 +127,182 @@ func TestLocalRunnerAgentExecutorUsesOfficialA2ATypes(t *testing.T) {
 	}
 }
 
+func TestLocalRunnerA2ADebugLogsInboundAndSynchronousOutboundContentSafely(t *testing.T) {
+	const sensitiveContext = "a2a-context-sensitive-123"
+	const sensitiveMessage = "message-sensitive-456"
+	const sensitiveToken = "token-value-789"
+	const sensitiveCredential = "credential-value-012"
+	const sensitiveCookie = "cookie-value-234"
+	const sensitiveSession = "native-session-sensitive-345"
+	parts := []string{
+		"first line token=" + sensitiveToken,
+		"second line credential=" + sensitiveCredential + " cookie=" + sensitiveCookie + " context_id=" + sensitiveContext,
+	}
+	reply := "actual reply Authorization: Bearer " + sensitiveToken + " session_id=" + sensitiveSession
+	logs := captureLocalRunnerA2AMessageLogs(t, true, func() {
+		backend := &fakeLocalRunnerOpenCodeBackend{reply: reply}
+		executor := &localRunnerA2AExecutor{backend: backend, defaultContext: "default-context", harness: "qoder"}
+		message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(parts[0]), a2a.NewTextPart(parts[1]))
+		message.ContextID = sensitiveContext
+		message.ID = sensitiveMessage
+		execContext := &a2asrv.ExecutorContext{Message: message, ContextID: message.ContextID}
+		for _, err := range executor.Execute(context.Background(), execContext) {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if len(logs.records) != 2 {
+		t.Fatalf("content log records = %d, want inbound and outbound: %s", len(logs.records), logs.raw)
+	}
+	inbound, outbound := logs.records[0], logs.records[1]
+	if inbound["msg"] != "localrunner.a2a.message.inbound" || inbound["harness"] != "qoder" || inbound["mode"] != "sync" || inbound["sequence"] != float64(0) {
+		t.Fatalf("inbound content log = %#v", inbound)
+	}
+	inboundContent, _ := inbound["content"].(string)
+	if !strings.Contains(inboundContent, "first line") || !strings.Contains(inboundContent, "second line") || inbound["content_bytes"] != float64(len(strings.Join(parts, "\n"))) || inbound["truncated"] != false {
+		t.Fatalf("inbound content fields = %#v", inbound)
+	}
+	if outbound["msg"] != "localrunner.a2a.message.outbound" || outbound["mode"] != "sync" || outbound["sequence"] != float64(1) || outbound["append"] != false || outbound["last"] != true || outbound["content_bytes"] != float64(len(reply)) {
+		t.Fatalf("outbound content log = %#v", outbound)
+	}
+	if content, _ := outbound["content"].(string); !strings.Contains(content, "actual reply") {
+		t.Fatalf("outbound content = %q", content)
+	}
+	turnHash, _ := inbound["turn_hash"].(string)
+	if !strings.HasPrefix(turnHash, "sha256:") || outbound["turn_hash"] != turnHash {
+		t.Fatalf("turn hashes = %#v / %#v", inbound["turn_hash"], outbound["turn_hash"])
+	}
+	for _, forbidden := range []string{sensitiveContext, sensitiveMessage, sensitiveToken, sensitiveCredential, sensitiveCookie, sensitiveSession} {
+		if strings.Contains(logs.raw, forbidden) {
+			t.Fatalf("content logs leaked %q: %s", forbidden, logs.raw)
+		}
+	}
+}
+
+func TestLocalRunnerA2ADebugLogsEachDeliveredStreamingArtifact(t *testing.T) {
+	type deliveredArtifact struct {
+		text string
+		appendPart bool
+		last bool
+	}
+	var delivered []deliveredArtifact
+	logs := captureLocalRunnerA2AMessageLogs(t, true, func() {
+		backend := &fakeLocalRunnerOpenCodeBackend{
+			streamSnapshots: []string{"alpha", "alpha beta"},
+			streamReply: "alpha beta gamma",
+		}
+		agent, err := startLocalRunnerLocalAgentWithBackend(backend, "127.0.0.1:0", "codex")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer agent.Close()
+		body := []byte(`{"jsonrpc":"2.0","id":"stream-1","method":"message/stream","params":{"message":{"kind":"message","role":"user","messageId":"message-1","contextId":"context-1","parts":[{"kind":"text","text":"stream input"}]}}}`)
+		response := postLocalRunnerOpenCode(t, agent.RPCURL(), body)
+		streamBody, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil || response.StatusCode != http.StatusOK {
+			t.Fatalf("stream status=%d body=%s error=%v", response.StatusCode, streamBody, readErr)
+		}
+		for _, event := range decodeLocalRunnerSSEEvents(t, streamBody) {
+			if event["kind"] != "artifact-update" {
+				continue
+			}
+			appendPart, _ := event["append"].(bool)
+			last, _ := event["lastChunk"].(bool)
+			delivered = append(delivered, deliveredArtifact{
+				text: nestedString(event, "artifact", "parts", "0", "text"),
+				appendPart: appendPart,
+				last: last,
+			})
+		}
+	})
+	if len(delivered) < 2 || len(logs.records) != len(delivered)+1 {
+		t.Fatalf("delivered artifacts=%#v content logs=%#v", delivered, logs.records)
+	}
+	if logs.records[0]["msg"] != "localrunner.a2a.message.inbound" || logs.records[0]["mode"] != "stream" {
+		t.Fatalf("stream inbound log = %#v", logs.records[0])
+	}
+	for index, artifact := range delivered {
+		record := logs.records[index+1]
+		if record["msg"] != "localrunner.a2a.message.outbound" || record["mode"] != "stream" || record["sequence"] != float64(index+1) || record["content"] != artifact.text || record["content_bytes"] != float64(len(artifact.text)) || record["append"] != artifact.appendPart || record["last"] != artifact.last {
+			t.Fatalf("stream outbound log %d = %#v, artifact = %#v", index, record, artifact)
+		}
+	}
+}
+
+func TestLocalRunnerA2AContentLogsRequireDebugAndBoundLongText(t *testing.T) {
+	t.Run("disabled without debug even when handler accepts debug", func(t *testing.T) {
+		logs := captureLocalRunnerA2AMessageLogs(t, false, func() {
+			executor := &localRunnerA2AExecutor{backend: &fakeLocalRunnerOpenCodeBackend{reply: "visible reply"}, defaultContext: "default-context", harness: "claudecode"}
+			message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("visible input"))
+			execContext := &a2asrv.ExecutorContext{Message: message}
+			for _, err := range executor.Execute(context.Background(), execContext) {
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+		if len(logs.records) != 0 {
+			t.Fatalf("non-debug run emitted content logs: %s", logs.raw)
+		}
+	})
+
+	t.Run("debug truncates long content", func(t *testing.T) {
+		longInput := "visible-" + strings.Repeat("界", 9000) + " token=long-secret-value"
+		logs := captureLocalRunnerA2AMessageLogs(t, true, func() {
+			executor := &localRunnerA2AExecutor{backend: &fakeLocalRunnerOpenCodeBackend{reply: "done"}, defaultContext: "default-context", harness: "opencode"}
+			message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(longInput))
+			execContext := &a2asrv.ExecutorContext{Message: message}
+			for _, err := range executor.Execute(context.Background(), execContext) {
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+		if len(logs.records) != 2 {
+			t.Fatalf("long content records = %#v", logs.records)
+		}
+		inbound := logs.records[0]
+		content, _ := inbound["content"].(string)
+		if inbound["content_bytes"] != float64(len(longInput)) || inbound["truncated"] != true || utf8.RuneCountInString(content) > 8192 {
+			t.Fatalf("bounded inbound content = %#v", inbound)
+		}
+		if strings.Contains(logs.raw, "long-secret-value") {
+			t.Fatalf("bounded content log leaked token: %s", logs.raw)
+		}
+	})
+}
+
+type localRunnerA2AMessageLogCapture struct {
+	raw string
+	records []map[string]any
+}
+
+func captureLocalRunnerA2AMessageLogs(t *testing.T, debug bool, run func()) localRunnerA2AMessageLogCapture {
+	t.Helper()
+	t.Setenv("DWS_CONFIG_DIR", t.TempDir())
+	previousLogger := slog.Default()
+	configureLogLevel(&GlobalFlags{Debug: debug})
+	var output bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer func() {
+		configureLogLevel(&GlobalFlags{})
+		CloseFileLogger()
+		slog.SetDefault(previousLogger)
+	}()
+	run()
+	raw := output.String()
+	capture := localRunnerA2AMessageLogCapture{raw: raw}
+	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) == nil && (record["msg"] == "localrunner.a2a.message.inbound" || record["msg"] == "localrunner.a2a.message.outbound") {
+			capture.records = append(capture.records, record)
+		}
+	}
+	return capture
+}
+
 func TestLocalRunnerOfficialA2AAdapterIsSharedAcrossLocalAgentChannels(t *testing.T) {
 	for _, test := range []struct {
 		ref  string

@@ -914,6 +914,7 @@ func configureLogLevel(flags *GlobalFlags) {
 	if flags == nil {
 		return
 	}
+	localRunnerA2AContentDebugEnabled.Store(flags.Debug)
 	var level slog.Level
 	switch {
 	case flags.Debug:
