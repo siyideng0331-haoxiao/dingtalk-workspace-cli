@@ -26,7 +26,11 @@ The OpenCode polling fallback is intentional: event delivery accelerates updates
 
 ## Timeout boundary
 
-DWS does not add a timeout field to the Agent Card. The A2A core Agent Card schema does not define per-agent request timeouts, and this chain does not negotiate a timeout extension. Timeout policy is therefore enforced by the OpenAPI LocalRunner façade: synchronous `message/send` defaults to 300 seconds; `message/stream` defaults to a 1,800-second absolute limit and a 45-second post-start idle limit refreshed by response activity.
+DWS does not add a timeout field to the Agent Card. The A2A core Agent Card schema does not define per-agent request timeouts, and this chain does not negotiate a timeout extension.
+
+Streaming has no total-duration limit. LocalRunner emits a `working` event every 15 seconds while the Harness has no visible-text update; each event refreshes the streaming consumer's 90-second sliding activity lease. The stream ends only after a terminal Harness result, explicit cancellation, a real backend failure, or 90 consecutive seconds without an A2A event. The A2A server detaches execution from the incoming request deadline before invoking the Harness, so a former 30-minute OpenAPI request deadline must not become the Harness context deadline.
+
+The 90-second policy is streaming-only. It must not be installed through the A2A SDK's handler-wide agent-inactivity option because that option also applies to synchronous `message/send`; the existing synchronous send timeout policy remains independent.
 
 ## Change history
 
@@ -34,3 +38,4 @@ DWS does not add a timeout field to the Agent Card. The A2A core Agent Card sche
 |---|---|---|
 | 2026-08-23 | Replaced final-only LocalRunner SSE output with the standard Task/status/artifact lifecycle for Qoder, Codex, OpenCode, and Claude Code. Added an OpenCode async event-plus-poll adapter while preserving its synchronous DevConnect robot path. | Long Harness turns need visible progress and transport activity before final completion, but the shared robot layer must keep its existing behavior unless changed independently. |
 | 2026-08-23 | Kept timeout configuration out of Agent Card and documented the OpenAPI server-side Send and stream policies. | A2A core Agent Card has no request-timeout field, and advertising an unnegotiated private extension would not be interoperable. |
+| 2026-08-23 | Replaced the streaming absolute deadline with a 90-second sliding activity lease refreshed by 15-second `working` events; kept synchronous send unchanged. | Long-running Harness work should continue while observable activity is healthy, while a broken stream still needs a bounded inactivity failure and synchronous behavior must not change implicitly. |
