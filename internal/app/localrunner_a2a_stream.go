@@ -54,6 +54,14 @@ func (e *localRunnerA2AExecutor) executeStream(ctx context.Context, execCtx *a2a
 	defer cancel()
 
 	task := a2a.NewSubmittedTask(execCtx, execCtx.Message)
+	outboundHistory := task.History[:0]
+	for _, message := range task.History {
+		if message == nil || message.Role == a2a.MessageRoleUser {
+			continue
+		}
+		outboundHistory = append(outboundHistory, message)
+	}
+	task.History = outboundHistory
 	if !yield(task, nil) {
 		return
 	}

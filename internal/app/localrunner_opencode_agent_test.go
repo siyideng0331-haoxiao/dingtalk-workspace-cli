@@ -178,6 +178,17 @@ func TestLocalRunnerA2ADebugLogsInboundAndSynchronousOutboundContentSafely(t *te
 			t.Fatalf("content logs leaked %q: %s", forbidden, logs.raw)
 		}
 	}
+	if len(logs.eventRecords) != 1 {
+		t.Fatalf("sync event logs = %#v", logs.eventRecords)
+	}
+	eventRecord := logs.eventRecords[0]
+	if eventRecord["sequence"] != float64(1) || eventRecord["event_type"] != "message" || eventRecord["kind"] != "message" || eventRecord["truncated"] != false {
+		t.Fatalf("sync event log = %#v", eventRecord)
+	}
+	var eventJSON map[string]any
+	if raw, _ := eventRecord["event_json"].(string); json.Unmarshal([]byte(raw), &eventJSON) != nil || nestedString(eventJSON, "parts", "0", "text") == "" || eventJSON["contextId"] != "[redacted]" || eventJSON["messageId"] != "[redacted]" {
+		t.Fatalf("sync event_json = %#v", eventRecord["event_json"])
+	}
 }
 
 func TestLocalRunnerA2ADebugLogsEachDeliveredStreamingArtifact(t *testing.T) {
@@ -187,6 +198,7 @@ func TestLocalRunnerA2ADebugLogsEachDeliveredStreamingArtifact(t *testing.T) {
 		last bool
 	}
 	var delivered []deliveredArtifact
+	var deliveredEvents []map[string]any
 	logs := captureLocalRunnerA2AMessageLogs(t, true, func() {
 		backend := &fakeLocalRunnerOpenCodeBackend{
 			streamSnapshots: []string{"alpha", "alpha beta"},
@@ -204,7 +216,8 @@ func TestLocalRunnerA2ADebugLogsEachDeliveredStreamingArtifact(t *testing.T) {
 		if readErr != nil || response.StatusCode != http.StatusOK {
 			t.Fatalf("stream status=%d body=%s error=%v", response.StatusCode, streamBody, readErr)
 		}
-		for _, event := range decodeLocalRunnerSSEEvents(t, streamBody) {
+		deliveredEvents = decodeLocalRunnerSSEEvents(t, streamBody)
+		for _, event := range deliveredEvents {
 			if event["kind"] != "artifact-update" {
 				continue
 			}
@@ -229,6 +242,25 @@ func TestLocalRunnerA2ADebugLogsEachDeliveredStreamingArtifact(t *testing.T) {
 			t.Fatalf("stream outbound log %d = %#v, artifact = %#v", index, record, artifact)
 		}
 	}
+	for _, forbidden := range []string{"context-1", "message-1"} {
+		if strings.Contains(logs.raw, forbidden) {
+			t.Fatalf("stream logs leaked %q: %s", forbidden, logs.raw)
+		}
+	}
+	if len(logs.eventRecords) != len(deliveredEvents) {
+		t.Fatalf("stream event logs=%d delivered events=%d: %s", len(logs.eventRecords), len(deliveredEvents), logs.raw)
+	}
+	for index, deliveredEvent := range deliveredEvents {
+		record := logs.eventRecords[index]
+		if record["sequence"] != float64(index+1) || record["event_type"] != deliveredEvent["kind"] || record["kind"] != deliveredEvent["kind"] {
+			t.Fatalf("stream event log %d = %#v delivered=%#v", index, record, deliveredEvent)
+		}
+		var loggedEvent map[string]any
+		raw, _ := record["event_json"].(string)
+		if json.Unmarshal([]byte(raw), &loggedEvent) != nil || loggedEvent["kind"] != deliveredEvent["kind"] || strings.Contains(raw, "stream input") {
+			t.Fatalf("stream event_json %d = %q", index, raw)
+		}
+	}
 }
 
 func TestLocalRunnerA2AContentLogsRequireDebugAndBoundLongText(t *testing.T) {
@@ -243,15 +275,16 @@ func TestLocalRunnerA2AContentLogsRequireDebugAndBoundLongText(t *testing.T) {
 				}
 			}
 		})
-		if len(logs.records) != 0 {
+		if len(logs.records) != 0 || len(logs.eventRecords) != 0 || strings.Contains(logs.raw, "localrunner.a2a.event.outbound") {
 			t.Fatalf("non-debug run emitted content logs: %s", logs.raw)
 		}
 	})
 
 	t.Run("debug truncates long content", func(t *testing.T) {
 		longInput := "visible-" + strings.Repeat("界", 9000) + " token=long-secret-value"
+		longReply := "reply-" + strings.Repeat("界", 9000) + " cookie=long-cookie-value"
 		logs := captureLocalRunnerA2AMessageLogs(t, true, func() {
-			executor := &localRunnerA2AExecutor{backend: &fakeLocalRunnerOpenCodeBackend{reply: "done"}, defaultContext: "default-context", harness: "opencode"}
+			executor := &localRunnerA2AExecutor{backend: &fakeLocalRunnerOpenCodeBackend{reply: longReply}, defaultContext: "default-context", harness: "opencode"}
 			message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(longInput))
 			execContext := &a2asrv.ExecutorContext{Message: message}
 			for _, err := range executor.Execute(context.Background(), execContext) {
@@ -271,12 +304,21 @@ func TestLocalRunnerA2AContentLogsRequireDebugAndBoundLongText(t *testing.T) {
 		if strings.Contains(logs.raw, "long-secret-value") {
 			t.Fatalf("bounded content log leaked token: %s", logs.raw)
 		}
+		if len(logs.eventRecords) != 1 || logs.eventRecords[0]["truncated"] != true || logs.eventRecords[0]["event_bytes"].(float64) <= float64(len(logs.eventRecords[0]["event_json"].(string))) {
+			t.Fatalf("bounded event log = %#v", logs.eventRecords)
+		}
+		eventJSON, _ := logs.eventRecords[0]["event_json"].(string)
+		var event map[string]any
+		if utf8.RuneCountInString(eventJSON) > 8192 || json.Unmarshal([]byte(eventJSON), &event) != nil || strings.Contains(eventJSON, "long-cookie-value") {
+			t.Fatalf("bounded event_json = %q", eventJSON)
+		}
 	})
 }
 
 type localRunnerA2AMessageLogCapture struct {
 	raw string
 	records []map[string]any
+	eventRecords []map[string]any
 }
 
 func captureLocalRunnerA2AMessageLogs(t *testing.T, debug bool, run func()) localRunnerA2AMessageLogCapture {
@@ -285,7 +327,7 @@ func captureLocalRunnerA2AMessageLogs(t *testing.T, debug bool, run func()) loca
 	previousLogger := slog.Default()
 	configureLogLevel(&GlobalFlags{Debug: debug})
 	var output bytes.Buffer
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	slog.SetDefault(slog.New(localRunnerA2ASafeLogHandler{inner: slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug})}))
 	defer func() {
 		configureLogLevel(&GlobalFlags{})
 		CloseFileLogger()
@@ -296,8 +338,13 @@ func captureLocalRunnerA2AMessageLogs(t *testing.T, debug bool, run func()) loca
 	capture := localRunnerA2AMessageLogCapture{raw: raw}
 	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
 		var record map[string]any
-		if json.Unmarshal([]byte(line), &record) == nil && (record["msg"] == "localrunner.a2a.message.inbound" || record["msg"] == "localrunner.a2a.message.outbound") {
-			capture.records = append(capture.records, record)
+		if json.Unmarshal([]byte(line), &record) == nil {
+			switch record["msg"] {
+			case "localrunner.a2a.message.inbound", "localrunner.a2a.message.outbound":
+				capture.records = append(capture.records, record)
+			case "localrunner.a2a.event.outbound":
+				capture.eventRecords = append(capture.eventRecords, record)
+			}
 		}
 	}
 	return capture
@@ -653,6 +700,7 @@ func TestLocalRunnerA2AStreamingRequestDeadlineDoesNotBecomeHarnessDeadline(t *t
 func TestLocalRunnerRequiredHarnessesUseA2AStreamingExecutor(t *testing.T) {
 	for _, harness := range []string{"qoder", "codex", "opencode", "claudecode"} {
 		t.Run(harness, func(t *testing.T) {
+			const prompt = "USER-PROMPT-MUST-NOT-BE-ECHOED"
 			backend := &fakeLocalRunnerOpenCodeBackend{
 				streamSnapshots: []string{"partial"},
 				streamReply: "partial final",
@@ -663,7 +711,7 @@ func TestLocalRunnerRequiredHarnessesUseA2AStreamingExecutor(t *testing.T) {
 			}
 			defer agent.Close()
 
-			body := []byte(`{"jsonrpc":"2.0","id":"stream-1","method":"message/stream","params":{"message":{"kind":"message","role":"user","messageId":"message-1","contextId":"context-1","parts":[{"kind":"text","text":"hello"}]}}}`)
+			body := []byte(`{"jsonrpc":"2.0","id":"stream-1","method":"message/stream","params":{"message":{"kind":"message","role":"user","messageId":"message-1","contextId":"context-1","parts":[{"kind":"text","text":"` + prompt + `"}]}}}`)
 			response := postLocalRunnerOpenCode(t, agent.RPCURL(), body)
 			streamBody, readErr := io.ReadAll(response.Body)
 			response.Body.Close()
@@ -671,15 +719,22 @@ func TestLocalRunnerRequiredHarnessesUseA2AStreamingExecutor(t *testing.T) {
 				t.Fatalf("stream status=%d body=%s err=%v", response.StatusCode, streamBody, readErr)
 			}
 			events := decodeLocalRunnerSSEEvents(t, streamBody)
-			if len(events) < 5 || nestedString(events[2], "artifact", "parts", "0", "text") != "partial" || nestedString(events[len(events)-1], "status", "state") != "completed" {
+			if len(events) < 5 || events[0]["kind"] != "task" || nestedString(events[0], "status", "state") != "submitted" || nestedString(events[2], "artifact", "parts", "0", "text") != "partial" || nestedString(events[len(events)-1], "status", "state") != "completed" {
 				t.Fatalf("%s stream lifecycle = %#v", harness, events)
+			}
+			if history, exists := events[0]["history"]; exists || bytes.Contains(streamBody, []byte(prompt)) {
+				t.Fatalf("%s submitted task exposed inbound user history=%#v: %s", harness, history, streamBody)
 			}
 			backend.mu.Lock()
 			streamCalls := len(backend.streamCalls)
 			promptCalls := len(backend.calls)
+			streamPrompt := ""
+			if streamCalls == 1 {
+				streamPrompt = backend.streamCalls[0].prompt
+			}
 			backend.mu.Unlock()
-			if streamCalls != 1 || promptCalls != 0 {
-				t.Fatalf("%s stream calls=%d prompt calls=%d", harness, streamCalls, promptCalls)
+			if streamCalls != 1 || promptCalls != 0 || streamPrompt != prompt {
+				t.Fatalf("%s stream calls=%d prompt calls=%d stream prompt=%q", harness, streamCalls, promptCalls, streamPrompt)
 			}
 		})
 	}
