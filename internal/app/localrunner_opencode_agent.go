@@ -114,8 +114,17 @@ func (e *localRunnerA2AExecutor) Execute(ctx context.Context, execCtx *a2asrv.Ex
 			mode = "stream"
 		}
 		localRunnerLogA2AMessage(ctx, "localrunner.a2a.message.inbound", e.harness, mode, prompt, contextID, execCtx.Message.ID, 0, false, false)
+		eventSequence := 0
+		deliveredYield := func(event a2a.Event, eventErr error) bool {
+			delivered := yield(event, eventErr)
+			if delivered && eventErr == nil && event != nil {
+				eventSequence++
+				localRunnerLogA2AEvent(ctx, e.harness, mode, event, contextID, execCtx.Message.ID, eventSequence)
+			}
+			return delivered
+		}
 		if streaming {
-			e.executeStream(ctx, execCtx, contextID, prompt, yield)
+			e.executeStream(ctx, execCtx, contextID, prompt, deliveredYield)
 			return
 		}
 		reply, err := e.backend.Prompt(ctx, contextID, prompt)
@@ -131,7 +140,7 @@ func (e *localRunnerA2AExecutor) Execute(ctx context.Context, execCtx *a2asrv.Ex
 		}
 		message := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(reply))
 		message.ContextID = contextID
-		if yield(message, nil) {
+		if deliveredYield(message, nil) {
 			localRunnerLogA2AMessage(ctx, "localrunner.a2a.message.outbound", e.harness, mode, reply, contextID, execCtx.Message.ID, 1, false, true)
 		}
 	}
@@ -201,6 +210,123 @@ func localRunnerLogA2AMessage(ctx context.Context, eventName, harness, mode, con
 	)
 }
 
+func localRunnerLogA2AEvent(ctx context.Context, harness, mode string, event a2a.Event, threadID, messageID string, sequence int) {
+	if !localRunnerA2AContentDebugEnabled.Load() || event == nil {
+		return
+	}
+	eventType := localRunnerA2AEventType(event)
+	eventJSON, eventBytes, truncated := localRunnerSafeA2AEventJSON(event, eventType, []string{threadID, messageID})
+	digest := sha256.Sum256([]byte(threadID + "\x00" + messageID))
+	slog.DebugContext(ctx, "localrunner.a2a.event.outbound",
+		"harness", strings.ToLower(strings.TrimSpace(harness)),
+		"mode", mode,
+		"sequence", sequence,
+		"event_type", eventType,
+		"kind", eventType,
+		"event_json", eventJSON,
+		"event_bytes", eventBytes,
+		"truncated", truncated,
+		"turn_hash", fmt.Sprintf("sha256:%x", digest[:8]),
+	)
+}
+
+func localRunnerA2AEventType(event a2a.Event) string {
+	switch event.(type) {
+	case *a2a.Message:
+		return "message"
+	case *a2a.Task:
+		return "task"
+	case *a2a.TaskStatusUpdateEvent:
+		return "status-update"
+	case *a2a.TaskArtifactUpdateEvent:
+		return "artifact-update"
+	default:
+		return "event"
+	}
+}
+
+func localRunnerSafeA2AEventJSON(event a2a.Event, eventType string, exactSecrets []string) (string, int, bool) {
+	wireEvent, err := a2av0.FromV1Event(event)
+	if err != nil {
+		return `{"kind":"event","redacted":true}`, 0, false
+	}
+	raw, err := json.Marshal(wireEvent)
+	if err != nil {
+		return `{"kind":"event","redacted":true}`, 0, false
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return `{"kind":"event","redacted":true}`, len(raw), false
+	}
+	sanitized, err := json.Marshal(localRunnerSanitizeA2AEventValue(value, "", exactSecrets))
+	if err != nil {
+		return `{"kind":"event","redacted":true}`, len(raw), false
+	}
+	eventJSON, bounded := localRunnerBoundA2AEventJSON(eventType, sanitized)
+	return eventJSON, len(raw), bounded || utf8.RuneCount(raw) > localRunnerA2AMessageLogMaxRunes
+}
+
+func localRunnerSanitizeA2AEventValue(value any, key string, exactSecrets []string) any {
+	if localRunnerA2AEventSensitiveKey(key) {
+		return "[redacted]"
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		result := make(map[string]any, len(typed))
+		for childKey, childValue := range typed {
+			result[childKey] = localRunnerSanitizeA2AEventValue(childValue, childKey, exactSecrets)
+		}
+		return result
+	case []any:
+		result := make([]any, len(typed))
+		for index, childValue := range typed {
+			result[index] = localRunnerSanitizeA2AEventValue(childValue, key, exactSecrets)
+		}
+		return result
+	case string:
+		sanitized := dwslogging.SanitizeMessageText(typed, exactSecrets, localRunnerA2AMessageLogMaxRunes)
+		if sanitized == "" {
+			return "[redacted]"
+		}
+		return sanitized
+	default:
+		return value
+	}
+}
+
+func localRunnerA2AEventSensitiveKey(key string) bool {
+	if dwslogging.IsSensitiveKey(key) {
+		return true
+	}
+	normalized := strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(strings.TrimSpace(key)))
+	switch normalized {
+	case "id", "messageid", "contextid", "sessionid", "taskid", "artifactid", "requestid", "parenttooluseid", "referencetaskids":
+		return true
+	default:
+		return false
+	}
+}
+
+func localRunnerBoundA2AEventJSON(eventType string, data []byte) (string, bool) {
+	if utf8.RuneCount(data) <= localRunnerA2AMessageLogMaxRunes {
+		return string(data), false
+	}
+	runes := []rune(string(data))
+	previewRunes := 3000
+	if len(runes) < previewRunes {
+		previewRunes = len(runes)
+	}
+	fallback, _ := json.Marshal(map[string]any{
+		"kind": eventType,
+		"preview": string(runes[:previewRunes]) + "…",
+		"truncated": true,
+	})
+	if utf8.RuneCount(fallback) > localRunnerA2AMessageLogMaxRunes {
+		fallback, _ = json.Marshal(map[string]any{"kind": eventType, "truncated": true})
+	}
+	return string(fallback), true
+}
+
 type localRunnerA2ASafeLogHandler struct {
 	inner slog.Handler
 }
@@ -251,7 +377,13 @@ func localRunnerA2ASafeLogAttr(attr slog.Attr) slog.Attr {
 
 func localRunnerA2ASensitiveLogKey(key string) bool {
 	key = strings.ToLower(strings.TrimSpace(key))
-	return dwslogging.IsSensitiveKey(key) || strings.Contains(key, "context") || strings.Contains(key, "session") || strings.Contains(key, "prompt")
+	normalized := strings.NewReplacer("_", "", "-", "").Replace(key)
+	identity := false
+	switch normalized {
+	case "id", "messageid", "contextid", "sessionid", "taskid", "artifactid", "requestid", "parenttooluseid", "referencetaskids":
+		identity = true
+	}
+	return identity || dwslogging.IsSensitiveKey(key) || strings.Contains(key, "context") || strings.Contains(key, "session") || strings.Contains(key, "prompt")
 }
 
 func localRunnerBackendFailureReason(err error) (string, string) {
