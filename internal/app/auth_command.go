@@ -322,30 +322,29 @@ var (
 	authOAuthExchange = func(provider *authpkg.OAuthProvider, ctx context.Context, code, uid string) (*authpkg.TokenData, error) {
 		return provider.ExchangeAuthCode(ctx, code, uid)
 	}
-	authExchangeClientIDProvider = authpkg.FetchClientIDFromMCP
-	authPlanLoginRecommend       = pat.PlanLoginRecommendAuthorization
-	authRunLoginRecommend        = pat.RunLoginRecommendAuthorizationWithOptions
-	authRunDirectPATWait         = runDirectPATAuthCheckWaitOnly
-	authResolveProfile           = authpkg.ResolveProfile
-	authResolveProfileDeletion   = authpkg.ResolveProfileDeletionScope
-	authRevokeToken              = authpkg.RevokeTokenRemote
-	authRevokeTokenForData       = authpkg.RevokeTokenRemoteForData
-	authLoadTokenForProfile      = authpkg.LoadTokenDataForProfile
-	authDeleteProfileToken       = authpkg.DeleteTokenDataForProfile
-	authEnsureProfilesMigration  = authpkg.EnsureProfilesMigration
-	authLoadProfiles             = authpkg.LoadProfiles
-	authDeleteAllTokenData       = authpkg.DeleteAllTokenData
-	authDeleteTokenData          = authpkg.DeleteTokenData
-	authMarkProfileStatus        = authpkg.MarkProfileStatus
-	authPortableExportSupported  = authpkg.PortableExportSupported
-	authPortableSourceReady      = authpkg.PortableAuthSourceReady
-	authPortableTargetPopulated  = authpkg.PortableAuthTargetPopulated
-	authExportPortableBundle     = authpkg.ExportPortableAuthBundle
-	authImportPortableBundle     = authpkg.ImportPortableAuthBundle
-	authAtomicWrite              = helpers.AtomicWrite
-	authReadFile                 = os.ReadFile
-	authRemove                   = os.Remove
-	authDeleteAppConfig          = authpkg.DeleteAppConfig
+	authPlanLoginRecommend      = pat.PlanLoginRecommendAuthorization
+	authRunLoginRecommend       = pat.RunLoginRecommendAuthorizationWithOptions
+	authRunDirectPATWait        = runDirectPATAuthCheckWaitOnly
+	authResolveProfile          = authpkg.ResolveProfile
+	authResolveProfileDeletion  = authpkg.ResolveProfileDeletionScope
+	authRevokeToken             = authpkg.RevokeTokenRemote
+	authRevokeTokenForData      = authpkg.RevokeTokenRemoteForData
+	authLoadTokenForProfile     = authpkg.LoadTokenDataForProfile
+	authDeleteProfileToken      = authpkg.DeleteTokenDataForProfile
+	authEnsureProfilesMigration = authpkg.EnsureProfilesMigration
+	authLoadProfiles            = authpkg.LoadProfiles
+	authDeleteAllTokenData      = authpkg.DeleteAllTokenData
+	authDeleteTokenData         = authpkg.DeleteTokenData
+	authMarkProfileStatus       = authpkg.MarkProfileStatus
+	authPortableExportSupported = authpkg.PortableExportSupported
+	authPortableSourceReady     = authpkg.PortableAuthSourceReady
+	authPortableTargetPopulated = authpkg.PortableAuthTargetPopulated
+	authExportPortableBundle    = authpkg.ExportPortableAuthBundle
+	authImportPortableBundle    = authpkg.ImportPortableAuthBundle
+	authAtomicWrite             = helpers.AtomicWrite
+	authReadFile                = os.ReadFile
+	authRemove                  = os.Remove
+	authDeleteAppConfig         = authpkg.DeleteAppConfig
 )
 
 func selectAuthLoginGuideAction() (authLoginGuideAction, error) {
@@ -925,16 +924,6 @@ func newAuthExchangeCommand(caller edition.ToolCaller) *cobra.Command {
 			configureOAuthProviderCompatibility(provider, configDir)
 			exchangeCtx, cancel := context.WithTimeout(cmd.Context(), time.Minute)
 			defer cancel()
-			clientID, err := authExchangeClientIDProvider(exchangeCtx)
-			if err != nil {
-				return apperrors.NewAuth(fmt.Sprintf(
-					"failed to resolve DWS OAuth client from MCP: %v", err))
-			}
-			clientID = strings.TrimSpace(clientID)
-			if clientID == "" {
-				return apperrors.NewAuth("DWS OAuth client from MCP is empty")
-			}
-			provider.SetMCPClientID(clientID)
 			tokenData, err := authOAuthExchange(provider, exchangeCtx, code, strings.TrimSpace(uid))
 			if err != nil {
 				return apperrors.NewAuth(fmt.Sprintf("failed to exchange authorization code: %v", err))

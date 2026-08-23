@@ -1242,7 +1242,6 @@ func TestCrossPlatformCoverageAuthCoveragePortableExchangeAndReset(t *testing.T)
 	oldAtomic := authAtomicWrite
 	oldRead := authReadFile
 	oldExchange := authOAuthExchange
-	oldExchangeClientIDProvider := authExchangeClientIDProvider
 	oldDeleteAll := authDeleteAllTokenData
 	oldRemove := authRemove
 	oldDeleteConfig := authDeleteAppConfig
@@ -1256,7 +1255,6 @@ func TestCrossPlatformCoverageAuthCoveragePortableExchangeAndReset(t *testing.T)
 		authAtomicWrite = oldAtomic
 		authReadFile = oldRead
 		authOAuthExchange = oldExchange
-		authExchangeClientIDProvider = oldExchangeClientIDProvider
 		authDeleteAllTokenData = oldDeleteAll
 		authRemove = oldRemove
 		authDeleteAppConfig = oldDeleteConfig
@@ -1395,7 +1393,6 @@ func TestCrossPlatformCoverageAuthCoveragePortableExchangeAndReset(t *testing.T)
 		t.Fatal("missing code should fail")
 	}
 	_ = exchange.Flags().Set("code", "code")
-	authExchangeClientIDProvider = func(context.Context) (string, error) { return "mcp-client-id", nil }
 	authOAuthExchange = func(*authpkg.OAuthProvider, context.Context, string, string) (*authpkg.TokenData, error) {
 		return nil, errors.New("exchange")
 	}
