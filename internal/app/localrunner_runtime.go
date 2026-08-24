@@ -53,6 +53,7 @@ type localRunnerRuntimeDependencies struct {
 }
 
 type productionLocalRunnerCommandRuntime struct {
+	configDir         string
 	configs           *localrunner.RunnerConfigStore
 	controlHTTPClient localrunner.HTTPDoer
 	cardHTTPClient    localrunner.HTTPDoer
@@ -103,6 +104,7 @@ func newProductionLocalRunnerCommandRuntime(deps localRunnerRuntimeDependencies)
 		deps.ReconnectBackoff = time.Second
 	}
 	return &productionLocalRunnerCommandRuntime{
+		configDir:         configDir,
 		configs:           localrunner.NewRunnerConfigStore(filepath.Join(configDir, "local-runners")),
 		controlHTTPClient: deps.ControlHTTPClient,
 		cardHTTPClient:    deps.CardHTTPClient,
@@ -195,11 +197,11 @@ func (r *productionLocalRunnerCommandRuntime) StartLocal(ctx context.Context, op
 		sessionStoreKey := localRunnerSessionStoreKey(storedLocalAgentID)
 		if stored != nil {
 			agent, err = localRunnerLocalAgentRestarter(ctx, stored.LoopbackBaseURL, agentRef, localRunnerLocalAgentOptions{
-				WorkDir: workDir, Model: options.Model, AgentCommand: options.AgentCommand, SessionStoreKey: sessionStoreKey, Memory: options.Memory, Yolo: options.Yolo, Timeout: options.AgentTimeout,
+				WorkDir: workDir, ConfigDir: r.configDir, Model: options.Model, AgentCommand: options.AgentCommand, SessionStoreKey: sessionStoreKey, Memory: options.Memory, Yolo: options.Yolo, AccessMode: options.AccessMode, Timeout: options.AgentTimeout,
 			})
 		} else {
 			agent, err = localRunnerLocalAgentStarter(ctx, agentRef, localRunnerLocalAgentOptions{
-				WorkDir: workDir, Model: options.Model, AgentCommand: options.AgentCommand, SessionStoreKey: sessionStoreKey, Memory: options.Memory, Yolo: options.Yolo, Timeout: options.AgentTimeout,
+				WorkDir: workDir, ConfigDir: r.configDir, Model: options.Model, AgentCommand: options.AgentCommand, SessionStoreKey: sessionStoreKey, Memory: options.Memory, Yolo: options.Yolo, AccessMode: options.AccessMode, Timeout: options.AgentTimeout,
 			})
 		}
 		if err != nil {

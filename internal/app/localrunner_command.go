@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,11 @@ import (
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/helpers"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/localrunner"
 	"github.com/spf13/cobra"
+)
+
+const (
+	localRunnerAccessModeWorkspace = "workspace"
+	localRunnerAccessModeFull      = "full"
 )
 
 type localRunnerExposeOptions struct {
@@ -45,6 +51,7 @@ type localRunnerStartLocalOptions struct {
 	Streaming     bool
 	Memory        bool
 	Yolo          bool
+	AccessMode    string
 	AgentTimeout  time.Duration
 }
 
@@ -109,11 +116,12 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 		Streaming:     true,
 		Memory:        true,
 		Yolo:          true,
+		AccessMode:    localRunnerAccessModeWorkspace,
 	}
 	cmd := &cobra.Command{
 		Use:   "start-local",
 		Short: "注册并运行一个本地 A2A Agent",
-		Long:  "使用 --harness 在当前 dws 进程管理指定项目目录中的本地 Agent。支持 " + strings.Join(harnesses, ", ") + "；全部复用 dev connect 的共享 backend。custom harness 可通过 --agent-cmd 指定无头命令；本地配置丢失或迁移时可通过 --runner-id 做灾难恢复。日常重启可直接重跑原命令并按稳定本地标识隐式恢复。注册或恢复后先输出不含凭证的公网 A2A 配置，再维持 WSS 与本地 HTTP/SSE 代理。",
+		Long:  "使用 --harness 在当前 dws 进程管理指定项目目录中的本地 Agent。支持 " + strings.Join(harnesses, ", ") + "；Qoder、Codex、OpenCode 和 Claude Code 使用 LocalRunner 专用常驻 backend，其余 harness 保持 dev connect 的共享 backend 行为。custom harness 可通过 --agent-cmd 指定无头命令；本地配置丢失或迁移时可通过 --runner-id 做灾难恢复。日常重启可直接重跑原命令并按稳定本地标识隐式恢复。注册或恢复后先输出不含凭证的公网 A2A 配置，再维持 WSS 与本地 HTTP/SSE 代理。",
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			options.AgentRef = strings.TrimSpace(harness)
@@ -129,12 +137,30 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 			} else if options.AgentCommand != "" {
 				return ErrLocalRunnerRuntimeInvalid
 			}
+			accessMode, err := normalizeLocalRunnerAccessMode(options.AccessMode)
+			if err != nil {
+				return err
+			}
+			dedicatedHarness := isLocalRunnerDedicatedHarness(options.AgentRef)
+			if dedicatedHarness && cmd.Flags().Changed("access-mode") && cmd.Flags().Changed("yolo") {
+				return ErrLocalRunnerRuntimeInvalid
+			}
+			if dedicatedHarness && cmd.Flags().Changed("yolo") {
+				accessMode = localRunnerAccessModeWorkspace
+				if options.Yolo {
+					accessMode = localRunnerAccessModeFull
+				}
+			}
+			options.AccessMode = accessMode
 			workDir, err := normalizeLocalRunnerWorkDir(options.WorkDir)
 			if err != nil {
 				return err
 			}
 			options.WorkDir = workDir
 			options.Model = strings.TrimSpace(options.Model)
+			if !dedicatedHarness {
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), localRunnerIgnoredAccessModeNotice(options.AgentRef, options.AccessMode, options.Yolo))
+			}
 			runtime := localRunnerCommandRuntimeProvider()
 			result, err := runtime.StartLocal(cmd.Context(), options)
 			if err != nil {
@@ -156,6 +182,7 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 	flags.StringVar(&options.AgentCommand, "agent-cmd", "", "仅 custom harness 使用的无头命令；问题作为末参，stdout 作为回复；也可使用 DWS_AGENT_CMD")
 	flags.StringVar(&options.RunnerID, "runner-id", "", "仅用于本地配置丢失或迁移时的灾难恢复；Endpoint 由服务端 Runner 视图确定")
 	flags.StringVar(&options.Model, "model", "", "本地 Agent 模型覆盖；留空使用 channel 默认模型")
+	flags.StringVar(&options.AccessMode, "access-mode", localRunnerAccessModeWorkspace, "本地访问权限；workspace 仅允许项目目录和 DWS 配置目录，full 允许访问当前系统用户可访问的全部路径（仅 Qoder、Codex、OpenCode、Claude Code 生效）")
 	flags.StringVar(&options.LocalAgentID, "local-agent-id", "", "本地 Agent 的稳定 ID；默认按 harness/绝对 work-dir 确定性派生")
 	flags.StringVar(&options.DisplayName, "display-name", "", "LocalRunner 显示名称；默认使用 Agent Card name")
 	flags.IntVar(&options.MaxConcurrent, "max-concurrent", 4, "最大并发 A2A 请求数")
@@ -182,6 +209,7 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 	declaration.Parameters = []contract.ParamDecl{
 		{Name: "harness", Property: "harness", InterfaceType: "string", Description: harnessDescription, Required: &required, Enum: append([]string(nil), harnesses...)},
 		{Name: "work-dir", Property: "workDir", InterfaceType: "string", Description: "本地 Agent 项目目录；可使用相对或绝对路径", Required: &required},
+		{Name: "access-mode", Property: "accessMode", InterfaceType: "string", Description: "本地访问权限；workspace 仅允许项目目录和 DWS 配置目录，full 允许访问当前系统用户可访问的全部路径（仅 Qoder、Codex、OpenCode、Claude Code 生效）", Enum: []string{localRunnerAccessModeWorkspace, localRunnerAccessModeFull}},
 		{Name: "model", Property: "model", InterfaceType: "string", Description: "本地 Agent 模型覆盖；留空使用 channel 默认模型"},
 		{Name: "agent-cmd", Property: "agentCommand", InterfaceType: "string", Description: "仅 custom harness 使用的无头命令；仅在内存中传给共享 backend，也可使用 DWS_AGENT_CMD", Required: &optional, RequiredWhen: "harness=custom unless DWS_AGENT_CMD is set"},
 		{Name: "runner-id", Property: "runnerId", InterfaceType: "string", Description: "仅用于本地配置丢失或迁移时的灾难恢复；Endpoint 由服务端 Runner 视图确定", Required: &optional},
@@ -191,6 +219,43 @@ func newLocalRunnerStartLocalCommand() *cobra.Command {
 		Contract: declaration,
 	})
 	return cmd
+}
+
+func normalizeLocalRunnerAccessMode(raw string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	if mode == "" {
+		mode = localRunnerAccessModeWorkspace
+	}
+	if mode != localRunnerAccessModeWorkspace && mode != localRunnerAccessModeFull {
+		return "", ErrLocalRunnerRuntimeInvalid
+	}
+	return mode, nil
+}
+
+func localRunnerIgnoredAccessModeNotice(harness, accessMode string, yolo bool) string {
+	prefix := fmt.Sprintf("提示：--access-mode=%s 对 harness %s 不生效。", accessMode, harness)
+	if !yolo {
+		switch harness {
+		case "qoderwork":
+			return prefix + " QoderWork 继续使用现有策略：保留工具权限确认；无交互环境下需要确认的操作可能被拒绝。"
+		case "codebuddy":
+			return prefix + " CodeBuddy 继续使用现有策略：保留工具权限确认；无交互环境下需要确认的操作可能被拒绝。"
+		case "workbuddy":
+			return prefix + " WorkBuddy 继续使用现有策略：保留工具权限确认；无交互环境下需要确认的操作可能被拒绝。"
+		}
+	}
+	switch harness {
+	case "qoderwork":
+		return prefix + " QoderWork 继续使用现有策略：跳过工具权限确认，实际文件访问仍受当前操作系统用户权限限制。"
+	case "codebuddy":
+		return prefix + " CodeBuddy 继续使用现有策略：跳过工具权限确认，实际文件访问仍受当前操作系统用户权限限制。"
+	case "workbuddy":
+		return prefix + " WorkBuddy 继续使用现有策略：跳过工具权限确认，实际文件访问仍受当前操作系统用户权限限制。"
+	case "custom":
+		return prefix + " custom 不注入权限参数，权限由自定义命令和当前操作系统用户决定。"
+	default:
+		return prefix + " 该 harness 继续使用现有共享 backend 的权限策略。"
+	}
 }
 
 func normalizeLocalRunnerWorkDir(raw string) (string, error) {

@@ -136,15 +136,18 @@ func (t *localRunnerCodexTransport) Close() error {
 }
 
 func (t *localRunnerCodexTransport) threadParams(threadID string) map[string]any {
-	sandbox := "read-only"
-	if t.options.yolo {
-		sandbox = "workspace-write"
+	sandbox := "workspace-write"
+	if t.options.accessMode == localRunnerAccessModeFull {
+		sandbox = "danger-full-access"
 	}
 	params := map[string]any{
 		"approvalPolicy":        "never",
 		"cwd":                   t.options.workDir,
 		"developerInstructions": localRunnerCodexDeveloperInstructions,
 		"sandbox":               sandbox,
+	}
+	if t.options.accessMode != localRunnerAccessModeFull {
+		params["runtimeWorkspaceRoots"] = []string{t.options.workDir, t.options.configDir}
 	}
 	if t.options.model != "" {
 		params["model"] = t.options.model

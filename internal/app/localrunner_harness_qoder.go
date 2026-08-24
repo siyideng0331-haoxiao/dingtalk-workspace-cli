@@ -134,11 +134,7 @@ func (t *localRunnerQoderTransport) startLocked(ctx context.Context) error {
 	}
 	args := append([]string{}, t.options.command[1:]...)
 	args = append(args, "--print", "--output-format", "stream-json", "--input-format", "stream-json")
-	if t.options.yolo {
-		args = append(args, "--permission-mode", "bypass_permissions", "--dangerously-skip-permissions")
-	} else {
-		args = append(args, "--system-prompt", "", "--setting-sources", "", "--tools", "")
-	}
+	args = append(args, localRunnerQoderAccessArgs(t.options.accessMode, t.options.configDir)...)
 	if t.options.model != "" {
 		args = append(args, "--model", t.options.model)
 	}
@@ -169,6 +165,13 @@ func (t *localRunnerQoderTransport) startLocked(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func localRunnerQoderAccessArgs(accessMode, configDir string) []string {
+	if accessMode == localRunnerAccessModeFull {
+		return []string{"--permission-mode", "bypass_permissions", "--dangerously-skip-permissions"}
+	}
+	return []string{"--permission-mode", "accept_edits", "--add-dir", configDir}
 }
 
 func (t *localRunnerQoderTransport) initializeLocked(parent context.Context) error {

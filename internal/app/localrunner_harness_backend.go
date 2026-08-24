@@ -37,10 +37,11 @@ type localRunnerHarnessOptions struct {
 	bin string
 	command []string
 	workDir string
+	configDir string
 	model string
 	stateKey string
 	memory bool
-	yolo bool
+	accessMode string
 	timeout time.Duration
 }
 
@@ -76,15 +77,20 @@ func startLocalRunnerHarnessBackend(ctx context.Context, harness string, options
 	if err != nil {
 		return nil, err
 	}
+	accessMode, err := normalizeLocalRunnerAccessMode(options.AccessMode)
+	if err != nil {
+		return nil, err
+	}
 	transport, err := localRunnerHarnessTransportFactory(localRunnerHarnessOptions{
 		harness: harness,
 		bin: bin,
 		command: command,
 		workDir: localRunnerHarnessWorkDir(options.WorkDir),
+		configDir: localRunnerHarnessConfigDir(options.ConfigDir),
 		model: strings.TrimSpace(options.Model),
 		stateKey: strings.TrimSpace(stateKey),
 		memory: options.Memory,
-		yolo: options.Yolo,
+		accessMode: accessMode,
 		timeout: options.Timeout,
 	})
 	if err != nil {
@@ -189,6 +195,16 @@ func localRunnerHarnessWorkDir(raw string) string {
 		return "."
 	}
 	return cwd
+}
+
+func localRunnerHarnessConfigDir(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		raw = config.DefaultConfigDir()
+	}
+	if abs, err := filepath.Abs(raw); err == nil {
+		return abs
+	}
+	return raw
 }
 
 func localRunnerHarnessContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {

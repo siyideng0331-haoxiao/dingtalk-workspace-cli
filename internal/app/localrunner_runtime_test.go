@@ -911,23 +911,27 @@ func TestProductionLocalRunnerStartLocalClosesBuiltInEchoWhenRegistrationFails(t
 	}
 }
 
-func TestProductionLocalRunnerStartLocalRunsSharedCodexBackendWithStableWorkDirIdentity(t *testing.T) {
+func TestProductionLocalRunnerStartLocalPassesCodexAccessModeWithStableWorkDirIdentity(t *testing.T) {
 	workDir := t.TempDir()
 	backend := &fakeLocalRunnerOpenCodeBackend{reply: "Codex reply"}
 	var started *localRunnerOpenCodeAgent
 	var gotAgentRef string
 	var gotWorkDir string
+	var gotConfigDir string
 	var gotModel string
 	var gotMemory bool
 	var gotYolo bool
+	var gotAccessMode string
 	var gotTimeout time.Duration
 	var gotSessionStoreKey string
 	testseam.Swap(t, &localRunnerLocalAgentStarter, func(_ context.Context, agentRef string, options localRunnerLocalAgentOptions) (*localRunnerOpenCodeAgent, error) {
 		gotAgentRef = agentRef
 		gotWorkDir = options.WorkDir
+		gotConfigDir = options.ConfigDir
 		gotModel = options.Model
 		gotMemory = options.Memory
 		gotYolo = options.Yolo
+		gotAccessMode = options.AccessMode
 		gotTimeout = options.Timeout
 		gotSessionStoreKey = localRunnerTestSessionStoreKey(options)
 		agent, err := startLocalRunnerLocalAgentWithBackend(backend, "127.0.0.1:0", agentRef)
@@ -950,22 +954,23 @@ func TestProductionLocalRunnerStartLocalRunsSharedCodexBackendWithStableWorkDirI
 		}
 		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 	})
+	configDir := t.TempDir()
 	runtime := newProductionLocalRunnerCommandRuntime(localRunnerRuntimeDependencies{
-		ConfigDir: t.TempDir(), ControlHTTPClient: controlClient,
+		ConfigDir: configDir, ControlHTTPClient: controlClient,
 		OAuth: staticLocalRunnerOAuth("oauth-token"),
 		Credentials: localrunner.NewEndpointBearerKeyring(&runtimeSecretBackend{values: make(map[string]string)}),
 		OwnerIdentity: testLocalRunnerOwnerIdentity,
 	})
 
 	result, err := runtime.StartLocal(context.Background(), localRunnerStartLocalOptions{
-		AgentRef: "codex", WorkDir: workDir, Model: "provider/model", Memory: true, Yolo: false, AgentTimeout: 11 * time.Second,
+		AgentRef: "codex", WorkDir: workDir, Model: "provider/model", Memory: true, Yolo: false, AccessMode: localRunnerAccessModeFull, AgentTimeout: 11 * time.Second,
 		OpenAPIBase: "https://api.dingtalk.com", MaxConcurrent: 3, Streaming: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotAgentRef != "codex" || gotWorkDir != workDir || gotModel != "provider/model" || !gotMemory || gotYolo || gotTimeout != 11*time.Second {
-		t.Fatalf("shared starter ref=%q workdir=%q model=%q memory=%v yolo=%v timeout=%v", gotAgentRef, gotWorkDir, gotModel, gotMemory, gotYolo, gotTimeout)
+	if gotAgentRef != "codex" || gotWorkDir != workDir || gotConfigDir != configDir || gotModel != "provider/model" || !gotMemory || gotYolo || gotAccessMode != localRunnerAccessModeFull || gotTimeout != 11*time.Second {
+		t.Fatalf("shared starter ref=%q workdir=%q configdir=%q model=%q memory=%v yolo=%v accessmode=%q timeout=%v", gotAgentRef, gotWorkDir, gotConfigDir, gotModel, gotMemory, gotYolo, gotAccessMode, gotTimeout)
 	}
 	if gotSessionStoreKey != "localrunner-"+wantLocalAgentID {
 		t.Fatalf("shared starter session store key = %q, want %q", gotSessionStoreKey, "localrunner-"+wantLocalAgentID)

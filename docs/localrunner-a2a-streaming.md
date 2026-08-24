@@ -44,6 +44,26 @@ LocalRunner owns dedicated transport implementations under `internal/app`; it do
 
 When memory is enabled, context-to-native-session identity is stored below the profile-scoped DWS config directory so a normal Runner restart can resume the native conversation. Disabling memory keeps mappings in the current process only. The dedicated transports do not introduce a remote HTTP wrapper; OpenCode's loopback server is its official local transport.
 
+## Local access mode
+
+`start-local` exposes one permission switch for the four LocalRunner-owned Harnesses:
+
+```bash
+dws deap runtime start-local --harness codex --work-dir ./project --access-mode workspace
+dws deap runtime start-local --harness codex --work-dir ./project --access-mode full
+```
+
+`workspace` is the default. It lets the Harness work in `--work-dir` and the active profile-scoped DWS config directory, which is required when the task invokes DWS itself. `full` selects the Harness's native highest-access mode and therefore allows everything available to the operating-system user that started DWS.
+
+| Harness | `workspace` mapping | `full` mapping |
+|---|---|---|
+| Qoder | `accept_edits`, with the DWS config directory added explicitly | `bypass_permissions` and dangerous permission bypass |
+| Codex | `workspace-write`, with `--work-dir` and the DWS config directory as runtime workspace roots | `danger-full-access` |
+| OpenCode | Allow normal tools, deny all external directories, then allow the DWS config directory explicitly | Allow normal tools without an external-directory restriction |
+| Claude Code | `acceptEdits`, with the DWS config directory added explicitly | `bypassPermissions` and dangerous permission bypass |
+
+For `qoderwork`, `codebuddy`, `workbuddy`, `custom`, and any future non-dedicated Harness, `--access-mode` is intentionally ignored. DWS writes a plain-language notice to stderr explaining the Harness's actual existing strategy; stdout remains clean for `--format json`. These Harnesses continue through the shared DevConnect backend unchanged. The hidden legacy `--yolo` option remains compatible for existing invocations: for the four dedicated Harnesses, explicit true maps to `full` and explicit false maps to `workspace`; specifying it together with `--access-mode` is rejected to avoid ambiguous policy.
+
 ## DevConnect compatibility
 
 | Harness | Incremental source | Existing DevConnect robot behavior |
@@ -78,3 +98,4 @@ The 90-second policy is streaming-only. It must not be installed through the A2A
 | 2026-08-24 | Moved the four LocalRunner Harness transports to dedicated, synchronously prewarmed Runner-owned lifecycles while leaving shared DevConnect production code unchanged. | Long-lived app-server/streaming-input/server processes remove per-turn cold starts, startup failures become observable before endpoint publication, and context-specific native sessions remain isolated. |
 | 2026-08-24 | Added debug-only full inbound compatibility-wire event serialization with the same recursive redaction and valid-JSON truncation used for outbound events. | Remote diagnosis needs the accepted request object as well as the delivered response sequence, without exposing credentials or raw A2A/native identifiers. |
 | 2026-08-24 | Adapted the LocalRunner Codex transport to app-server v2 `error` notifications: matching `willRetry=true` events keep the turn open and emit a debug-only sanitized retry record, while terminal events return only a sanitized message summary. | Codex may recover a transient Responses WebSocket failure through retries or HTTP fallback, so a retry notification is progress rather than a terminal Harness failure; malformed notifications must still fail safely. |
+| 2026-08-24 | Added `--access-mode workspace\|full` for the four LocalRunner-owned Harnesses, including explicit access to the active DWS config directory in workspace mode. Non-dedicated Harnesses now explain on stderr that the option is ignored while retaining their existing shared-backend policy. | LocalRunner tasks need one simple, cross-Harness permission contract, especially when invoking DWS outside the project directory, without changing DevConnect behavior or pretending unsupported Harnesses honor the new control. |

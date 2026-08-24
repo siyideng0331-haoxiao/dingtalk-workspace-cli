@@ -15,6 +15,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,6 +23,67 @@ import (
 	"testing"
 	"time"
 )
+
+func TestLocalRunnerDedicatedHarnessAccessModeMappings(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "dws-config")
+	workDir := filepath.Join(t.TempDir(), "workspace")
+
+	for _, mode := range []string{"workspace", "full"} {
+		t.Run("codex-"+mode, func(t *testing.T) {
+			transport := newLocalRunnerCodexTransport(localRunnerHarnessOptions{
+				workDir: workDir, configDir: configDir, accessMode: mode,
+			})
+			params := transport.threadParams("")
+			if mode == "workspace" {
+				if params["sandbox"] != "workspace-write" {
+					t.Fatalf("Codex workspace sandbox = %#v", params["sandbox"])
+				}
+				roots, _ := params["runtimeWorkspaceRoots"].([]string)
+				if strings.Join(roots, "|") != workDir+"|"+configDir {
+					t.Fatalf("Codex writable roots = %#v", params["runtimeWorkspaceRoots"])
+				}
+			} else if params["sandbox"] != "danger-full-access" || params["runtimeWorkspaceRoots"] != nil {
+				t.Fatalf("Codex full params = %#v", params)
+			}
+		})
+	}
+
+	if got := strings.Join(localRunnerClaudeAccessArgs("workspace", configDir), " "); got != "--permission-mode acceptEdits --add-dir "+configDir {
+		t.Fatalf("Claude workspace args = %q", got)
+	}
+	if got := strings.Join(localRunnerClaudeAccessArgs("full", configDir), " "); got != "--permission-mode bypassPermissions --dangerously-skip-permissions" {
+		t.Fatalf("Claude full args = %q", got)
+	}
+	if got := strings.Join(localRunnerQoderAccessArgs("workspace", configDir), " "); got != "--permission-mode accept_edits --add-dir "+configDir {
+		t.Fatalf("Qoder workspace args = %q", got)
+	}
+	if got := strings.Join(localRunnerQoderAccessArgs("full", configDir), " "); got != "--permission-mode bypass_permissions --dangerously-skip-permissions" {
+		t.Fatalf("Qoder full args = %q", got)
+	}
+
+	for _, mode := range []string{"workspace", "full"} {
+		t.Run("opencode-"+mode, func(t *testing.T) {
+			var configuration map[string]any
+			if err := json.Unmarshal([]byte(localRunnerOpenCodeConfig("", mode, configDir)), &configuration); err != nil {
+				t.Fatal(err)
+			}
+			permission, _ := configuration["permission"].(map[string]any)
+			if permission["*"] != "allow" || permission["question"] != "deny" {
+				t.Fatalf("OpenCode base permission = %#v", permission)
+			}
+			if mode == "full" {
+				if permission["external_directory"] != nil {
+					t.Fatalf("OpenCode full unexpectedly limits external directories: %#v", permission)
+				}
+				return
+			}
+			external, _ := permission["external_directory"].(map[string]any)
+			if external["*"] != "deny" || external[filepath.Join(configDir, "**")] != "allow" {
+				t.Fatalf("OpenCode workspace external-directory policy = %#v", external)
+			}
+		})
+	}
+}
 
 func TestLocalRunnerDedicatedHarnessProcessesStayResidentAndContextsStayIsolated(t *testing.T) {
 	for _, harness := range []string{"qoder", "codex", "opencode", "claudecode"} {
