@@ -55,11 +55,13 @@ var localRunnerA2AContentDebugEnabled atomic.Bool
 
 type localRunnerLocalAgentOptions struct {
 	WorkDir string
+	ConfigDir string
 	Model string
 	AgentCommand string
 	SessionStoreKey string
 	Memory bool
 	Yolo bool
+	AccessMode string
 	Timeout time.Duration
 }
 

@@ -189,9 +189,7 @@ func (t *localRunnerClaudeTransport) startProcess(ctx context.Context, sessionID
 	} else if localRunnerEnvironmentValue(localRunnerClaudeEnvironment(), "ANTHROPIC_BASE_URL") == "" {
 		args = append(args, "--model", "claude-haiku-4-5-20251001")
 	}
-	if t.options.yolo {
-		args = append(args, "--permission-mode", "bypassPermissions", "--dangerously-skip-permissions")
-	}
+	args = append(args, localRunnerClaudeAccessArgs(t.options.accessMode, t.options.configDir)...)
 	cmd := exec.Command(t.options.bin, args...)
 	cmd.Dir = t.options.workDir
 	cmd.Env = localRunnerClaudeEnvironment()
@@ -226,6 +224,13 @@ func (t *localRunnerClaudeTransport) startProcess(ctx context.Context, sessionID
 		_ = process.Close()
 		return nil, ctx.Err()
 	}
+}
+
+func localRunnerClaudeAccessArgs(accessMode, configDir string) []string {
+	if accessMode == localRunnerAccessModeFull {
+		return []string{"--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"}
+	}
+	return []string{"--permission-mode", "acceptEdits", "--add-dir", configDir}
 }
 
 func (t *localRunnerClaudeTransport) Close() error {

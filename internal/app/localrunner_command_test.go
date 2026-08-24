@@ -294,6 +294,9 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 		"--harness",
 		"--work-dir",
 		"opencode",
+		"--access-mode",
+		"workspace",
+		"full",
 		"--model",
 		"--agent-cmd",
 		"仅 custom harness 使用",
@@ -336,7 +339,7 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 	if len(schema.Positionals) != 0 {
 		t.Fatalf("start-local positionals = %#v", schema.Positionals)
 	}
-	for _, name := range []string{"harness", "work-dir", "model", "agent-cmd", "runner-id"} {
+	for _, name := range []string{"harness", "work-dir", "access-mode", "model", "agent-cmd", "runner-id"} {
 		if schema.Parameters[name] == nil {
 			t.Fatalf("start-local Schema missing --%s", name)
 		}
@@ -370,6 +373,17 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 	if !workDirParameter.Required {
 		t.Fatalf("start-local work-dir contract = %#v", workDirParameter)
 	}
+	var accessModeParameter struct {
+		Required bool     `json:"required"`
+		Enum     []string `json:"enum"`
+		Default  string   `json:"default"`
+	}
+	if err := json.Unmarshal(schema.Parameters["access-mode"], &accessModeParameter); err != nil {
+		t.Fatal(err)
+	}
+	if accessModeParameter.Required || strings.Join(accessModeParameter.Enum, ",") != "workspace,full" || accessModeParameter.Default != "workspace" {
+		t.Fatalf("start-local access-mode contract = %#v", accessModeParameter)
+	}
 	var agentCommandParameter struct {
 		Required     bool   `json:"required"`
 		RequiredWhen string `json:"required_when"`
@@ -389,6 +403,91 @@ func TestLocalRunnerStartLocalHelpSchemaUsesRequiredHarnessAndWorkDir(t *testing
 	}
 	if runnerParameter.Required || runnerParameter.RequiredWhen != "" {
 		t.Fatalf("start-local runner-id contract = %#v", runnerParameter)
+	}
+}
+
+func TestLocalRunnerStartLocalAccessModeContract(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		extraArgs  []string
+		wantMode   string
+		wantErr    bool
+	}{
+		{name: "default workspace", wantMode: "workspace"},
+		{name: "explicit workspace", extraArgs: []string{"--access-mode", "workspace"}, wantMode: "workspace"},
+		{name: "explicit full", extraArgs: []string{"--access-mode", "full"}, wantMode: "full"},
+		{name: "legacy yolo", extraArgs: []string{"--yolo=true"}, wantMode: "full"},
+		{name: "legacy restricted", extraArgs: []string{"--yolo=false"}, wantMode: "workspace"},
+		{name: "invalid", extraArgs: []string{"--access-mode", "danger-full-access"}, wantErr: true},
+		{name: "conflicting compatibility flags", extraArgs: []string{"--access-mode", "workspace", "--yolo=true"}, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &recordingLocalRunnerRuntime{}
+			testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
+			root := newRootCommandWithEngine(context.Background(), nil, false, true)
+			root.SetOut(&bytes.Buffer{})
+			root.SetErr(&bytes.Buffer{})
+			args := []string{"deap", "runtime", "start-local", "--harness", "codex", "--work-dir", t.TempDir()}
+			root.SetArgs(append(args, test.extraArgs...))
+			err := root.Execute()
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("start-local accepted args %v", test.extraArgs)
+				}
+				if runtime.lastCall != "" {
+					t.Fatalf("invalid access mode reached runtime as %q", runtime.lastCall)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runtime.startOptions.AccessMode != test.wantMode {
+				t.Fatalf("access mode = %q, want %q", runtime.startOptions.AccessMode, test.wantMode)
+			}
+		})
+	}
+}
+
+func TestLocalRunnerStartLocalExplainsIgnoredAccessModeOnStderr(t *testing.T) {
+	tests := []struct {
+		harness string
+		command string
+		want    string
+	}{
+		{harness: "qoderwork", want: "QoderWork 继续使用现有策略：跳过工具权限确认"},
+		{harness: "codebuddy", want: "CodeBuddy 继续使用现有策略：跳过工具权限确认"},
+		{harness: "workbuddy", want: "WorkBuddy 继续使用现有策略：跳过工具权限确认"},
+		{harness: "custom", command: "custom-agent", want: "权限由自定义命令和当前操作系统用户决定"},
+	}
+	for _, test := range tests {
+		t.Run(test.harness, func(t *testing.T) {
+			runtime := &recordingLocalRunnerRuntime{}
+			testseam.Swap(t, &localRunnerCommandRuntimeProvider, func() localRunnerCommandRuntime { return runtime })
+			stdout := &bytes.Buffer{}
+			stderr := &bytes.Buffer{}
+			root := newRootCommandWithEngine(context.Background(), nil, false, true)
+			root.SetOut(stdout)
+			root.SetErr(stderr)
+			args := []string{"deap", "runtime", "start-local", "--harness", test.harness, "--work-dir", t.TempDir(), "--access-mode", "full"}
+			if test.command != "" {
+				args = append(args, "--agent-cmd", test.command)
+			}
+			root.SetArgs(args)
+			if err := root.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(stderr.String(), "--access-mode=full 对 harness "+test.harness+" 不生效") || !strings.Contains(stderr.String(), test.want) {
+				t.Fatalf("stderr did not explain ignored access mode:\n%s", stderr)
+			}
+			if !runtime.startOptions.Yolo {
+				t.Fatal("ignored access-mode changed the shared backend's existing yolo policy")
+			}
+			var summary localRunnerA2AConfiguration
+			if err := json.Unmarshal(stdout.Bytes(), &summary); err != nil {
+				t.Fatalf("stdout is not clean JSON: %v\n%s", err, stdout)
+			}
+		})
 	}
 }
 

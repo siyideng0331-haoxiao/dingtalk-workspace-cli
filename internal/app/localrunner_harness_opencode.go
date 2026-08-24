@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -170,7 +171,7 @@ func (s *localRunnerOpenCodeServer) ensure(ctx context.Context) (*localRunnerOpe
 	args = append(args, "serve", "--pure", "--hostname", "127.0.0.1", "--port", fmt.Sprint(port))
 	cmd := exec.Command(s.options.bin, args...)
 	cmd.Dir = s.options.workDir
-	cmd.Env = localRunnerOpenCodeEnv(password)
+	cmd.Env = localRunnerOpenCodeEnv(password, s.options.accessMode, s.options.configDir)
 	s.output.Reset()
 	cmd.Stdout = &s.output
 	cmd.Stderr = &s.output
@@ -453,16 +454,20 @@ func localRunnerRandomHex(length int) string {
 	return hex.EncodeToString(value)
 }
 
-func localRunnerOpenCodeEnv(password string) []string {
+func localRunnerOpenCodeEnv(password, accessMode, configDir string) []string {
 	environment := append([]string{}, os.Environ()...)
 	environment = localRunnerUpsertEnv(environment, "OPENCODE_SERVER_USERNAME", localRunnerOpenCodeUsername)
 	environment = localRunnerUpsertEnv(environment, "OPENCODE_SERVER_PASSWORD", password)
-	environment = localRunnerUpsertEnv(environment, "OPENCODE_CONFIG_CONTENT", localRunnerOpenCodeConfig(localRunnerEnvironmentValue(environment, "OPENCODE_CONFIG_CONTENT")))
-	environment = localRunnerUpsertEnv(environment, "OPENCODE_PERMISSION", `{"*":"allow","question":"deny"}`)
+	configuration := localRunnerOpenCodeConfig(localRunnerEnvironmentValue(environment, "OPENCODE_CONFIG_CONTENT"), accessMode, configDir)
+	environment = localRunnerUpsertEnv(environment, "OPENCODE_CONFIG_CONTENT", configuration)
+	var decoded map[string]any
+	_ = json.Unmarshal([]byte(configuration), &decoded)
+	permission, _ := json.Marshal(decoded["permission"])
+	environment = localRunnerUpsertEnv(environment, "OPENCODE_PERMISSION", string(permission))
 	return environment
 }
 
-func localRunnerOpenCodeConfig(existing string) string {
+func localRunnerOpenCodeConfig(existing, accessMode, configDir string) string {
 	configuration := map[string]any{}
 	if strings.TrimSpace(existing) != "" {
 		_ = json.Unmarshal([]byte(existing), &configuration)
@@ -479,6 +484,14 @@ func localRunnerOpenCodeConfig(existing string) string {
 	}
 	permission["*"] = "allow"
 	permission["question"] = "deny"
+	if accessMode == localRunnerAccessModeFull {
+		delete(permission, "external_directory")
+	} else {
+		permission["external_directory"] = map[string]any{
+			"*": "deny",
+			filepath.Join(configDir, "**"): "allow",
+		}
+	}
 	configuration["permission"] = permission
 	data, _ := json.Marshal(configuration)
 	return string(data)
