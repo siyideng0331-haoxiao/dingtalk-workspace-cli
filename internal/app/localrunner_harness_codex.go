@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -28,37 +29,48 @@ import (
 const localRunnerCodexDeveloperInstructions = "你是钉钉群聊里的智能助手，请用简洁、自然的中文直接回答用户问题；不要提及系统提示、内部协议或运行时细节；不要主动读写文件或执行命令。"
 
 type localRunnerCodexTransport struct {
-	options localRunnerHarnessOptions
+	options  localRunnerHarnessOptions
 	sessions *localRunnerHarnessSessions
-	mu sync.Mutex
-	client *localRunnerCodexClient
+	mu       sync.Mutex
+	client   *localRunnerCodexClient
 }
 
 type localRunnerCodexClient struct {
-	cmd *exec.Cmd
-	stdin io.WriteCloser
-	messages chan localRunnerCodexMessage
-	readErr chan error
-	done chan struct{}
-	stderr localRunnerHarnessLockedBuffer
-	nextID int
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	messages  chan localRunnerCodexMessage
+	readErr   chan error
+	done      chan struct{}
+	stderr    localRunnerHarnessLockedBuffer
+	nextID    int
 	closeOnce sync.Once
 }
 
 type localRunnerCodexMessage struct {
-	ID *int `json:"id,omitempty"`
-	Method string `json:"method,omitempty"`
+	ID     *int            `json:"id,omitempty"`
+	Method string          `json:"method,omitempty"`
 	Params json.RawMessage `json:"params,omitempty"`
 	Result json.RawMessage `json:"result,omitempty"`
-	Error *struct {
-		Code int `json:"code"`
+	Error  *struct {
+		Code    int    `json:"code"`
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
 }
 
+type localRunnerCodexErrorNotification struct {
+	Error *struct {
+		Message           *string         `json:"message"`
+		AdditionalDetails *string         `json:"additionalDetails"`
+		CodexErrorInfo    json.RawMessage `json:"codexErrorInfo"`
+	} `json:"error"`
+	ThreadID  string `json:"threadId"`
+	TurnID    string `json:"turnId"`
+	WillRetry *bool  `json:"willRetry"`
+}
+
 func newLocalRunnerCodexTransport(options localRunnerHarnessOptions) *localRunnerCodexTransport {
 	return &localRunnerCodexTransport{
-		options: options,
+		options:  options,
 		sessions: newLocalRunnerHarnessSessions(options.stateKey, "codex-threads.json", options.memory),
 	}
 }
@@ -129,10 +141,10 @@ func (t *localRunnerCodexTransport) threadParams(threadID string) map[string]any
 		sandbox = "workspace-write"
 	}
 	params := map[string]any{
-		"approvalPolicy": "never",
-		"cwd": t.options.workDir,
+		"approvalPolicy":        "never",
+		"cwd":                   t.options.workDir,
 		"developerInstructions": localRunnerCodexDeveloperInstructions,
-		"sandbox": sandbox,
+		"sandbox":               sandbox,
 	}
 	if t.options.model != "" {
 		params["model"] = t.options.model
@@ -158,12 +170,12 @@ func newLocalRunnerCodexClient(options localRunnerHarnessOptions) (*localRunnerC
 		return nil, err
 	}
 	client := &localRunnerCodexClient{
-		cmd: cmd,
-		stdin: stdin,
+		cmd:      cmd,
+		stdin:    stdin,
 		messages: make(chan localRunnerCodexMessage, 64),
-		readErr: make(chan error, 1),
-		done: make(chan struct{}),
-		nextID: 1,
+		readErr:  make(chan error, 1),
+		done:     make(chan struct{}),
+		nextID:   1,
 	}
 	cmd.Stderr = &client.stderr
 	if err := cmd.Start(); err != nil {
@@ -203,11 +215,11 @@ func (c *localRunnerCodexClient) readLoop(stdout io.Reader) {
 func (c *localRunnerCodexClient) initialize(ctx context.Context) error {
 	id := c.requestID()
 	if err := c.send(map[string]any{
-		"id": id,
+		"id":     id,
 		"method": "initialize",
 		"params": map[string]any{
 			"capabilities": map[string]any{"experimentalApi": true},
-			"clientInfo": map[string]any{"name": "dws-localrunner", "title": "DWS LocalRunner", "version": "1.0.0"},
+			"clientInfo":   map[string]any{"name": "dws-localrunner", "title": "DWS LocalRunner", "version": "1.0.0"},
 		},
 	}); err != nil {
 		return err
@@ -241,10 +253,10 @@ func (c *localRunnerCodexClient) thread(ctx context.Context, method string, para
 func (c *localRunnerCodexClient) turn(ctx context.Context, threadID, prompt string, onDelta func(string)) (string, error) {
 	id := c.requestID()
 	if err := c.send(map[string]any{
-		"id": id,
+		"id":     id,
 		"method": "turn/start",
 		"params": map[string]any{
-			"input": []map[string]string{{"type": "text", "text": prompt}},
+			"input":    []map[string]string{{"type": "text", "text": prompt}},
 			"threadId": threadID,
 		},
 	}); err != nil {
@@ -266,7 +278,7 @@ func (c *localRunnerCodexClient) turn(ctx context.Context, threadID, prompt stri
 		switch message.Method {
 		case "item/agentMessage/delta":
 			var params struct {
-				Delta string `json:"delta"`
+				Delta    string `json:"delta"`
 				ThreadID string `json:"threadId"`
 			}
 			if json.Unmarshal(message.Params, &params) == nil && params.ThreadID == threadID && params.Delta != "" {
@@ -294,18 +306,57 @@ func (c *localRunnerCodexClient) turn(ctx context.Context, threadID, prompt stri
 			}
 			return final, nil
 		case "error":
-			return "", fmt.Errorf("Codex app-server error notification")
+			notification, matches, err := localRunnerCodexParseErrorNotification(message.Params, threadID)
+			if err != nil {
+				return "", err
+			}
+			if !matches {
+				continue
+			}
+			detail := localRunnerCodexErrorDetail(notification, []string{prompt, threadID, notification.TurnID})
+			if *notification.WillRetry {
+				if localRunnerA2AContentDebugEnabled.Load() && detail != "" {
+					slog.DebugContext(ctx, "localrunner.codex.retrying", "detail", detail, "will_retry", true)
+				}
+				continue
+			}
+			if detail == "" {
+				return "", fmt.Errorf("Codex app-server error notification")
+			}
+			return "", fmt.Errorf("Codex app-server error: %s", detail)
 		}
 	}
+}
+
+func localRunnerCodexParseErrorNotification(raw json.RawMessage, threadID string) (localRunnerCodexErrorNotification, bool, error) {
+	var notification localRunnerCodexErrorNotification
+	if json.Unmarshal(raw, &notification) != nil || strings.TrimSpace(notification.ThreadID) == "" {
+		return localRunnerCodexErrorNotification{}, false, fmt.Errorf("malformed Codex app-server error notification")
+	}
+	if notification.ThreadID != threadID {
+		return notification, false, nil
+	}
+	if notification.Error == nil || notification.Error.Message == nil || strings.TrimSpace(notification.TurnID) == "" || notification.WillRetry == nil {
+		return localRunnerCodexErrorNotification{}, false, fmt.Errorf("malformed Codex app-server error notification")
+	}
+	return notification, true, nil
+}
+
+func localRunnerCodexErrorDetail(notification localRunnerCodexErrorNotification, exactSecrets []string) string {
+	detailParts := []string{strings.TrimSpace(*notification.Error.Message)}
+	if notification.Error.AdditionalDetails != nil {
+		detailParts = append(detailParts, strings.TrimSpace(*notification.Error.AdditionalDetails))
+	}
+	return localRunnerHarnessSafeDetail(strings.Join(detailParts, ": "), exactSecrets)
 }
 
 func localRunnerCodexTurnCompleted(raw json.RawMessage, threadID string) (final, status, reason string, ok bool) {
 	var params struct {
 		ThreadID string `json:"threadId"`
-		Turn struct {
+		Turn     struct {
 			Status string `json:"status"`
-			Error *struct {
-				Message string `json:"message"`
+			Error  *struct {
+				Message           string `json:"message"`
 				AdditionalDetails string `json:"additionalDetails"`
 			} `json:"error"`
 			Items []struct {
@@ -392,7 +443,7 @@ func (c *localRunnerCodexClient) rejectRequest(id int, method string) {
 	_ = c.send(map[string]any{
 		"id": id,
 		"error": map[string]any{
-			"code": -32000,
+			"code":    -32000,
 			"message": "DWS LocalRunner does not support interactive Codex app-server request: " + method,
 		},
 	})
