@@ -80,6 +80,19 @@ type localRunnerA2AExecutor struct {
 	harness        string
 }
 
+type localRunnerA2ADefaultContextInterceptor struct {
+	a2asrv.PassthroughCallInterceptor
+	defaultContext string
+}
+
+func (i localRunnerA2ADefaultContextInterceptor) Before(ctx context.Context, _ *a2asrv.CallContext, request *a2asrv.Request) (context.Context, any, error) {
+	params, ok := request.Payload.(*a2a.SendMessageRequest)
+	if ok && params.Message != nil && strings.TrimSpace(params.Message.ContextID) == "" {
+		params.Message.ContextID = i.defaultContext
+	}
+	return ctx, nil, nil
+}
+
 var _ a2asrv.AgentExecutor = (*localRunnerA2AExecutor)(nil)
 
 func (e *localRunnerA2AExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
@@ -127,6 +140,7 @@ func (e *localRunnerA2AExecutor) Execute(ctx context.Context, execCtx *a2asrv.Ex
 			return delivered
 		}
 		if streaming {
+			execCtx.ContextID = contextID
 			e.executeStream(ctx, execCtx, contextID, prompt, deliveredYield)
 			return
 		}
@@ -509,7 +523,10 @@ func startLocalRunnerLocalAgentWithBackend(backend localRunnerOpenCodeBackend, l
 	cardProducer := localRunnerCompatCardProducer{AgentCardProducer: a2av0.NewStaticAgentCardProducer(card)}
 	executor := &localRunnerA2AExecutor{backend: backend, defaultContext: "localrunner-agent-" + uuid.NewString(), harness: agentRef}
 	a2aLogger := slog.New(localRunnerA2ASafeLogHandler{inner: slog.Default().Handler()})
-	rpcHandler := a2av0.NewJSONRPCHandler(a2asrv.NewHandler(executor, a2asrv.WithLogger(a2aLogger)))
+	rpcHandler := a2av0.NewJSONRPCHandler(a2asrv.NewHandler(executor,
+		a2asrv.WithLogger(a2aLogger),
+		a2asrv.WithCallInterceptors(localRunnerA2ADefaultContextInterceptor{defaultContext: executor.defaultContext}),
+	))
 	cardHandler := a2asrv.NewAgentCardHandler(cardProducer)
 
 	agent := &localRunnerOpenCodeAgent{

@@ -985,6 +985,44 @@ func nestedString(value any, path ...string) string {
 	return text
 }
 
+func TestLocalRunnerA2AStreamingDefaultContextMatchesReturnedTaskContext(t *testing.T) {
+	backend := &fakeLocalRunnerOpenCodeBackend{streamReply: "reply"}
+	agent, err := startLocalRunnerOpenCodeAgentWithBackend(backend, "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agent.Close()
+
+	firstResponse := postLocalRunnerOpenCode(t, agent.RPCURL(), []byte(`{"jsonrpc":"2.0","id":"stream-1","method":"message/stream","params":{"message":{"kind":"message","role":"user","messageId":"message-1","parts":[{"kind":"text","text":"first"}]}}}`))
+	firstBody, err := io.ReadAll(firstResponse.Body)
+	firstResponse.Body.Close()
+	if err != nil || firstResponse.StatusCode != http.StatusOK {
+		t.Fatalf("first stream status=%d body=%s err=%v", firstResponse.StatusCode, firstBody, err)
+	}
+	firstEvents := decodeLocalRunnerSSEEvents(t, firstBody)
+	if len(firstEvents) == 0 {
+		t.Fatalf("first stream returned no events: %s", firstBody)
+	}
+	taskContextID := nestedString(firstEvents[0], "contextId")
+	if taskContextID == "" {
+		t.Fatalf("first task contextId is empty: %s", firstBody)
+	}
+
+	secondBody := []byte(`{"jsonrpc":"2.0","id":"stream-2","method":"message/stream","params":{"message":{"kind":"message","role":"user","messageId":"message-2","contextId":"` + taskContextID + `","parts":[{"kind":"text","text":"second"}]}}}`)
+	secondResponse := postLocalRunnerOpenCode(t, agent.RPCURL(), secondBody)
+	secondResponseBody, err := io.ReadAll(secondResponse.Body)
+	secondResponse.Body.Close()
+	if err != nil || secondResponse.StatusCode != http.StatusOK {
+		t.Fatalf("second stream status=%d body=%s err=%v", secondResponse.StatusCode, secondResponseBody, err)
+	}
+
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if len(backend.streamCalls) != 2 || backend.streamCalls[0].sessionKey != taskContextID || backend.streamCalls[1].sessionKey != taskContextID {
+		t.Fatalf("task contextId=%q stream calls=%#v", taskContextID, backend.streamCalls)
+	}
+}
+
 func TestLocalRunnerOpenCodeAgentUsesStablePerInstanceDefaultContext(t *testing.T) {
 	backend := &fakeLocalRunnerOpenCodeBackend{reply: "reply"}
 	agent, err := startLocalRunnerOpenCodeAgentWithBackend(backend, "127.0.0.1:0")
