@@ -542,8 +542,8 @@ func TestDevDeapAgentSaveDraftDistinguishesAbsentAndExplicitEmptyConfigs(t *test
 }
 
 type deapAgentCaller struct {
-	dryRun    bool
-	calls     []deapAgentCall
+	dryRun     bool
+	calls      []deapAgentCall
 	resultText string
 	err        error
 }
@@ -673,14 +673,14 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 				"profile-json":   `{"employeeNo":"JSON-001","positionName":"值班员"}`,
 				"employee-no":    "E001",
 				"supervisor-uid": "supervisor-1",
-				"response-mode":  "mention_only",
+				"response-mode":  "targeted_proactive, mention_only",
 			},
 			wantArgs: map[string]any{
 				"name": "值班助手", "description": "处理值班问题",
 				"deptId": "dept-1", "deptName": "值班组",
 				"digitalTagEmployeeProfile": map[string]any{
 					"employeeNo": "E001", "positionName": "值班员",
-					"directSupervisorUid": "supervisor-1", "responseMode": "mention_only",
+					"directSupervisorUid": "supervisor-1", "responseMode": "mention_only,targeted_proactive",
 				},
 			},
 		},
@@ -698,7 +698,7 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 			leaf: "save-draft", tool: "update_digital_employee_draft", confirmed: true,
 			flags: map[string]string{
 				"agent-uuid": "agent-1", "name": "新名称", "prompt": "你是值班助手",
-				"profile-json":  `{"employeeNo":"E001","positionName":"旧岗位","responseMode":"mention_only"}`,
+				"profile-json":  `{"employeeNo":"E001","positionName":"旧岗位","responseMode":"mention_only,targeted_proactive"}`,
 				"position-name": "值班员", "response-mode": "targeted_proactive",
 			},
 			wantArgs: map[string]any{
@@ -783,6 +783,43 @@ func TestDeapDetailDefaultsToDraft(t *testing.T) {
 	}
 }
 
+func TestDeapAgentResponseModeNormalization(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{name: "mention only", raw: "mention_only", want: "mention_only"},
+		{name: "targeted proactive", raw: "targeted_proactive", want: "targeted_proactive"},
+		{name: "canonical combination", raw: "mention_only,targeted_proactive", want: "mention_only,targeted_proactive"},
+		{name: "reverse combination with spaces", raw: " targeted_proactive , mention_only ", want: "mention_only,targeted_proactive"},
+		{name: "empty", raw: "", wantErr: true},
+		{name: "empty item", raw: "mention_only,", wantErr: true},
+		{name: "duplicate", raw: "mention_only,mention_only", wantErr: true},
+		{name: "unknown", raw: "mention_only,always_reply", wantErr: true},
+		{name: "too many", raw: "mention_only,targeted_proactive,mention_only", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := deapAgentNormalizeResponseMode(tt.raw)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("deapAgentNormalizeResponseMode(%q) = %q, want error", tt.raw, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("deapAgentNormalizeResponseMode(%q) error = %v", tt.raw, err)
+			}
+			if got != tt.want {
+				t.Fatalf("deapAgentNormalizeResponseMode(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDevDeapAgentConstraintsFailBeforeMCP(t *testing.T) {
 	caller, _ := newDeapAgentTestTree(t, false)
 	cases := []struct {
@@ -806,7 +843,19 @@ func TestDevDeapAgentConstraintsFailBeforeMCP(t *testing.T) {
 		{leaf: "create", flags: map[string]string{
 			"name": "值班助手", "description": "处理值班问题", "dept-id": "dept-1", "dept-name": "值班组",
 			"response-mode": "always_reply",
-		}, wantErr: "--response-mode"},
+		}, wantErr: "响应模式只允许"},
+		{leaf: "create", flags: map[string]string{
+			"name": "值班助手", "description": "处理值班问题", "dept-id": "dept-1", "dept-name": "值班组",
+			"response-mode": "mention_only,always_reply",
+		}, wantErr: "响应模式只允许"},
+		{leaf: "create", flags: map[string]string{
+			"name": "值班助手", "description": "处理值班问题", "dept-id": "dept-1", "dept-name": "值班组",
+			"profile-json": `{"responseMode":"mention_only,mention_only"}`,
+		}, wantErr: "响应模式只允许"},
+		{leaf: "create", flags: map[string]string{
+			"name": "值班助手", "description": "处理值班问题", "dept-id": "dept-1", "dept-name": "值班组",
+			"profile-json": `{"responseMode":["mention_only","targeted_proactive"]}`,
+		}, wantErr: "必须是字符串"},
 		{leaf: "save-draft", flags: map[string]string{
 			"agent-uuid": "agent-1", "employee-no": strings.Repeat("E", 65),
 		}, wantErr: "最多允许 64"},
@@ -916,6 +965,13 @@ func TestDevDeapAgentHelpMatchesCurrentMCPInputs(t *testing.T) {
 	publish := deapFindLeaf(t, root, "publish")
 	if flag := publish.Flags().Lookup("allow-join-group"); flag == nil || flag.DefValue != "false" {
 		t.Fatalf("allow-join-group default = %v, current MCP declares an optional boolean without a default", flag)
+	}
+	for _, leafName := range []string{"create", "save-draft"} {
+		command := deapFindLeaf(t, root, leafName)
+		flag := command.Flags().Lookup("response-mode")
+		if flag == nil || !strings.Contains(flag.Usage, "mention_only,targeted_proactive") {
+			t.Fatalf("%s response-mode help does not describe the combined value: %v", leafName, flag)
+		}
 	}
 
 	for _, name := range []string{"run-status", "trace"} {

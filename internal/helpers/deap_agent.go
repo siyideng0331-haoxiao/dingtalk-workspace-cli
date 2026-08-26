@@ -30,7 +30,17 @@ const (
 	deapAgentDeleteTool    = "delete_digital_employee"
 	deapAgentRunStatusTool = "query_de_run_status"
 	deapAgentTraceTool     = "query_de_trace"
+
+	deapAgentResponseModeMentionOnly       = "mention_only"
+	deapAgentResponseModeTargetedProactive = "targeted_proactive"
+	deapAgentResponseModeCombined          = "mention_only,targeted_proactive"
 )
+
+var deapAgentResponseModeValues = []string{
+	deapAgentResponseModeMentionOnly,
+	deapAgentResponseModeTargetedProactive,
+	deapAgentResponseModeCombined,
+}
 
 var deapAgentDryRun = &contract.DryRunSpec{
 	PreviewKind: contract.DryRunPreviewInvocation,
@@ -153,11 +163,11 @@ func newDeapAgentCreateCommand() *cobra.Command {
 			{Name: "dept-id", Usage: "归属部门 ID", Bind: "deptId", Trim: true, OmitEmpty: true},
 			{Name: "dept-name", Usage: "归属部门名称", Bind: "deptName", Trim: true, OmitEmpty: true},
 			{Name: "icon", Usage: "头像地址或 OSS objectPath", Bind: "icon", Trim: true, OmitEmpty: true},
-			{Name: "profile-json", Usage: "digitalTagEmployeeProfile JSON 对象；独立档案 flag 会覆盖同名字段", Bind: "digitalTagEmployeeProfile", Trim: true, OmitEmpty: true, Format: "json", Transform: deapAgentProfileJSON, SchemaDescription: "数字员工档案 JSON；仅接收 employeeNo、positionName、directSupervisorUid、responseMode；独立档案参数优先"},
+			{Name: "profile-json", Usage: "digitalTagEmployeeProfile JSON 对象；responseMode 支持单值或英文逗号分隔的双值组合；独立档案 flag 会覆盖同名字段", Bind: "digitalTagEmployeeProfile", Trim: true, OmitEmpty: true, Format: "json", Transform: deapAgentProfileJSON, SchemaDescription: "数字员工档案 JSON；仅接收 employeeNo、positionName、directSupervisorUid、responseMode；responseMode 支持 mention_only、targeted_proactive 或二者组合；独立档案参数优先"},
 			{Name: "employee-no", Usage: "数字员工工号（最多 64 个 Unicode 码点）", Bind: "digitalTagEmployeeProfile.employeeNo", Trim: true, OmitEmpty: true},
 			{Name: "position-name", Usage: "岗位名称（最多 128 个 Unicode 码点，发布前必填）", Bind: "digitalTagEmployeeProfile.positionName", Trim: true, OmitEmpty: true},
 			{Name: "supervisor-uid", Usage: "直属上级钉钉 uid", Bind: "digitalTagEmployeeProfile.directSupervisorUid", Trim: true, OmitEmpty: true},
-			{Name: "response-mode", Usage: "响应模式：mention_only 或 targeted_proactive（发布前必填）", Bind: "digitalTagEmployeeProfile.responseMode", Trim: true, OmitEmpty: true, Enum: []string{"mention_only", "targeted_proactive"}},
+			{Name: "response-mode", Usage: "响应模式：mention_only、targeted_proactive，或英文逗号分隔的组合 mention_only,targeted_proactive（发布前必填）", Bind: "digitalTagEmployeeProfile.responseMode", Trim: true, OmitEmpty: true, Transform: deapAgentResponseMode},
 		},
 		Safety: contract.SafetySpec{
 			Effect: "write", Risk: "medium",
@@ -197,7 +207,7 @@ func newDeapAgentCreateCommand() *cobra.Command {
 				{Name: "employee-no", Property: "digitalTagEmployeeProfile.employeeNo"},
 				{Name: "position-name", Property: "digitalTagEmployeeProfile.positionName"},
 				{Name: "supervisor-uid", Property: "digitalTagEmployeeProfile.directSupervisorUid"},
-				{Name: "response-mode", Property: "digitalTagEmployeeProfile.responseMode"},
+				{Name: "response-mode", Property: "digitalTagEmployeeProfile.responseMode", Enum: deapAgentResponseModeValues, Description: "响应模式；支持 mention_only、targeted_proactive，或英文逗号分隔的双值组合 mention_only,targeted_proactive"},
 			},
 		},
 	})
@@ -309,11 +319,11 @@ func newDeapAgentSaveDraftCommand() *cobra.Command {
 			{Name: "dept-id", Usage: "归属部门 ID；不传会被清空", Bind: "deptId", Trim: true, OmitEmpty: true},
 			{Name: "dept-name", Usage: "归属部门名称", Bind: "deptName", Trim: true, OmitEmpty: true},
 			{Name: "prompt", Usage: "人设/System Prompt（最多 5000 个 Unicode 码点）", Bind: "prompt", Trim: true, OmitEmpty: true},
-			{Name: "profile-json", Usage: "digitalTagEmployeeProfile JSON 对象；独立档案 flag 会覆盖同名字段", Bind: "digitalTagEmployeeProfile", Trim: true, OmitEmpty: true, Format: "json", Transform: deapAgentProfileJSON},
+			{Name: "profile-json", Usage: "digitalTagEmployeeProfile JSON 对象；responseMode 支持单值或英文逗号分隔的双值组合；独立档案 flag 会覆盖同名字段", Bind: "digitalTagEmployeeProfile", Trim: true, OmitEmpty: true, Format: "json", Transform: deapAgentProfileJSON},
 			{Name: "employee-no", Usage: "数字员工工号（最多 64 个 Unicode 码点）", Bind: "digitalTagEmployeeProfile.employeeNo", Trim: true, OmitEmpty: true},
 			{Name: "position-name", Usage: "岗位名称（最多 128 个 Unicode 码点，发布前必填）", Bind: "digitalTagEmployeeProfile.positionName", Trim: true, OmitEmpty: true},
 			{Name: "supervisor-uid", Usage: "直属上级钉钉 uid", Bind: "digitalTagEmployeeProfile.directSupervisorUid", Trim: true, OmitEmpty: true},
-			{Name: "response-mode", Usage: "响应模式：mention_only 或 targeted_proactive（发布前必填）", Bind: "digitalTagEmployeeProfile.responseMode", Trim: true, OmitEmpty: true, Enum: []string{"mention_only", "targeted_proactive"}},
+			{Name: "response-mode", Usage: "响应模式：mention_only、targeted_proactive，或英文逗号分隔的组合 mention_only,targeted_proactive（发布前必填）", Bind: "digitalTagEmployeeProfile.responseMode", Trim: true, OmitEmpty: true, Transform: deapAgentResponseMode},
 			{Name: "skills-file", Usage: "Skill 草稿配置 JSON 数组文件，元素为 skillId/enabled/attributes；不传保持原配置，显式空数组才清空", Bind: "skillsFile", Trim: true, OmitEmpty: true},
 			{Name: "mcps-file", Usage: "MCP 草稿配置 JSON 数组文件，元素为 mcpId/enabled/config；不传保持原配置，显式空数组才清空，凭据只允许使用安全引用", Bind: "mcpsFile", Trim: true, OmitEmpty: true},
 		},
@@ -358,7 +368,7 @@ func newDeapAgentSaveDraftCommand() *cobra.Command {
 				{Name: "employee-no", Property: "digitalTagEmployeeProfile.employeeNo"},
 				{Name: "position-name", Property: "digitalTagEmployeeProfile.positionName"},
 				{Name: "supervisor-uid", Property: "digitalTagEmployeeProfile.directSupervisorUid"},
-				{Name: "response-mode", Property: "digitalTagEmployeeProfile.responseMode"},
+				{Name: "response-mode", Property: "digitalTagEmployeeProfile.responseMode", Enum: deapAgentResponseModeValues, Description: "响应模式；支持 mention_only、targeted_proactive，或英文逗号分隔的双值组合 mention_only,targeted_proactive"},
 				{Name: "skills-file", Property: "skills", InterfaceType: "array"},
 				{Name: "mcps-file", Property: "mcps", InterfaceType: "array"},
 			},
@@ -598,6 +608,47 @@ func deapAgentJSONArray(raw string) (any, error) {
 	return array, nil
 }
 
+func deapAgentResponseMode(raw string) (any, error) {
+	normalized, err := deapAgentNormalizeResponseMode(raw)
+	if err != nil {
+		return nil, err
+	}
+	return normalized, nil
+}
+
+func deapAgentNormalizeResponseMode(raw string) (string, error) {
+	parts := strings.Split(raw, ",")
+	if len(parts) == 0 || len(parts) > 2 {
+		return "", deapAgentInvalidResponseMode()
+	}
+
+	seen := make(map[string]bool, len(parts))
+	for _, part := range parts {
+		mode := strings.TrimSpace(part)
+		if mode == "" || seen[mode] {
+			return "", deapAgentInvalidResponseMode()
+		}
+		switch mode {
+		case deapAgentResponseModeMentionOnly, deapAgentResponseModeTargetedProactive:
+			seen[mode] = true
+		default:
+			return "", deapAgentInvalidResponseMode()
+		}
+	}
+
+	if seen[deapAgentResponseModeMentionOnly] && seen[deapAgentResponseModeTargetedProactive] {
+		return deapAgentResponseModeCombined, nil
+	}
+	if seen[deapAgentResponseModeMentionOnly] {
+		return deapAgentResponseModeMentionOnly, nil
+	}
+	return deapAgentResponseModeTargetedProactive, nil
+}
+
+func deapAgentInvalidResponseMode() error {
+	return apperrors.NewValidation("响应模式只允许 mention_only、targeted_proactive，或二者用英文逗号分隔的组合；不能包含空项、重复项或其它值")
+}
+
 func deapAgentProfileJSON(raw string) (any, error) {
 	value, err := deapAgentJSONObject(raw)
 	if err != nil {
@@ -619,8 +670,16 @@ func deapAgentProfileJSON(raw string) (any, error) {
 	if position, ok := profile["positionName"].(string); ok && utf8.RuneCountInString(position) > 128 {
 		return nil, apperrors.NewValidation("profile.positionName 最多允许 128 个 Unicode 码点")
 	}
-	if mode, ok := profile["responseMode"].(string); ok && mode != "mention_only" && mode != "targeted_proactive" {
-		return nil, apperrors.NewValidation("profile.responseMode 只允许 mention_only 或 targeted_proactive")
+	if rawMode, exists := profile["responseMode"]; exists {
+		mode, ok := rawMode.(string)
+		if !ok {
+			return nil, apperrors.NewValidation("profile.responseMode 必须是字符串")
+		}
+		normalized, normalizeErr := deapAgentNormalizeResponseMode(mode)
+		if normalizeErr != nil {
+			return nil, normalizeErr
+		}
+		profile["responseMode"] = normalized
 	}
 	return profile, nil
 }

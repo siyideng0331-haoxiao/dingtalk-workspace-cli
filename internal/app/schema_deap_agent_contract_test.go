@@ -3,7 +3,10 @@
 
 package app
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 	wants := map[string]struct {
@@ -99,6 +102,13 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 			}
 			if got := schemaContractString(parameter["property"]); got != property {
 				t.Errorf("%s parameter %s property = %q, want %q", canonical, flagName, got, property)
+			}
+			if flagName == "response-mode" {
+				got := schemaContractStringSlice(parameter["enum"])
+				wantModes := []string{"mention_only", "targeted_proactive", "mention_only,targeted_proactive"}
+				if !reflect.DeepEqual(got, wantModes) {
+					t.Errorf("%s response-mode enum = %#v, want %#v", canonical, got, wantModes)
+				}
 			}
 		}
 		for _, forbidden := range []string{"org-id", "user-id", "agent-type"} {

@@ -16,7 +16,7 @@ Flags:
   --employee-no      工号（≤64 码点）
   --position-name    岗位名称（≤128 码点，发布前必填）
   --supervisor-uid   直属上级钉钉 uid
-  --response-mode    mention_only | targeted_proactive（发布前必填）
+  --response-mode    mention_only | targeted_proactive | mention_only,targeted_proactive（发布前必填）
   --profile-json     档案 JSON 对象；独立档案 flag 覆盖其同名字段
 Example:
   dws deap manage create --name "周报助手" --description "汇总并推送团队周报" --dry-run --format json
@@ -24,7 +24,7 @@ Example:
 
 只建草稿，不会上线。`--position-name` 与 `--response-mode` 是发布的前置条件，可在此处给或后续用 `save-draft` 补。
 
-`--profile-json` 只接收 `employeeNo`、`positionName`、`directSupervisorUid`、`responseMode` 四个字段。
+`--profile-json` 只接收 `employeeNo`、`positionName`、`directSupervisorUid`、`responseMode` 四个字段。`responseMode` 支持单值，也支持用英文逗号分隔的双值组合；CLI 会规范化为 `mention_only,targeted_proactive`。
 
 ## detail / list — 查询
 
