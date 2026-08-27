@@ -55,6 +55,10 @@ func (c *crossPlatformCoverageCaller) CallReadTool(
 	return &edition.ToolResult{}, nil
 }
 
+func (*crossPlatformCoverageCaller) AccessToken(context.Context) (string, error) {
+	return "active-access-token", nil
+}
+
 func (*crossPlatformCoverageCaller) Format() string { return "json" }
 func (c *crossPlatformCoverageCaller) DryRun() bool { return c.dryRun }
 func (*crossPlatformCoverageCaller) Fields() string { return "id,name" }
@@ -127,6 +131,18 @@ func TestCrossPlatformCoverageRecordingToolCaller(t *testing.T) {
 		t.Fatalf("token override forwarding = token %q args %#v", inner.token, inner.args)
 	}
 
+	accessTokenCaller, ok := caller.(edition.AccessTokenCaller)
+	if !ok {
+		t.Fatal("recording caller dropped access token support")
+	}
+	accessToken, err := accessTokenCaller.AccessToken(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accessToken != "active-access-token" {
+		t.Fatalf("access token = %q, want active-access-token", accessToken)
+	}
+
 	inner.dryRun = true
 	if _, err := caller.CallTool(context.Background(), "chat", "send_message", args); err != nil {
 		t.Fatal(err)
@@ -172,6 +188,9 @@ func TestCrossPlatformCoverageRecordingReadToolCaller(t *testing.T) {
 	withoutRead := recordingToolCaller{inner: nonReadToolCaller{}}
 	if _, err := withoutRead.CallReadTool(context.Background(), "im", "search_groups", nil); err == nil {
 		t.Fatal("recording caller accepted an inner caller without read support")
+	}
+	if _, err := withoutRead.AccessToken(context.Background()); err == nil {
+		t.Fatal("recording caller accepted an inner caller without access token support")
 	}
 }
 

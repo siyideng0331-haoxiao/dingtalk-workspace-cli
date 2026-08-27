@@ -67,6 +67,17 @@ func (r recordingToolCaller) CallToolWithToken(
 	return res, err
 }
 
+// AccessToken preserves the optional OpenAPI token capability exposed by the
+// wrapped caller. Multipart uploads use this path because they cannot be sent
+// through MCP JSON-RPC.
+func (r recordingToolCaller) AccessToken(ctx context.Context) (string, error) {
+	inner, ok := r.inner.(edition.AccessTokenCaller)
+	if !ok {
+		return "", fmt.Errorf("ToolCaller access token resolver is not configured")
+	}
+	return inner.AccessToken(ctx)
+}
+
 func (r recordingToolCaller) Format() string { return r.inner.Format() }
 func (r recordingToolCaller) DryRun() bool   { return r.inner.DryRun() }
 func (r recordingToolCaller) Fields() string { return r.inner.Fields() }
