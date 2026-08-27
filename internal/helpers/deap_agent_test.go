@@ -310,6 +310,30 @@ func TestDeapAgentParseSkillUploadCredential(t *testing.T) {
 	}
 }
 
+func TestDeapAgentTemporaryCredentialUsesPublishedToolName(t *testing.T) {
+	caller, _ := newDeapAgentTestTree(t, false)
+	caller.resultText = `{"success":true,"data":{"temporaryApiKey":"sk-upload","expireAt":2}}`
+
+	credential, err := (deapAgentOpenAPISkillUploader{}).
+		temporaryCredential(context.Background(), "agent-1")
+	if err != nil {
+		t.Fatalf("temporaryCredential() error = %v", err)
+	}
+	if credential != "sk-upload" {
+		t.Fatalf("temporaryCredential() = %q", credential)
+	}
+	if len(caller.calls) != 1 {
+		t.Fatalf("MCP call count = %d, want 1", len(caller.calls))
+	}
+	call := caller.calls[0]
+	if call.productID != deapAgentServerID || call.toolName != "get_upload_temp_apikey" {
+		t.Fatalf("credential route = %s/%s", call.productID, call.toolName)
+	}
+	if call.args["agentUuid"] != "agent-1" {
+		t.Fatalf("credential args = %#v", call.args)
+	}
+}
+
 func TestDeapAgentSkillUploadBaseURLFollowsMCPEnvironment(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

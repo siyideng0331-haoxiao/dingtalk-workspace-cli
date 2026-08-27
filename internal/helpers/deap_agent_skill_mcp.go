@@ -26,7 +26,7 @@ import (
 
 const (
 	deapAgentSkillCreateFileTool       = "create_skill_from_file"
-	deapAgentSkillUploadCredentialTool = "create_skill_upload_credential"
+	deapAgentSkillUploadCredentialTool = "get_upload_temp_apikey"
 	deapAgentSkillCreateURLTool        = "create_skill_by_url"
 	deapAgentSkillListTool             = "list_skills"
 	deapAgentSkillQueryTool            = "query_skill"
