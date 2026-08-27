@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -25,13 +26,15 @@ import (
 )
 
 type deapAgentSkillUploaderStub struct {
-	gotPath string
-	fileURL string
-	err     error
+	gotPath      string
+	gotAgentUUID string
+	fileURL      string
+	err          error
 }
 
-func (s *deapAgentSkillUploaderStub) Upload(_ context.Context, filePath string) (string, error) {
+func (s *deapAgentSkillUploaderStub) Upload(_ context.Context, agentUUID, filePath string) (string, error) {
 	s.gotPath = filePath
+	s.gotAgentUUID = agentUUID
 	return s.fileURL, s.err
 }
 
@@ -85,6 +88,9 @@ func TestDevDeapAgentSkillCreateUsesUploadFacadeAndSafeOutput(t *testing.T) {
 	}
 	if !strings.HasSuffix(uploader.gotPath, "skill.zip") {
 		t.Fatalf("upload facade file = %q", uploader.gotPath)
+	}
+	if uploader.gotAgentUUID != "agent-1" {
+		t.Fatalf("upload facade agentUuid = %q", uploader.gotAgentUUID)
 	}
 	if len(caller.calls) != 1 {
 		t.Fatalf("local ZIP create made %d MCP calls, want 1", len(caller.calls))
@@ -228,8 +234,11 @@ func TestDeapAgentOpenAPISkillUploaderStreamsMultipartAndReturnsFileURL(t *testi
 		if r.Method != http.MethodPost || r.URL.Path != "/v1.0/assistant/skills/upload" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
-		if got := r.Header.Get(apiclient.AuthHeader); got != "access-token" {
-			t.Errorf("auth header = %q", got)
+		if got := r.Header.Get("Authorization"); got != "Bearer sk-upload" {
+			t.Errorf("authorization header = %q", got)
+		}
+		if got := r.Header.Get(apiclient.AuthHeader); got != "" {
+			t.Errorf("OAuth auth header must be empty, got %q", got)
 		}
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
 			t.Errorf("ParseMultipartForm() error = %v", err)
@@ -260,16 +269,76 @@ func TestDeapAgentOpenAPISkillUploaderStreamsMultipartAndReturnsFileURL(t *testi
 	uploader := deapAgentOpenAPISkillUploader{
 		baseURL:    server.URL,
 		httpClient: server.Client(),
-		resolveToken: func(context.Context) (string, error) {
-			return "access-token", nil
+		resolveCredential: func(_ context.Context, agentUUID string) (string, error) {
+			if agentUUID != "agent-1" {
+				t.Fatalf("credential resolver agentUuid = %q", agentUUID)
+			}
+			return "sk-upload", nil
 		},
 	}
-	fileURL, err := uploader.Upload(context.Background(), filePath)
+	fileURL, err := uploader.Upload(context.Background(), "agent-1", filePath)
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}
 	if fileURL != "https://signed.example/temp" {
 		t.Fatalf("Upload() fileUrl = %q", fileURL)
+	}
+}
+
+func TestDeapAgentParseSkillUploadCredential(t *testing.T) {
+	for _, raw := range []string{
+		`{"temporaryApiKey":"sk-top","expireAt":1}`,
+		`{"success":true,"data":{"temporaryApiKey":"sk-data","expireAt":2}}`,
+		`{"result":{"temporaryApiKey":"sk-result","expireAt":3}}`,
+	} {
+		credential, err := deapAgentParseSkillUploadCredential(raw)
+		if err != nil {
+			t.Fatalf("deapAgentParseSkillUploadCredential(%s) error = %v", raw, err)
+		}
+		if !strings.HasPrefix(credential, "sk-") {
+			t.Fatalf("credential = %q", credential)
+		}
+	}
+	for _, raw := range []string{
+		`{"success":false}`,
+		`{"temporaryApiKey":"","expireAt":1}`,
+		`{"temporaryApiKey":"sk-missing-expiry"}`,
+	} {
+		if _, err := deapAgentParseSkillUploadCredential(raw); err == nil {
+			t.Fatalf("deapAgentParseSkillUploadCredential(%s) unexpectedly succeeded", raw)
+		}
+	}
+}
+
+func TestDeapAgentSkillUploadBaseURLFollowsMCPEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mcpURL  string
+		wantURL string
+		wantErr bool
+	}{
+		{name: "production", mcpURL: "https://mcp.dingtalk.com", wantURL: deapAgentSkillUploadProdBase},
+		{name: "pre", mcpURL: "https://pre-mcp.dingtalk.com", wantURL: deapAgentSkillUploadPreBase},
+		{name: "pre gateway", mcpURL: "https://pre-mcp-gw.example.net", wantURL: deapAgentSkillUploadPreBase},
+		{name: "custom fails closed", mcpURL: "https://custom.example.net", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			configDir := t.TempDir()
+			t.Setenv("DWS_CONFIG_DIR", configDir)
+			if err := os.WriteFile(filepath.Join(configDir, "mcp_url"), []byte(tc.mcpURL), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := (deapAgentOpenAPISkillUploader{}).uploadBaseURL()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("uploadBaseURL() = %q, want error", got)
+				}
+				return
+			}
+			if err != nil || got != tc.wantURL {
+				t.Fatalf("uploadBaseURL() = %q, %v; want %q", got, err, tc.wantURL)
+			}
+		})
 	}
 }
 

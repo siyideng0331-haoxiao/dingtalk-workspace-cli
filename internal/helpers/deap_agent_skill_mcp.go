@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -19,21 +20,24 @@ import (
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/corecmd/contract"
 	apperrors "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/errors"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/pkg/cmdutil"
-	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/pkg/edition"
+	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/pkg/config"
 	"github.com/spf13/cobra"
 )
 
 const (
-	deapAgentSkillCreateFileTool = "create_skill_from_file"
-	deapAgentSkillCreateURLTool  = "create_skill_by_url"
-	deapAgentSkillListTool       = "list_skills"
-	deapAgentSkillQueryTool      = "query_skill"
-	deapAgentSkillQueryIdentity  = "get_skill_detail"
-	deapAgentMCPCreateTool       = "create_mcp"
-	deapAgentMCPListTool         = "list_mcps"
-	deapAgentMCPQueryTool        = "query_mcp"
-	deapAgentMCPQueryIdentity    = "get_mcp_detail"
-	deapAgentSkillUploadPath     = "/v1.0/assistant/skills/upload"
+	deapAgentSkillCreateFileTool       = "create_skill_from_file"
+	deapAgentSkillUploadCredentialTool = "create_skill_upload_credential"
+	deapAgentSkillCreateURLTool        = "create_skill_by_url"
+	deapAgentSkillListTool             = "list_skills"
+	deapAgentSkillQueryTool            = "query_skill"
+	deapAgentSkillQueryIdentity        = "get_skill_detail"
+	deapAgentMCPCreateTool             = "create_mcp"
+	deapAgentMCPListTool               = "list_mcps"
+	deapAgentMCPQueryTool              = "query_mcp"
+	deapAgentMCPQueryIdentity          = "get_mcp_detail"
+	deapAgentSkillUploadPath           = "/v1.0/assistant/skills/upload"
+	deapAgentSkillUploadProdBase       = "https://api-deap.dingtalk.com"
+	deapAgentSkillUploadPreBase        = "https://pre-api-deap.dingtalk.com"
 
 	deapAgentConfigFileMaxSize    = 1024 * 1024
 	deapAgentSkillMaxPackageSize  = 50 * 1024 * 1024
@@ -57,13 +61,13 @@ type deapAgentSkillCreated struct {
 }
 
 type deapAgentSkillPackageUploader interface {
-	Upload(ctx context.Context, filePath string) (string, error)
+	Upload(ctx context.Context, agentUUID, filePath string) (string, error)
 }
 
 type deapAgentOpenAPISkillUploader struct {
-	baseURL      string
-	httpClient   *http.Client
-	resolveToken func(context.Context) (string, error)
+	baseURL           string
+	httpClient        *http.Client
+	resolveCredential func(context.Context, string) (string, error)
 }
 
 type deapAgentOpenAPISkillDetail struct {
@@ -99,8 +103,26 @@ type deapAgentOpenAPIUploadEnvelope struct {
 	Content *deapAgentOpenAPIUploadPayload `json:"content"`
 }
 
-func (u deapAgentOpenAPISkillUploader) Upload(ctx context.Context, filePath string) (string, error) {
-	token, err := u.accessToken(ctx)
+type deapAgentSkillUploadCredentialPayload struct {
+	TemporaryAPIKey string `json:"temporaryApiKey"`
+	ExpireAt        int64  `json:"expireAt"`
+}
+
+type deapAgentSkillUploadCredentialEnvelope struct {
+	TemporaryAPIKey string                                 `json:"temporaryApiKey"`
+	ExpireAt        int64                                  `json:"expireAt"`
+	Success         *bool                                  `json:"success"`
+	Data            *deapAgentSkillUploadCredentialPayload `json:"data"`
+	Result          *deapAgentSkillUploadCredentialPayload `json:"result"`
+	Content         *deapAgentSkillUploadCredentialPayload `json:"content"`
+}
+
+func (u deapAgentOpenAPISkillUploader) Upload(ctx context.Context, agentUUID, filePath string) (string, error) {
+	baseURL, err := u.uploadBaseURL()
+	if err != nil {
+		return "", &deapAgentSkillStageError{Stage: "upload", Err: fmt.Errorf("OpenAPI 环境解析失败")}
+	}
+	credential, err := u.temporaryCredential(ctx, agentUUID)
 	if err != nil {
 		return "", &deapAgentSkillStageError{Stage: "upload", Err: fmt.Errorf("OpenAPI 认证失败")}
 	}
@@ -110,15 +132,16 @@ func (u deapAgentOpenAPISkillUploader) Upload(ctx context.Context, filePath stri
 	}
 	defer file.Close()
 
-	client := apiclient.NewClient(token, u.baseURL)
+	client := apiclient.NewClient(credential, baseURL)
 	if u.httpClient != nil {
 		client.HTTPClient = u.httpClient
 	}
 	response, err := client.UploadMultipart(ctx, apiclient.MultipartUploadRequest{
-		Path:      deapAgentSkillUploadPath,
-		FieldName: "file",
-		FileName:  filepath.Base(filePath),
-		File:      file,
+		Path:       deapAgentSkillUploadPath,
+		FieldName:  "file",
+		FileName:   filepath.Base(filePath),
+		File:       file,
+		BearerAuth: true,
 	})
 	if err != nil {
 		return "", &deapAgentSkillStageError{Stage: "upload", Err: fmt.Errorf("OpenAPI 上传请求失败")}
@@ -174,22 +197,64 @@ func deapAgentParseSkillCreated(body []byte) (deapAgentSkillCreated, error) {
 	return created, nil
 }
 
-func (u deapAgentOpenAPISkillUploader) accessToken(ctx context.Context) (string, error) {
-	if u.resolveToken != nil {
-		return u.resolveToken(ctx)
+func (u deapAgentOpenAPISkillUploader) temporaryCredential(ctx context.Context, agentUUID string) (string, error) {
+	if u.resolveCredential != nil {
+		return u.resolveCredential(ctx, agentUUID)
 	}
 	if deps == nil || deps.Caller == nil {
-		return "", fmt.Errorf("OpenAPI token resolver is not configured")
+		return "", fmt.Errorf("OpenAPI credential resolver is not configured")
 	}
-	provider, ok := deps.Caller.(edition.AccessTokenCaller)
-	if !ok {
-		return "", fmt.Errorf("OpenAPI token resolver is not supported")
+	responseText, err := callMCPToolReturnTextOnServer(ctx, deapAgentServerID,
+		deapAgentSkillUploadCredentialTool, map[string]any{"agentUuid": agentUUID})
+	if err != nil {
+		return "", fmt.Errorf("requesting temporary upload credential")
 	}
-	token, err := provider.AccessToken(ctx)
-	if err != nil || strings.TrimSpace(token) == "" {
-		return "", fmt.Errorf("OpenAPI access token is unavailable")
+	return deapAgentParseSkillUploadCredential(responseText)
+}
+
+func deapAgentParseSkillUploadCredential(responseText string) (string, error) {
+	var envelope deapAgentSkillUploadCredentialEnvelope
+	if err := json.Unmarshal([]byte(responseText), &envelope); err != nil {
+		return "", fmt.Errorf("temporary upload credential response is invalid")
 	}
-	return strings.TrimSpace(token), nil
+	if envelope.Success != nil && !*envelope.Success {
+		return "", fmt.Errorf("temporary upload credential request failed")
+	}
+	payload := deapAgentSkillUploadCredentialPayload{
+		TemporaryAPIKey: envelope.TemporaryAPIKey,
+		ExpireAt:        envelope.ExpireAt,
+	}
+	for _, candidate := range []*deapAgentSkillUploadCredentialPayload{
+		envelope.Data, envelope.Result, envelope.Content,
+	} {
+		if candidate != nil {
+			payload = *candidate
+			break
+		}
+	}
+	if strings.TrimSpace(payload.TemporaryAPIKey) == "" || payload.ExpireAt <= 0 {
+		return "", fmt.Errorf("temporary upload credential response is incomplete")
+	}
+	return strings.TrimSpace(payload.TemporaryAPIKey), nil
+}
+
+func (u deapAgentOpenAPISkillUploader) uploadBaseURL() (string, error) {
+	if strings.TrimSpace(u.baseURL) != "" {
+		return strings.TrimRight(strings.TrimSpace(u.baseURL), "/"), nil
+	}
+	parsed, err := url.Parse(config.GetMCPBaseURL())
+	if err != nil {
+		return "", err
+	}
+	host := strings.ToLower(parsed.Hostname())
+	switch {
+	case host == "mcp.dingtalk.com":
+		return deapAgentSkillUploadProdBase, nil
+	case host == "pre-mcp.dingtalk.com", strings.HasPrefix(host, "pre-mcp-gw."):
+		return deapAgentSkillUploadPreBase, nil
+	default:
+		return "", fmt.Errorf("unsupported MCP environment")
+	}
 }
 
 func deapAgentSkillStageFromResponse(body []byte, fallback string) string {
@@ -388,7 +453,7 @@ func deapAgentCallSkillCreate(cmd *cobra.Command, _ string, args map[string]any)
 			"fileSize":  pkg.size,
 		})
 	}
-	fileURL, err := deapAgentSkillUploader.Upload(cmd.Context(), pkg.path)
+	fileURL, err := deapAgentSkillUploader.Upload(cmd.Context(), agentUUID, pkg.path)
 	if err != nil {
 		if staged, ok := err.(*deapAgentSkillStageError); ok {
 			return staged

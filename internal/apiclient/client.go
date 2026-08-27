@@ -75,6 +75,9 @@ type MultipartUploadRequest struct {
 	FileName  string
 	File      io.Reader
 	Fields    map[string]string
+	// BearerAuth sends Token through Authorization: Bearer instead of the
+	// DingTalk OAuth header. It is reserved for scoped upload credentials.
+	BearerAuth bool
 }
 
 // APIClient wraps an HTTP client for DingTalk OpenAPI calls.
@@ -200,7 +203,11 @@ func (c *APIClient) UploadMultipart(ctx context.Context, req MultipartUploadRequ
 		<-writeDone
 		return nil, fmt.Errorf("creating HTTP request: %w", err)
 	}
-	httpReq.Header.Set(AuthHeader, c.Token)
+	if req.BearerAuth {
+		httpReq.Header.Set("Authorization", "Bearer "+c.Token)
+	} else {
+		httpReq.Header.Set(AuthHeader, c.Token)
+	}
 	httpReq.Header.Set("Content-Type", form.FormDataContentType())
 	httpReq.Header.Set("User-Agent", "dws-cli/openapi-upload")
 

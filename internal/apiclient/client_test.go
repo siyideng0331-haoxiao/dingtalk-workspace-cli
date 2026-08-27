@@ -73,6 +73,34 @@ func TestAPIClientUploadMultipartStreamsFileAndUsesAuthHeader(t *testing.T) {
 	}
 }
 
+func TestAPIClientUploadMultipartSupportsScopedBearerCredential(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer sk-upload" {
+			t.Errorf("Authorization = %q", got)
+		}
+		if got := r.Header.Get(AuthHeader); got != "" {
+			t.Errorf("%s must be empty, got %q", AuthHeader, got)
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	AllowedHosts["127.0.0.1"] = true
+	t.Cleanup(func() { delete(AllowedHosts, "127.0.0.1") })
+
+	client := NewClient("sk-upload", server.URL)
+	client.HTTPClient = server.Client()
+	_, err := client.UploadMultipart(context.Background(), MultipartUploadRequest{
+		Path:       "/v1.0/assistant/skills/upload",
+		FileName:   "skill.zip",
+		File:       bytes.NewBufferString("zip-bytes"),
+		BearerAuth: true,
+	})
+	if err != nil {
+		t.Fatalf("UploadMultipart() error = %v", err)
+	}
+}
+
 func TestNewClient_DefaultBaseURL(t *testing.T) {
 	c := NewClient("tok", "")
 	if c.BaseURL != DefaultBaseURL {
