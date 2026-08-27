@@ -30,7 +30,7 @@ type deapAgentSkillUploaderStub struct {
 	err     error
 }
 
-func (s *deapAgentSkillUploaderStub) Upload(_ context.Context, filePath string) (string, error) {
+func (s *deapAgentSkillUploaderStub) Upload(_ context.Context, filePath, _ string) (string, error) {
 	s.gotPath = filePath
 	return s.fileURL, s.err
 }
@@ -228,7 +228,7 @@ func TestDeapAgentOpenAPISkillUploaderStreamsMultipartAndReturnsFileURL(t *testi
 		if r.Method != http.MethodPost || r.URL.Path != "/v1.0/assistant/skills/upload" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
-		if got := r.Header.Get(apiclient.AuthHeader); got != "access-token" {
+		if got := r.Header.Get(apiclient.BearerAuthHeader); got != "Bearer temporary-key" {
 			t.Errorf("auth header = %q", got)
 		}
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
@@ -260,16 +260,34 @@ func TestDeapAgentOpenAPISkillUploaderStreamsMultipartAndReturnsFileURL(t *testi
 	uploader := deapAgentOpenAPISkillUploader{
 		baseURL:    server.URL,
 		httpClient: server.Client(),
-		resolveToken: func(context.Context) (string, error) {
-			return "access-token", nil
+		resolveCredential: func(_ context.Context, agentUUID string) (string, error) {
+			if agentUUID != "agent-1" {
+				t.Fatalf("agentUUID = %q", agentUUID)
+			}
+			return "temporary-key", nil
 		},
 	}
-	fileURL, err := uploader.Upload(context.Background(), filePath)
+	fileURL, err := uploader.Upload(context.Background(), filePath, "agent-1")
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}
 	if fileURL != "https://signed.example/temp" {
 		t.Fatalf("Upload() fileUrl = %q", fileURL)
+	}
+}
+
+func TestDeapAgentOpenAPIBaseURLFollowsMCPEnvironment(t *testing.T) {
+	tests := []struct {
+		mcpBaseURL string
+		want       string
+	}{
+		{mcpBaseURL: "https://mcp.dingtalk.com", want: deapAgentOpenAPIProdBaseURL},
+		{mcpBaseURL: "https://pre-mcp.dingtalk.com", want: deapAgentOpenAPIPreBaseURL},
+	}
+	for _, test := range tests {
+		if got := deapAgentOpenAPIBaseURL(test.mcpBaseURL); got != test.want {
+			t.Errorf("deapAgentOpenAPIBaseURL(%q) = %q, want %q", test.mcpBaseURL, got, test.want)
+		}
 	}
 }
 

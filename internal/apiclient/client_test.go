@@ -73,6 +73,28 @@ func TestAPIClientUploadMultipartStreamsFileAndUsesAuthHeader(t *testing.T) {
 	}
 }
 
+func TestAPIClientUploadMultipartSupportsBearerAuth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(BearerAuthHeader); got != "Bearer temporary-key" {
+			t.Errorf("Authorization = %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	AllowedHosts["127.0.0.1"] = true
+	t.Cleanup(func() { delete(AllowedHosts, "127.0.0.1") })
+
+	client := NewClient("temporary-key", server.URL)
+	client.HTTPClient = server.Client()
+	client.UseBearerAuth()
+	if _, err := client.UploadMultipart(context.Background(), MultipartUploadRequest{
+		Path: "/upload", FieldName: "file", FileName: "skill.zip",
+		File: bytes.NewBufferString("zip-bytes"),
+	}); err != nil {
+		t.Fatalf("UploadMultipart() error = %v", err)
+	}
+}
+
 func TestNewClient_DefaultBaseURL(t *testing.T) {
 	c := NewClient("tok", "")
 	if c.BaseURL != DefaultBaseURL {

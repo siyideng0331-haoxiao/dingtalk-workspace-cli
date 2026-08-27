@@ -42,6 +42,10 @@ const (
 	// AuthHeader is the new-style OpenAPI authentication header.
 	AuthHeader = "x-acs-dingtalk-access-token"
 
+	// BearerAuthHeader is used by DEAP OpenAPI routes whose short-lived API
+	// keys are validated by auth-server rather than DingTalk OAuth.
+	BearerAuthHeader = "Authorization"
+
 	// LegacyAuthParam is the query parameter used for legacy API authentication.
 	LegacyAuthParam = "access_token"
 )
@@ -79,9 +83,11 @@ type MultipartUploadRequest struct {
 
 // APIClient wraps an HTTP client for DingTalk OpenAPI calls.
 type APIClient struct {
-	BaseURL    string
-	HTTPClient *http.Client
-	Token      string
+	BaseURL         string
+	HTTPClient      *http.Client
+	Token           string
+	authHeaderName  string
+	authValuePrefix string
 }
 
 // NewClient creates an APIClient with sensible defaults.
@@ -90,13 +96,24 @@ func NewClient(token, baseURL string) *APIClient {
 		baseURL = DefaultBaseURL
 	}
 	return &APIClient{
-		BaseURL: strings.TrimRight(baseURL, "/"),
-		Token:   token,
+		BaseURL:        strings.TrimRight(baseURL, "/"),
+		Token:          token,
+		authHeaderName: AuthHeader,
 		HTTPClient: &http.Client{
 			Transport: defaultTransport(),
 			Timeout:   30 * time.Second,
 		},
 	}
+}
+
+// UseBearerAuth switches the client to the DEAP gateway's short-lived API key
+// contract. The token itself is never exposed to callers or logs.
+func (c *APIClient) UseBearerAuth() {
+	if c == nil {
+		return
+	}
+	c.authHeaderName = BearerAuthHeader
+	c.authValuePrefix = "Bearer "
 }
 
 // Do sends a raw API request and returns the response.
@@ -200,7 +217,11 @@ func (c *APIClient) UploadMultipart(ctx context.Context, req MultipartUploadRequ
 		<-writeDone
 		return nil, fmt.Errorf("creating HTTP request: %w", err)
 	}
-	httpReq.Header.Set(AuthHeader, c.Token)
+	authHeaderName := strings.TrimSpace(c.authHeaderName)
+	if authHeaderName == "" {
+		authHeaderName = AuthHeader
+	}
+	httpReq.Header.Set(authHeaderName, c.authValuePrefix+c.Token)
 	httpReq.Header.Set("Content-Type", form.FormDataContentType())
 	httpReq.Header.Set("User-Agent", "dws-cli/openapi-upload")
 
