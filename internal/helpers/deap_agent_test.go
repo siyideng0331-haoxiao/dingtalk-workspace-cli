@@ -326,7 +326,7 @@ func TestDeapAgentTemporaryCredentialUsesPublishedToolName(t *testing.T) {
 		t.Fatalf("MCP call count = %d, want 1", len(caller.calls))
 	}
 	call := caller.calls[0]
-	if call.productID != deapAgentServerID || call.toolName != "get_upload_temp_apikey" {
+	if call.productID != deapAgentServerID || call.toolName != "create_skill_upload_credential" {
 		t.Fatalf("credential route = %s/%s", call.productID, call.toolName)
 	}
 	if call.args["agentUuid"] != "agent-1" {
