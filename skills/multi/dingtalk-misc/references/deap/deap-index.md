@@ -4,7 +4,7 @@ DEAP 平台数字员工的管理与观测，命令前缀 `dws deap`。按形态�
 
 | 主题 | 命令前缀 | 安全属性 | 详见 |
 |---|---|---|---|
-| 管理态：创建 / 详情 / 列表 / 草稿覆写 / 发布 / 删除 | `dws deap manage` | 含高影响写与不可逆删除，需用户确认 | [`manage.md`](./manage.md) |
+| 管理态：创建 / 详情 / 列表 / 草稿覆写 / 发布 / 删除 / 获取临时 DWS token | `dws deap manage` + `get_dws_auth_token` MCP 工具 | 查询与凭证换取本身无配置写入；其余管理命令含高影响写与不可逆删除 | [`manage.md`](./manage.md) |
 | 观测态：执行状态 / 执行 trace | `dws deap observe` | 全部只读；trace 含完整对话内容 | [`observe.md`](./observe.md) |
 
 ## 意图路由
@@ -14,6 +14,7 @@ DEAP 平台数字员工的管理与观测，命令前缀 `dws deap`。按形态�
 | 创建 / 新建数字员工 | `dws deap manage create`（只建草稿，不发布） |
 | 查数字员工详情 | `dws deap manage detail` |
 | 数字员工列表 / 搜数字员工 | `dws deap manage list` |
+| 为数字员工获取临时 DWS token | 先 `dws deap manage detail`，再调用 MCP 工具 `get_dws_auth_token` |
 | 改人设 / 岗位 / 部门 / 头像 | 先 `detail` 再 `dws deap manage save-draft`（**全量覆写**） |
 | 发布 / 上线数字员工 | `dws deap manage publish` |
 | 删除数字员工 | `dws deap manage delete`（不可逆） |
