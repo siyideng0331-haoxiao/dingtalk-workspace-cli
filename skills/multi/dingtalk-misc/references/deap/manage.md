@@ -39,32 +39,6 @@ Example:
 
 `--keyword` 按名称、岗位或工号模糊匹配。`--page` / `--page-size` 均不得小于 1。
 
-## get_dws_auth_token — 获取数字员工的临时 DWS token
-
-`get_dws_auth_token` 是 MCP 工具，不是 `dws deap manage` 下的 CLI 子命令。它使用数字员工详情返回的 `loginId` 和 `password` 换取该数字员工的临时 DWS token。
-
-执行顺序：
-
-1. 查询目标数字员工的详情：
-
-   ```bash
-   dws deap manage detail --assistant-id <assistantId> --format json
-   ```
-
-2. 从结果中读取非空的 `loginId` 和 `password`。
-3. 调用 MCP 工具 `get_dws_auth_token`，入参只使用上一步返回的值：
-
-   ```json
-   {
-     "loginId": "<detail.loginId>",
-     "password": "<detail.password>"
-   }
-   ```
-
-4. 使用工具返回的临时 DWS token；凭证过期后重新执行上述流程，不要复用已过期 token。
-
-如果详情中 `loginId` 或 `password` 为空，立即停止，不要用当前登录人账号、其他数字员工凭证或自行构造值替代。`loginId`、`password` 和临时 DWS token 都是敏感凭证，只在当前调用链内使用；不得写入文档、命令历史、日志、缓存或代码库。
-
 ## save-draft — 全量覆写草稿
 
 ```
