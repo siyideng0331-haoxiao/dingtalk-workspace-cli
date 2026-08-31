@@ -1080,6 +1080,12 @@ func TestDevDeapAgentRemovesRetiredFlagsAndKeepsIdentityHidden(t *testing.T) {
 func TestDevDeapAgentHelpMatchesCurrentMCPInputs(t *testing.T) {
 	newDeapAgentTestTree(t, false)
 	root := deapHandler{}.Command(&captureRunner{})
+	authToken := deapFindLeaf(t, root, "get-dws-auth-token")
+	for _, field := range []string{"dwsClientId", "uid", "dwsAuthCode", "staffId", "orgId"} {
+		if !strings.Contains(authToken.Long, field) {
+			t.Fatalf("get-dws-auth-token help is missing response field %s: %q", field, authToken.Long)
+		}
+	}
 
 	publish := deapFindLeaf(t, root, "publish")
 	if flag := publish.Flags().Lookup("allow-join-group"); flag == nil || flag.DefValue != "false" {

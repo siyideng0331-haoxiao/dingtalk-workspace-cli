@@ -133,13 +133,13 @@ func newDeapManageCommand() *cobra.Command {
 	return cmd
 }
 
-// newDeapAgentAuthTokenCommand 获取指定数字员工的短期 DWS token。
-// token 由服务端在 data 中返回，CLI 不解析、不缓存，也不改变响应 envelope。
+// newDeapAgentAuthTokenCommand 获取指定数字员工的短期 DWS 授权信息。
+// dwsAuthCode 等字段由服务端在 data 中返回，CLI 不解析、不缓存，也不改变响应 envelope。
 func newDeapAgentAuthTokenCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use:       "get-dws-auth-token",
 		Short:     "获取数字员工的临时 DWS token",
-		Long:      "按 agentUuid 获取数字员工的临时 DWS token。clientId 是可选的授权应用 ID；不传时由服务端选择默认应用。服务端响应中的 success、errorCode、errorMsg 和 data 会原样输出。data 内 token 是高敏感短期凭证，不得写入文档、日志、命令历史、缓存或代码库。",
+		Long:      "按 agentUuid 获取数字员工的临时 DWS 授权信息。clientId 是可选的授权应用 ID；不传时由服务端选择默认应用。服务端响应中的 success、errorCode、errorMsg 和 data 会原样输出；data 包含 dwsClientId、uid、dwsAuthCode、staffId、orgId。dwsAuthCode 是高敏感短期凭证，不得写入文档、日志、命令历史、缓存或代码库。",
 		Tool:      deapAgentAuthTokenTool,
 		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
@@ -158,7 +158,7 @@ func newDeapAgentAuthTokenCommand() *cobra.Command {
 				CLIPath:       "dingtalk-tag manage get-dws-auth-token", PrimaryCLIPath: "dingtalk-tag manage get-dws-auth-token",
 				Group: "manage",
 			},
-			Description: "按 agentUuid 获取数字员工的临时 DWS token；clientId 可选。服务端返回 success、errorCode、errorMsg 和包含 token 的 data。",
+			Description: "按 agentUuid 获取数字员工的临时 DWS 授权信息；clientId 可选。服务端返回 success、errorCode、errorMsg，以及包含 dwsClientId、uid、dwsAuthCode、staffId、orgId 的 data。",
 			DryRun:      deapAgentDryRun,
 			Interface:   deapAgentMCPInterface(deapAgentAuthTokenTool),
 			Selection: contract.SelectionSpec{

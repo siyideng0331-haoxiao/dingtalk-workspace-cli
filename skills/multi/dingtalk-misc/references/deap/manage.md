@@ -53,14 +53,20 @@ Flags:
 
 ```json
 {
+  "data": {
+    "dwsClientId": "<clientId>",
+    "uid": 123456789,
+    "dwsAuthCode": "<sensitive-short-lived-auth-code>",
+    "staffId": "<staffId>",
+    "orgId": 123456789
+  },
   "success": true,
-  "errorCode": "",
-  "errorMsg": "",
-  "data": {}
+  "errorCode": null,
+  "errorMsg": null
 }
 ```
 
-`data` 中包含数字员工的临时 DWS token。CLI 原样输出服务端 envelope，不解析、不缓存 token。token 是高敏感短期凭证，只在当前受控调用链内使用；不得写入文档、日志、命令历史、缓存或代码库。
+`data.dwsAuthCode` 是数字员工的临时 DWS 授权码，`dwsClientId` 是配套应用 ID，`uid`、`staffId`、`orgId` 是授权身份上下文。CLI 原样输出服务端 envelope，不解析、不缓存这些字段。`dwsAuthCode` 是高敏感短期凭证，只在当前受控调用链内使用；不得写入文档、日志、命令历史、缓存或代码库。
 
 ## save-draft — 全量覆写草稿
 
