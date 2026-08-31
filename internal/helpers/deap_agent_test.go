@@ -667,7 +667,7 @@ func newDeapAgentTestTree(t *testing.T, dryRun bool) (*deapAgentCaller, *bytes.B
 	return caller, out
 }
 
-// deapFindLeaf 在 `deap manage` / `deap observe` 两个子组里找叶子。
+// deapFindLeaf 在 `dingtalk-tag manage` / `dingtalk-tag observe` 两个子组里找叶子。
 //
 // 为何不让用例自己写子组名：绝大多数用例关心的是“这个叶子的行为”而不是“它挂在哪个
 // 子组”；把子组名写进每个用例会让以后调整归类（如新增子组、或把某命令从管理态
@@ -680,11 +680,11 @@ func deapFindLeaf(t *testing.T, root *cobra.Command, leaf string) *cobra.Command
 			return cmd
 		}
 	}
-	t.Fatalf("deap leaf %q not found under manage/observe", leaf)
+	t.Fatalf("dingtalk-tag leaf %q not found under manage/observe", leaf)
 	return nil
 }
 
-// TestDeapCommandTreeSplitsManageAndObserve 钉住顶级 `dws deap` 的两子组归类。
+// TestDeapCommandTreeSplitsManageAndObserve 钉住顶级 `dws dingtalk-tag` 的两子组归类。
 //
 // 为何钉归类而不只钉叶子集合：管理态含不可逆写操作，观测态全是只读；两者混放会
 // 让调用方（含 Agent）失去“这一类命令安全属性相同”这个判断依据。
@@ -693,11 +693,11 @@ func TestDeapCommandTreeSplitsManageAndObserve(t *testing.T) {
 	root := deapHandler{}.Command(&captureRunner{})
 
 	wantGroups := map[string][]string{
-		"manage":  {"create", "detail", "list", "save-draft", "publish", "delete"},
+		"manage":  {"create", "detail", "list", "get-dws-auth-token", "save-draft", "publish", "delete"},
 		"observe": {"run-status", "trace"},
 	}
 	if got := len(root.Commands()); got != len(wantGroups)+2 {
-		t.Fatalf("deap direct child count = %d, want %d", got, len(wantGroups)+2)
+		t.Fatalf("dingtalk-tag direct child count = %d, want %d", got, len(wantGroups)+2)
 	}
 	for groupName, wantLeaves := range wantGroups {
 		group, remaining, err := root.Find([]string{groupName})
@@ -705,7 +705,7 @@ func TestDeapCommandTreeSplitsManageAndObserve(t *testing.T) {
 			t.Fatalf("find deap %s: group=%v remaining=%v err=%v", groupName, group, remaining, err)
 		}
 		if got := len(group.Commands()); got != len(wantLeaves) {
-			t.Fatalf("deap %s leaf count = %d, want %d", groupName, got, len(wantLeaves))
+			t.Fatalf("dingtalk-tag %s leaf count = %d, want %d", groupName, got, len(wantLeaves))
 		}
 		for _, name := range wantLeaves {
 			leaf, rest, findErr := group.Find([]string{name})
@@ -713,17 +713,17 @@ func TestDeapCommandTreeSplitsManageAndObserve(t *testing.T) {
 				t.Fatalf("find deap %s %q: leaf=%v rest=%v err=%v", groupName, name, leaf, rest, findErr)
 			}
 			if leaf.HasSubCommands() {
-				t.Errorf("deap %s %s has an intermediate subtree", groupName, name)
+				t.Errorf("dingtalk-tag %s %s has an intermediate subtree", groupName, name)
 			}
 			if !leaf.Runnable() {
-				t.Errorf("deap %s %s is not runnable", groupName, name)
+				t.Errorf("dingtalk-tag %s %s is not runnable", groupName, name)
 			}
 			if leaf.Args == nil || leaf.Args(leaf, []string{"unexpected"}) == nil {
-				t.Errorf("deap %s %s must reject positional arguments", groupName, name)
+				t.Errorf("dingtalk-tag %s %s must reject positional arguments", groupName, name)
 			}
 			final, ok := contractfinal.RuntimeContractFinal(leaf)
 			if !ok || final.Identity == nil || final.Interface == nil || final.Safety == nil {
-				t.Errorf("deap %s %s has incomplete ContractFinal: %+v ok=%v", groupName, name, final, ok)
+				t.Errorf("dingtalk-tag %s %s has incomplete ContractFinal: %+v ok=%v", groupName, name, final, ok)
 			}
 		}
 	}
@@ -733,8 +733,23 @@ func TestDeapCommandTreeSplitsManageAndObserve(t *testing.T) {
 			t.Fatalf("find subgroup %q: command=%v rest=%v err=%v", name, subgroup, rest, findErr)
 		}
 		if !subgroup.HasSubCommands() {
-			t.Errorf("deap %s must be a command group", name)
+			t.Errorf("dingtalk-tag %s must be a command group", name)
 		}
+	}
+}
+
+func TestDingTalkTagReplacesDeapTopLevelCommand(t *testing.T) {
+	newDeapAgentTestTree(t, false)
+	handler := deapHandler{}
+	if got := handler.Name(); got != "dingtalk-tag" {
+		t.Fatalf("handler name = %q, want dingtalk-tag", got)
+	}
+	command := handler.Command(&captureRunner{})
+	if got := command.Name(); got != "dingtalk-tag" {
+		t.Fatalf("top-level command name = %q, want dingtalk-tag", got)
+	}
+	if command.HasAlias("deap") {
+		t.Fatal("retired top-level command deap must not remain as an alias")
 	}
 }
 
@@ -742,10 +757,10 @@ func TestDeapHelpDescribesBuiltInEndpointResolution(t *testing.T) {
 	newDeapAgentTestTree(t, false)
 	root := deapHandler{}.Command(&captureRunner{})
 	if !strings.Contains(root.Long, "跟随当前 MCP 环境") {
-		t.Fatal("deap help must describe standard MCP environment resolution")
+		t.Fatal("dingtalk-tag help must describe standard MCP environment resolution")
 	}
 	if strings.Contains(root.Long, "DINGTALK_DEAP_DEV_MCP_URL 显式配置") {
-		t.Fatal("deap help must not require a product-specific endpoint override")
+		t.Fatal("dingtalk-tag help must not require a product-specific endpoint override")
 	}
 }
 
@@ -786,6 +801,16 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 			leaf: "list", tool: "list_digital_employees",
 			flags:    map[string]string{"keyword": "值班", "page": "2", "page-size": "101"},
 			wantArgs: map[string]any{"keyword": "值班", "page": 2, "pageSize": 101},
+		},
+		{
+			leaf: "get-dws-auth-token", tool: "get_dws_auth_token",
+			flags:    map[string]string{"agent-uuid": "agent-1"},
+			wantArgs: map[string]any{"agentUuid": "agent-1"},
+		},
+		{
+			leaf: "get-dws-auth-token", tool: "get_dws_auth_token",
+			flags:    map[string]string{"agent-uuid": "agent-1", "client-id": "client-1"},
+			wantArgs: map[string]any{"agentUuid": "agent-1", "clientId": "client-1"},
 		},
 		{
 			leaf: "save-draft", tool: "update_digital_employee_draft", confirmed: true,
@@ -929,6 +954,7 @@ func TestDevDeapAgentConstraintsFailBeforeMCP(t *testing.T) {
 		{leaf: "list", flags: map[string]string{"page": "0"}, wantErr: "--page 不能小于 1"},
 		{leaf: "list", flags: map[string]string{"page-size": "0"}, wantErr: "--page-size 不能小于 1"},
 		{leaf: "detail", flags: map[string]string{"assistant-id": "agent-1", "type": "merged"}, wantErr: "--type"},
+		{leaf: "get-dws-auth-token", flags: map[string]string{}, wantErr: "agent-uuid"},
 		{leaf: "create", flags: map[string]string{
 			"name": "值班助手", "description": "处理值班问题", "dept-id": "dept-1", "dept-name": "值班组",
 			"profile-json": `{"tag":"forbidden"}`,

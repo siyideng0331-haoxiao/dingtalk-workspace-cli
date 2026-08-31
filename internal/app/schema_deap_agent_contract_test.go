@@ -17,8 +17,8 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 		confirmation string
 		parameters   map[string]string
 	}{
-		"deap.create_digital_employee": {
-			"deap manage create", "create_digital_employee", "write", "medium", "not_required",
+		"dingtalk-tag.create_digital_employee": {
+			"dingtalk-tag manage create", "create_digital_employee", "write", "medium", "not_required",
 			map[string]string{
 				"name": "name", "description": "description", "dept-id": "deptId", "dept-name": "deptName",
 				"icon": "icon", "profile-json": "digitalTagEmployeeProfile",
@@ -28,16 +28,20 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 				"response-mode":  "digitalTagEmployeeProfile.responseMode",
 			},
 		},
-		"deap.get_digital_employee_detail": {
-			"deap manage detail", "get_digital_employee_detail", "read", "low", "not_required",
+		"dingtalk-tag.get_digital_employee_detail": {
+			"dingtalk-tag manage detail", "get_digital_employee_detail", "read", "low", "not_required",
 			map[string]string{"assistant-id": "assistantId", "type": "type"},
 		},
-		"deap.list_digital_employees": {
-			"deap manage list", "list_digital_employees", "read", "low", "not_required",
+		"dingtalk-tag.list_digital_employees": {
+			"dingtalk-tag manage list", "list_digital_employees", "read", "low", "not_required",
 			map[string]string{"keyword": "keyword", "page": "page", "page-size": "pageSize"},
 		},
-		"deap.update_digital_employee_draft": {
-			"deap manage save-draft", "update_digital_employee_draft", "write", "high", "user_required",
+		"dingtalk-tag.get_dws_auth_token": {
+			"dingtalk-tag manage get-dws-auth-token", "get_dws_auth_token", "read", "high", "not_required",
+			map[string]string{"agent-uuid": "agentUuid", "client-id": "clientId"},
+		},
+		"dingtalk-tag.update_digital_employee_draft": {
+			"dingtalk-tag manage save-draft", "update_digital_employee_draft", "write", "high", "user_required",
 			map[string]string{
 				"agent-uuid": "agentUuid", "name": "name", "description": "description", "dept-id": "deptId",
 				"dept-name": "deptName", "icon": "icon", "prompt": "prompt", "profile-json": "digitalTagEmployeeProfile",
@@ -48,20 +52,20 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 				"skills-file":    "skills", "mcps-file": "mcps",
 			},
 		},
-		"deap.publish_digital_employee": {
-			"deap manage publish", "publish_digital_employee", "write", "high", "user_required",
+		"dingtalk-tag.publish_digital_employee": {
+			"dingtalk-tag manage publish", "publish_digital_employee", "write", "high", "user_required",
 			map[string]string{"agent-uuid": "agentUuid", "allow-join-group": "allowJoinGroup"},
 		},
-		"deap.delete_digital_employee": {
-			"deap manage delete", "delete_digital_employee", "destructive", "high", "user_required",
+		"dingtalk-tag.delete_digital_employee": {
+			"dingtalk-tag manage delete", "delete_digital_employee", "destructive", "high", "user_required",
 			map[string]string{"agent-uuid": "agentUuid"},
 		},
-		"deap.query_de_run_status": {
-			"deap observe run-status", "query_de_run_status", "read", "low", "not_required",
+		"dingtalk-tag.query_de_run_status": {
+			"dingtalk-tag observe run-status", "query_de_run_status", "read", "low", "not_required",
 			map[string]string{"source-id": "sourceId", "source-type": "sourceType", "assistant-id": "assistantId"},
 		},
-		"deap.query_de_trace": {
-			"deap observe trace", "query_de_trace", "read", "high", "not_required",
+		"dingtalk-tag.query_de_trace": {
+			"dingtalk-tag observe trace", "query_de_trace", "read", "high", "not_required",
 			map[string]string{"source-id": "sourceId", "source-type": "sourceType", "assistant-id": "assistantId"},
 		},
 	}
@@ -126,28 +130,28 @@ func TestDeapAgentSkillMCPLeavesReachFinalSchema(t *testing.T) {
 		availability string
 		parameters   map[string]string
 	}{
-		"deap.create_skill_from_file": {
-			"deap skill create", "", "available",
+		"dingtalk-tag.create_skill_from_file": {
+			"dingtalk-tag skill create", "", "available",
 			map[string]string{"agent-uuid": "agentUuid", "file": "file"},
 		},
-		"deap.list_skills": {
-			"deap skill list", "list_skills", "available",
+		"dingtalk-tag.list_skills": {
+			"dingtalk-tag skill list", "list_skills", "available",
 			map[string]string{"agent-uuid": "agentUuid", "snapshot": "snapshot"},
 		},
-		"deap.get_skill_detail": {
-			"deap skill query", "query_skill", "available",
+		"dingtalk-tag.get_skill_detail": {
+			"dingtalk-tag skill query", "query_skill", "available",
 			map[string]string{"agent-uuid": "agentUuid", "skill-id": "skillId", "snapshot": "snapshot"},
 		},
-		"deap.create_mcp": {
-			"deap mcp create", "create_mcp", "available",
+		"dingtalk-tag.create_mcp": {
+			"dingtalk-tag mcp create", "create_mcp", "available",
 			map[string]string{"config-file": "config"},
 		},
-		"deap.list_mcps": {
-			"deap mcp list", "list_mcps", "available",
+		"dingtalk-tag.list_mcps": {
+			"dingtalk-tag mcp list", "list_mcps", "available",
 			map[string]string{"keywords": "keywords", "page": "page", "page-size": "pageSize"},
 		},
-		"deap.get_mcp_detail": {
-			"deap mcp query", "query_mcp", "available",
+		"dingtalk-tag.get_mcp_detail": {
+			"dingtalk-tag mcp query", "query_mcp", "available",
 			map[string]string{"mcp-id": "mcpId"},
 		},
 	}

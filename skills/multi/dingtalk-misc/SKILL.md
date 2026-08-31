@@ -1,6 +1,6 @@
 ---
 name: dingtalk-misc
-description: 长尾产品集合技能，覆盖低频钉钉产品：OA审批查询与处理/考勤/直播/DING紧急消息/开放平台应用管理/DEAP数字员工管理与执行观测/Agoal目标管理/日志日报周报/电子表格/开放平台文档搜索/文档内嵌白板/DWS技能市场安装/组织大脑Hrbrain/原生Markdown/PAT行为授权/多组织profile。Use when 用户提到上述任一产品，或查待审批/同意拒绝转交撤销审批/打卡/排班/OKR/日报周报/单元格读写/白板节点读写/搜索安装技能/开发者后台应用/创建发布数字员工/改数字员工人设/数字员工执行状态或trace/人才池/员工档案/职业历程/绩效/原生.md文件/PAT授权/切换组织/跨组织/profile 等相关操作。未来审批任务或实例变化的实时监听不属于本 skill，应使用 dingtalk-event。命中后由本 skill 的「产品索引表」定位具体子产品和命令前缀，再按对应子产品说明执行。
+description: 长尾产品集合技能，覆盖低频钉钉产品：OA审批查询与处理/考勤/直播/DING紧急消息/开放平台应用管理/DEAP数字员工管理与执行观测/Agoal目标管理/日志日报周报/电子表格/开放平台文档搜索/文档内嵌白板/DWS技能市场安装/组织大脑Hrbrain/原生Markdown/PAT行为授权/多组织profile。Use when 用户提到上述任一产品，或查待审批/同意拒绝转交撤销审批/打卡/排班/OKR/日报周报/单元格读写/白板节点读写/搜索安装技能/开发者后台应用/创建发布数字员工/改数字员工人设/获取数字员工临时 DWS token/数字员工执行状态或trace/人才池/员工档案/职业历程/绩效/原生.md文件/PAT授权/切换组织/跨组织/profile 等相关操作。未来审批任务或实例变化的实时监听不属于本 skill，应使用 dingtalk-event。命中后由本 skill 的「产品索引表」定位具体子产品和命令前缀，再按对应子产品说明执行。
 metadata:
   cli_version: ">=0.2.14"
   category: product
@@ -26,7 +26,7 @@ metadata:
 | 直播 / 我的直播 / 直播列表 | 直播列表与直播记录查询 | `dws live` | [live.md](references/live.md) |
 | DING / 紧急通知 / 电话DING / 短信DING / 必达消息 | DING 紧急消息（应用内/短信/电话），个人DING | `dws ding` | [ding.md](references/ding.md) |
 | 开放平台应用 / 企业内部应用 / 应用成员 / 应用权限 / 应用版本 / agentId / clientId / 机器人配置 / 版本发布 / connect | 开放平台企业内部应用的查询、创建、修改、成员权限、机器人与版本管理 | `dws dev` / `dws devapp` | [devapp.md](references/devapp.md) |
-| DEAP 数字员工 / 数字员工 / 人设 / 群感知 / 执行状态 / 执行 trace / 响应模式 | DEAP 数字员工管理态（创建/草稿/发布/删除/详情/列表）与观测态（执行状态/trace） | `dws deap` | [deap/deap-index.md](references/deap/deap-index.md) |
+| DEAP 数字员工 / 数字员工 / 人设 / 群感知 / 临时 DWS token / 执行状态 / 执行 trace / 响应模式 | DEAP 数字员工管理态（创建/草稿/发布/删除/详情/列表/临时 token）与观测态（执行状态/trace） | `dws dingtalk-tag` | [deap/deap-index.md](references/deap/deap-index.md) |
 | 目标管理 / 战略解码 / 经营合约 / 计分卡 / OKR / 周月报统计 | Agoal 目标管理与经营目标跟进 | `dws agoal` | [agoal.md](references/agoal.md) |
 | 日报 / 周报 / 月报 / 写日志 / 收件箱日志 / 发件箱日志 | 日志（日报/周报/月报）查询与按模版提交 | `dws report`（别名 `dws log`） | [report.md](references/report.md) |
 | 电子表格 / 工作表 / 单元格读写 / 公式 / 超链接 / 浮动图片 | 电子表格创建/读写/公式/超链接/浮动图片/导出 | `dws sheet` | [sheet.md](references/sheet.md) |

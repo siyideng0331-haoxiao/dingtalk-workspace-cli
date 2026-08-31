@@ -1,12 +1,12 @@
-# deap manage — 数字员工生命周期管理
+# dingtalk-tag manage — 数字员工生命周期管理
 
-命令前缀 `dws deap manage`。全部针对数字员工配置本体，含高影响写与不可逆删除。
+命令前缀 `dws dingtalk-tag manage`。全部针对数字员工配置本体，含高影响写与不可逆删除。
 
 ## create — 创建草稿态数字员工
 
 ```
 Usage:
-  dws deap manage create --name <名称> --description <职责描述> [flags]
+  dws dingtalk-tag manage create --name <名称> --description <职责描述> [flags]
 Flags:
   --name             必填，同组织内唯一（≤30 Unicode 码点）
   --description      必填，职责描述（≤300 码点）
@@ -19,7 +19,7 @@ Flags:
   --response-mode    mention_only | targeted_proactive | mention_only,targeted_proactive（发布前必填）
   --profile-json     档案 JSON 对象；独立档案 flag 覆盖其同名字段
 Example:
-  dws deap manage create --name "周报助手" --description "汇总并推送团队周报" --dry-run --format json
+  dws dingtalk-tag manage create --name "周报助手" --description "汇总并推送团队周报" --dry-run --format json
 ```
 
 只建草稿，不会上线。`--position-name` 与 `--response-mode` 是发布的前置条件，可在此处给或后续用 `save-draft` 补。
@@ -30,20 +30,43 @@ Example:
 
 ```
 Usage:
-  dws deap manage detail --assistant-id <assistantId>
-  dws deap manage list [--keyword <关键词>] [--page 1] [--page-size 20]
+  dws dingtalk-tag manage detail --assistant-id <assistantId>
+  dws dingtalk-tag manage list [--keyword <关键词>] [--page 1] [--page-size 20]
 Example:
-  dws deap manage detail --assistant-id <assistantId> --format json
-  dws deap manage list --keyword "周报" --format json
+  dws dingtalk-tag manage detail --assistant-id <assistantId> --format json
+  dws dingtalk-tag manage list --keyword "周报" --format json
 ```
 
 `--keyword` 按名称、岗位或工号模糊匹配。`--page` / `--page-size` 均不得小于 1。
+
+## get-dws-auth-token — 获取临时 DWS token
+
+```
+Usage:
+  dws dingtalk-tag manage get-dws-auth-token --agent-uuid <agentUuid> [--client-id <appId>]
+Flags:
+  --agent-uuid   必填，数字员工 ID
+  --client-id    可选，用于授权的应用 ID；不传时由服务端选择默认应用
+```
+
+固定调用 MCP 工具 `get_dws_auth_token`。服务端响应结构为：
+
+```json
+{
+  "success": true,
+  "errorCode": "",
+  "errorMsg": "",
+  "data": {}
+}
+```
+
+`data` 中包含数字员工的临时 DWS token。CLI 原样输出服务端 envelope，不解析、不缓存 token。token 是高敏感短期凭证，只在当前受控调用链内使用；不得写入文档、日志、命令历史、缓存或代码库。
 
 ## save-draft — 全量覆写草稿
 
 ```
 Usage:
-  dws deap manage save-draft --agent-uuid <agentUuid> [flags]
+  dws dingtalk-tag manage save-draft --agent-uuid <agentUuid> [flags]
 Flags:
   --agent-uuid       必填
   --prompt           人设 / System Prompt（≤5000 码点）
@@ -55,7 +78,7 @@ Flags:
 
 正确的增量修改姿势：
 
-1. 先 `dws deap manage detail` 查出当前完整配置
+1. 先 `dws dingtalk-tag manage detail` 查出当前完整配置
 2. 把**全部仍需保留的字段**连同要改的字段一并带上
 3. 整体提交
 
@@ -69,7 +92,7 @@ Flags:
 
 ```
 Usage:
-  dws deap manage publish --agent-uuid <agentUuid> [--allow-join-group]
+  dws dingtalk-tag manage publish --agent-uuid <agentUuid> [--allow-join-group]
 ```
 
 **不携带任何配置**，只发布当前已保存的草稿。名称、头像、描述、组织、岗位、响应模式、人设任一缺失都会返回 `INVALID_PARAM`——先 `detail` 确认齐全再发。
@@ -80,7 +103,7 @@ Usage:
 
 ```
 Usage:
-  dws deap manage delete --agent-uuid <agentUuid>
+  dws dingtalk-tag manage delete --agent-uuid <agentUuid>
 ```
 
 **不可逆，且可能有跨系统副作用。** 失败时不要盲目重试，先 `detail` 确认该数字员工是否仍存在——重试可能作用在已被部分删除的状态上。
