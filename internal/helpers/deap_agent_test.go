@@ -783,7 +783,7 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 			flags: map[string]string{
 				"name": "值班助手", "description": "处理值班问题",
 				"dept-id": "dept-1", "dept-name": "值班组",
-				"profile-json":      `{"employeeNo":"JSON-001","positionName":"值班员","mainProgramType":"deap_cloud"}`,
+				"profile-json":      `{"employeeNo":"JSON-001","positionName":"值班员","mainProgramType":"open_code"}`,
 				"employee-no":       "E001",
 				"supervisor-uid":    "supervisor-1",
 				"main-program-type": "local_agent",
@@ -823,7 +823,7 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 			leaf: "save-draft", tool: "update_digital_employee_draft", confirmed: true,
 			flags: map[string]string{
 				"agent-uuid": "agent-1", "name": "新名称", "prompt": "你是值班助手",
-				"profile-json":      `{"employeeNo":"E001","positionName":"旧岗位","mainProgramType":"deap_cloud","responseMode":"mention_only,targeted_proactive"}`,
+				"profile-json":      `{"employeeNo":"E001","positionName":"旧岗位","mainProgramType":"open_code","responseMode":"mention_only,targeted_proactive"}`,
 				"position-name":     "值班员",
 				"main-program-type": "local_agent",
 				"response-mode":     "targeted_proactive",
@@ -993,6 +993,14 @@ func TestDevDeapAgentConstraintsFailBeforeMCP(t *testing.T) {
 			"name": "值班助手", "description": "处理值班问题", "dept-id": "dept-1", "dept-name": "值班组",
 			"profile-json": `{"mainProgramType":"  "}`,
 		}, wantErr: "mainProgramType 不能为空"},
+		{leaf: "create", flags: map[string]string{
+			"name": "值班助手", "description": "处理值班问题", "dept-id": "dept-1", "dept-name": "值班组",
+			"main-program-type": "a2a",
+		}, wantErr: "--main-program-type"},
+		{leaf: "create", flags: map[string]string{
+			"name": "值班助手", "description": "处理值班问题", "dept-id": "dept-1", "dept-name": "值班组",
+			"profile-json": `{"mainProgramType":"a2a"}`,
+		}, wantErr: "a2a 暂不支持"},
 		{leaf: "save-draft", flags: map[string]string{
 			"agent-uuid": "agent-1", "employee-no": strings.Repeat("E", 65),
 		}, wantErr: "最多允许 64"},

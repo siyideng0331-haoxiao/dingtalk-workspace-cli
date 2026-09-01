@@ -24,7 +24,7 @@ metadata:
 
 ## 自然语言编排硬约束
 
-- 创建本地数字员工固定使用 `--main-program-type local_agent`；其它管理命令不自行限制服务端未来可接受的值。
+- `mainProgramType` 仅支持 `open_code`、`local_agent`，`a2a` 暂不支持；不传时由 OpenAPI 按 `open_code` 处理。创建本地数字员工固定使用 `--main-program-type local_agent`。
 - 发布前一次性收集名称、描述、头像、部门、岗位、响应模式、Prompt 等缺失信息，避免边执行边追问。
 - `save-draft` 是全量覆写。修改前必须读取完整 draft，并保留未修改的 `mainProgramType`、Skill、MCP 和其它字段。
 - 同一自然语言请求里的连续写操作只做一次汇总确认；确认后才加 `--yes`。先用 `--dry-run --format json` 展示计划。

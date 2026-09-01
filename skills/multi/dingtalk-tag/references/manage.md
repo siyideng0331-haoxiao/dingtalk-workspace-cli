@@ -16,7 +16,7 @@ Flags:
   --employee-no      工号（≤64 码点）
   --position-name    岗位名称（≤128 码点，发布前必填）
   --supervisor-uid   直属上级钉钉 uid
-  --main-program-type 主程序类型：open_code | a2a | local_agent
+  --main-program-type 主程序类型：open_code | local_agent（不传时 OpenAPI 按 open_code 处理）
   --response-mode    mention_only | targeted_proactive | mention_only,targeted_proactive（发布前必填）
   --profile-json     档案 JSON 对象；独立档案 flag 覆盖其同名字段
 Example:
@@ -27,7 +27,7 @@ Example:
 
 `create` 当前为 `confirmation=not_required`：先用 `--dry-run` 核对，确认参数无误后移除 `--dry-run` 执行即可，不要额外猜测或重复创建。
 
-`--profile-json` 只接收 `employeeNo`、`positionName`、`directSupervisorUid`、`mainProgramType`、`responseMode` 五个字段。`mainProgramType` 当前已知支持 `open_code`、`a2a`、`local_agent`；CLI 只校验为非空字符串并透传，由服务端最终校验。`responseMode` 支持单值，也支持用英文逗号分隔的双值组合，CLI 会规范化为 `mention_only,targeted_proactive`。独立档案 flag 会覆盖 `profile-json` 的同名字段，包括独立的 `--main-program-type` 覆盖 `profile-json.mainProgramType`。
+`--profile-json` 只接收 `employeeNo`、`positionName`、`directSupervisorUid`、`mainProgramType`、`responseMode` 五个字段。`mainProgramType` 仅支持 `open_code`、`local_agent`，`a2a` 暂不支持；不传时 CLI 保持省略，由 OpenAPI 按 `open_code` 处理。`responseMode` 支持单值，也支持用英文逗号分隔的双值组合，CLI 会规范化为 `mention_only,targeted_proactive`。独立档案 flag 会覆盖 `profile-json` 的同名字段，包括独立的 `--main-program-type` 覆盖 `profile-json.mainProgramType`。
 
 ## detail / list — 查询
 
