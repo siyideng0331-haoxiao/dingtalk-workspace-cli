@@ -2384,18 +2384,21 @@ dws chat message send --open-dingtalk-id <openDingTalkId> --text "这是本周�
 dws chat message send --group <openConversationId> --msg-type image --media-id "@lQLPD4JNnliqBq3NBQDNA8Cw" --format json
 ```
 
-#### 创建并推送流式卡片 — 向群聊或单聊发送流式卡片消息
+#### 创建并推送卡片 — streaming 与 A2UI 独立命令
 
 群聊传 --group，单聊传 --receiver，二者互斥。
 
 **注意：send-card 必须和 update-card 搭配使用。** 创建卡片时无需传入内容，后续通过 update-card 更新内容，最后一次更新必须将 --flow-status 设为 3（finish），否则卡片会一直处于"生成中"的加载状态。
 flow-status 取值：1=处理中(PROCESSING)，2=输入中(INPUTTING)，3=完成(FINISH)，4=执行中(EXECUTING)，5=错误(ERROR)。
+
+`send-a2ui-card` 调用 `im.create_and_send_a2ui_card`，必须传 `--content` JSON 字符串数组（元素为 A2UI 协议 JSON）。CLI 会解析为 `a2uiMessages`，并用换行拼接为 `summary`；创建时默认 `flowStatus=PROCESSING`。
 ```
 Usage:
   dws chat message send-card [flags]
 Example:
   dws chat message send-card --group <openConversationId>
   dws chat message send-card --receiver <openDingTalkId>
+  dws chat message send-a2ui-card --conversation-id <openConversationId> --content '["{\"version\":\"v1.0\",\"updateDataModel\":{\"surfaceId\":\"surface\",\"path\":\"/status\",\"value\":\"starting\"}}"]'
   # 查询群 ID: dws chat search --query "群名"
   # 查询人员: dws aisearch person --keyword "姓名" --dimension name
 Flags:
@@ -2403,10 +2406,12 @@ Flags:
       --receiver string   单聊接收者 openDingTalkId（单聊时必填，与 --group 互斥）
 ```
 
-#### 流式更新卡片内容 — 更新已发送的流式卡片内容
+#### 更新卡片内容 — streaming 与 A2UI 独立命令
 
 --biz-id 为 send-card 返回的业务 ID，--flow-status 控制流式状态。
 flow-status 取值：1=处理中(PROCESSING)，2=输入中(INPUTTING)，3=完成(FINISH)，4=执行中(EXECUTING)，5=错误(ERROR)。
+
+`update-a2ui-card` 调用 `im.update_a2ui_card`，`--content` 必须是 JSON 字符串数组并发送为 `a2uiMessages`，固定附带 `a2uiAnnotations: []`。A2UI `--flow-status` 接受 PROCESSING、INPUTTING、FINISH、EXECUTING、ERROR、ABORTED、TIMEOUT、CONFIRMING、CONFIRMED，也兼容数字 1-9 并映射为对应枚举字符串。
 
 **最后一次更新必须将 --flow-status 设为 3（finish），否则卡片会一直处于"生成中"的加载状态。**
 ```
@@ -2415,6 +2420,7 @@ Usage:
 Example:
   dws chat message update-card --biz-id <bizId> --content "更新的卡片内容" --flow-status 2
   dws chat message update-card --biz-id <bizId> --content "最终内容" --flow-status 3
+  dws chat message update-a2ui-card --biz-id <bizId> --content '["{\"version\":\"v1.0\",\"updateDataModel\":{\"surfaceId\":\"surface\",\"path\":\"/status\",\"value\":\"finished\"}}"]' --flow-status CONFIRMED
 Flags:
       --biz-id string    卡片业务 ID (必填)
       --content string   卡片消息内容 (必填)
@@ -2447,6 +2453,7 @@ Flags:
 | `chat category list` | `categoryId` | category list-conversations 的 --category-id |
 | `chat group get-by-group-id` | `openConversationId` | 同 chat search，将群号转为 openConversationId |
 | `chat message send-card` | `bizId` | update-card 的 --biz-id |
+| `chat message send-a2ui-card` | `bizCardId` | update-a2ui-card 的 --biz-id |
 | `chat message list` | `openMessageId` | message reply 的 --ref-msg-id、message forward 的 --msg-id |
 | `chat search` | `openConversationId` | set-top 的 --conversation-id、group-mute / group-mute-member 的 --group |
 
