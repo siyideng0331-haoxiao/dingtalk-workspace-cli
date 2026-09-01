@@ -684,7 +684,8 @@ func deapFindLeaf(t *testing.T, root *cobra.Command, leaf string) *cobra.Command
 	return nil
 }
 
-// TestDeapCommandTreeUsesManageRunAndCapability 钉住顶级 `dws dingtalk-tag` 的三子组归类。
+// TestDeapCommandTreeUsesManageRunAndCapability 钉住现有三类 DEAP 命令，并确保新增
+// connect/channel 作为独立接入面挂在顶层，不改动 manage/run/capability 的既有归类。
 //
 // 为何钉归类而不只钉叶子集合：管理态含不可逆写操作，观测态全是只读；两者混放会
 // 让调用方（含 Agent）失去“这一类命令安全属性相同”这个判断依据。
@@ -696,8 +697,8 @@ func TestDeapCommandTreeUsesManageRunAndCapability(t *testing.T) {
 		"manage": {"create", "detail", "list", "get-dws-auth-code", "save-draft", "publish", "delete"},
 		"run":    {"run-status", "trace"},
 	}
-	if got := len(root.Commands()); got != len(wantGroups)+1 {
-		t.Fatalf("dingtalk-tag direct child count = %d, want %d", got, len(wantGroups)+1)
+	if got := len(root.Commands()); got != len(wantGroups)+3 {
+		t.Fatalf("dingtalk-tag direct child count = %d, want %d", got, len(wantGroups)+3)
 	}
 	for groupName, wantLeaves := range wantGroups {
 		group, remaining, err := root.Find([]string{groupName})

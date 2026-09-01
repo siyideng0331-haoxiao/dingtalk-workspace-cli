@@ -8,6 +8,7 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/) and th
 
 ### Added
 
+- **数字员工自然语言编排与 DSH Channel** — 新增独立 `dingtalk-tag` mono/multi Skill、顶层 `dws dingtalk-tag connect`、隔离的 Managed AuthCode Exchange，以及 `dingtalk-tag channel capabilities/reply/operator-private` 机器协议。connect 只接入已有且已发布的 `local_agent` 数字员工，使用授权响应配套的 ClientID 写入独立可刷新的精确 Profile，保持主管 Profile 当前激活，并通过 stdin 幂等注册 DSH；消息正文、一次性授权码和 Token 不进入 argv、raw dump 或机器输出。
 - **Aitable workflow execution and history** — adds `dws aitable workflow run` for confirmed asynchronous execution of scheduled or record-triggered workflows, plus `dws aitable workflow history` for status-, time-, and page-filtered execution records. The commands map directly to `aitable/run_workflow` and `aitable/get_flow_record_list`, validate trigger-specific arguments locally, and document the `executionId` / `instanceId` correlation.
 - **Streaming-card mentions** — `chat +messages-send-card` now accepts
   `--at-open-dingtalk-ids` and `--at-all` for group cards, passing mention

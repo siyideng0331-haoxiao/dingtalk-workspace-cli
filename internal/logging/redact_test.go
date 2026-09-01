@@ -147,6 +147,21 @@ func TestSanitizeArgumentsRedactsSensitiveValuesInsideArrays(t *testing.T) {
 	}
 }
 
+func TestSanitizeArgumentsRedactsMessageBodies(t *testing.T) {
+	body := "数字员工审批正文不得进入日志"
+	got := SanitizeArguments(map[string]any{
+		"content": body,
+		"nested":  map[string]any{"text": body},
+		"uuid":    "safe-idempotency-key",
+	}, 4096)
+	if strings.Contains(got, body) {
+		t.Fatalf("message body leaked from sanitized arguments: %s", got)
+	}
+	if !strings.Contains(got, `"uuid":"safe-idempotency-key"`) {
+		t.Fatalf("non-sensitive metadata was unexpectedly removed: %s", got)
+	}
+}
+
 func TestSanitizeArguments_Empty(t *testing.T) {
 	t.Parallel()
 	if got := SanitizeArguments(nil, 100); got != "{}" {
