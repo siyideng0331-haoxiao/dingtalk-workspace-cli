@@ -94,7 +94,12 @@ func ExchangeCodeForToken(ctx context.Context, configDir, code string) (*TokenDa
 // exchangeCodeViaMCP exchanges auth code for token via MCP proxy.
 // This is used when client secret is not available (server-side secret management).
 func (p *OAuthProvider) exchangeCodeViaMCP(ctx context.Context, code string) (*TokenData, error) {
-	clientID := ClientID()
+	return p.exchangeCodeViaMCPClientID(ctx, code, ClientID())
+}
+
+// exchangeCodeViaMCPClientID 使用调用方显式提供的应用 ID 换票。它不读取也不
+// 修改进程级 ClientID 状态，供数字员工等受管身份使用。
+func (p *OAuthProvider) exchangeCodeViaMCPClientID(ctx context.Context, code, clientID string) (*TokenData, error) {
 	url := GetMCPBaseURL() + MCPOAuthTokenPath
 	body := map[string]string{
 		"clientId":  clientID,

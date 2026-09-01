@@ -78,11 +78,12 @@ func (deapHandler) Command(executor.Runner) *cobra.Command {
 	contract.RegisterProductDecl(contract.ProductDecl{
 		ID: dingtalkTagProductID,
 		Selection: contract.ProductSelectionDecl{
-			AgentSummary: "管理 DEAP 数字员工及其 Skill/MCP 能力资源，并查询执行状态",
+			AgentSummary: "创建和管理数字员工、查询执行状态，并把已有本地数字员工接入 DSH",
 			UseWhen: []string{
 				"创建、修改、发布或删除 DEAP 数字员工",
 				"查数字员工某次执行的状态或完整模型链路",
 				"创建或查询可配置到数字员工草稿的 Skill/MCP 资源",
+				"把已有且已发布的 local_agent 数字员工接入本地 DSH",
 			},
 			AvoidWhen: []string{
 				"开放平台应用、机器人配置与版本发布用 dev；普通企业消息收发用 chat",
@@ -92,7 +93,7 @@ func (deapHandler) Command(executor.Runner) *cobra.Command {
 	root := &cobra.Command{
 		Use:               "dingtalk-tag",
 		Short:             "DEAP 平台",
-		Long:              "钉钉数字员工命令组：manage 负责数字员工生命周期和临时 DWS 授权码，run 负责执行状态与 trace，capability 负责 Skill/MCP 能力资源的创建与查询。固定调用 MCP product/server deap-dev；identity.corpId/userId 由可信登录态注入且不对 CLI 暴露。端点跟随当前 MCP 环境自动选择规范网关；DINGTALK_DEAP_DEV_MCP_URL 仅用于本地调试覆盖。",
+		Long:              "钉钉数字员工命令组：manage 负责数字员工生命周期和临时 DWS 授权码，run 负责执行状态与 trace，capability 负责 Skill/MCP 能力资源，connect 把已有且已发布的 local_agent 数字员工接入 DSH，channel 提供 DSH 受限机器协议。固定调用 MCP product/server deap-dev；identity.corpId/userId 由可信登录态注入且不对 CLI 暴露。端点跟随当前 MCP 环境自动选择规范网关；DINGTALK_DEAP_DEV_MCP_URL 仅用于本地调试覆盖。",
 		Args:              cobra.NoArgs,
 		TraverseChildren:  true,
 		DisableAutoGenTag: true,
@@ -103,6 +104,8 @@ func (deapHandler) Command(executor.Runner) *cobra.Command {
 		newDeapManageCommand(),
 		newDeapRunCommand(),
 		newDeapCapabilityCommand(),
+		newDeapConnectCommand(),
+		newDeapChannelCommand(),
 	)
 	return root
 }

@@ -340,6 +340,12 @@ func SaveLoginTokenData(configDir string, data *TokenData) error {
 // migration in LoadTokenDataForProfile) must use this instead of SaveTokenData
 // to avoid deadlocking on the non-reentrant lock.
 func saveTokenDataLocked(configDir string, data *TokenData) error {
+	return saveTokenDataLockedForSelector(configDir, data, RuntimeProfile())
+}
+
+// saveTokenDataLockedForSelector 在已持有 auth 锁时按显式主管选择器计算写计划。
+// 受管数字员工因此可以写入自己的精确 identity slot，同时不成为当前 Profile。
+func saveTokenDataLockedForSelector(configDir string, data *TokenData, runtimeSelector string) error {
 	if h := edition.Get(); h.SaveToken != nil {
 		return saveTokenViaHook(h, configDir, data)
 	}
@@ -369,7 +375,7 @@ func saveTokenDataLocked(configDir string, data *TokenData) error {
 		if err := ensureProfilesWritable(cfg); err != nil {
 			return err
 		}
-		plan := planTokenPersistenceWrites(cfg, data, RuntimeProfile())
+		plan := planTokenPersistenceWrites(cfg, data, runtimeSelector)
 		if err := validateTokenPersistenceWritePlan(cfg, data, plan); err != nil {
 			return err
 		}

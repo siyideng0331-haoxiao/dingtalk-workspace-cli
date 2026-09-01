@@ -362,6 +362,12 @@ func preflightTokenPersistence(configDir string) error {
 // refresh so both paths stay aligned with the same identity/org/global mirror
 // isolation rules.
 func preflightTokenWritePersistence(configDir string, data *TokenData) error {
+	return preflightTokenWritePersistenceForSelector(configDir, data, RuntimeProfile())
+}
+
+// preflightTokenWritePersistenceForSelector 与最终写入使用同一个显式选择器，
+// 避免受管身份换票必须临时修改进程级 RuntimeProfile。
+func preflightTokenWritePersistenceForSelector(configDir string, data *TokenData, runtimeSelector string) error {
 	if h := edition.Get(); h.SaveToken != nil {
 		return nil
 	}
@@ -373,7 +379,7 @@ func preflightTokenWritePersistence(configDir string, data *TokenData) error {
 		return err
 	}
 
-	plan := planTokenPersistenceWrites(cfg, data, RuntimeProfile())
+	plan := planTokenPersistenceWrites(cfg, data, runtimeSelector)
 	if err := validateTokenPersistenceWritePlan(cfg, data, plan); err != nil {
 		return err
 	}
