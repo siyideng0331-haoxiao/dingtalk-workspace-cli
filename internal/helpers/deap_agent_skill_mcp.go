@@ -375,6 +375,21 @@ func deapAgentValidateSkillPackage(rawPath string) (deapAgentSkillPackage, error
 	return deapAgentSkillPackage{path: resolved, size: info.Size()}, nil
 }
 
+func newDeapCapabilityCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:               "capability",
+		Short:             "数字员工能力资源管理",
+		Long:              "创建和查询可配置到数字员工草稿的 Skill/MCP 能力资源。资源创建后不会自动关联数字员工；关联关系由 manage save-draft 的 skills/mcps 配置负责。",
+		Args:              cobra.NoArgs,
+		TraverseChildren:  true,
+		DisableAutoGenTag: true,
+		RunE:              groupRunE,
+	}
+	cmdutil.MarkGroup(cmd)
+	cmd.AddCommand(newDeapAgentSkillCommand(), newDeapAgentMCPCommand())
+	return cmd
+}
+
 func newDeapAgentSkillCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "skill",
@@ -424,11 +439,11 @@ func newDeapAgentSkillCreateCommand() *cobra.Command {
 		},
 		Call: deapAgentCallSkillCreate,
 		Contract: LeafContract{
-			Identity:    contract.ToolIdentitySpec{ProductID: dingtalkTagProductID, Name: deapAgentSkillCreateFileTool, CanonicalPath: "dingtalk-tag.create_skill_from_file", CLIPath: "dingtalk-tag skill create", PrimaryCLIPath: "dingtalk-tag skill create", Group: "skill"},
+			Identity:    contract.ToolIdentitySpec{ProductID: dingtalkTagProductID, Name: deapAgentSkillCreateFileTool, CanonicalPath: "dingtalk-tag.create_skill_from_file", CLIPath: "dingtalk-tag capability skill create", PrimaryCLIPath: "dingtalk-tag capability skill create", Group: "capability.skill"},
 			Description: "校验本地 ZIP，依次调用 OpenAPI upload 与 create_skill_by_url，并只输出安全创建结果。",
 			DryRun:      deapAgentDryRun,
 			Interface:   &contract.InterfaceSpec{Mode: contract.InterfaceModeComposite, Availability: contract.InterfaceAvailable, Reason: "本地 ZIP 校验后串联 OpenAPI multipart upload 与 create_skill_by_url"},
-			Selection:   contract.SelectionSpec{AgentSummary: "从本地 ZIP 创建 Skill 资源", UseWhen: []string{"已有合法 Skill ZIP，需要为目标数字员工创建并取得 skillId 时"}, AvoidWhen: []string{"只有远程 URL 的纯 MCP 场景使用 create_skill_by_url"}, Examples: []string{"dws dingtalk-tag skill create --agent-uuid <agentUuid> --file ./my-skill.zip --dry-run --format json"}},
+			Selection:   contract.SelectionSpec{AgentSummary: "从本地 ZIP 创建 Skill 资源", UseWhen: []string{"已有合法 Skill ZIP，需要为目标数字员工创建并取得 skillId 时"}, AvoidWhen: []string{"只有远程 URL 的纯 MCP 场景使用 create_skill_by_url"}, Examples: []string{"dws dingtalk-tag capability skill create --agent-uuid <agentUuid> --file ./my-skill.zip --dry-run --format json"}},
 			Parameters: []contract.ParamDecl{
 				{Name: "agent-uuid", Property: "agentUuid", InterfaceType: "string"},
 				{Name: "file", Property: "file", InterfaceType: "binary"},
@@ -489,10 +504,10 @@ func newDeapAgentSkillListCommand() *cobra.Command {
 		},
 		Safety: contract.SafetySpec{Effect: "read", Risk: "low", Confirmation: "not_required", Idempotency: "idempotent"},
 		Contract: LeafContract{
-			Identity:    contract.ToolIdentitySpec{ProductID: dingtalkTagProductID, Name: deapAgentSkillListTool, CanonicalPath: "dingtalk-tag.list_skills", CLIPath: "dingtalk-tag skill list", PrimaryCLIPath: "dingtalk-tag skill list", Group: "skill"},
+			Identity:    contract.ToolIdentitySpec{ProductID: dingtalkTagProductID, Name: deapAgentSkillListTool, CanonicalPath: "dingtalk-tag.list_skills", CLIPath: "dingtalk-tag capability skill list", PrimaryCLIPath: "dingtalk-tag capability skill list", Group: "capability.skill"},
 			Description: "查询独立 Skill 资源列表和非敏感配置。",
 			DryRun:      deapAgentDryRun, Interface: deapAgentMCPInterface(deapAgentSkillListTool),
-			Selection: contract.SelectionSpec{AgentSummary: "查询目标数字员工 tenant 下的 Skill 列表", UseWhen: []string{"需要选择或核对目标数字员工的 Skill 时"}, AvoidWhen: []string{"已知 skillId 需要完整详情时使用 skill query"}, Examples: []string{"dws dingtalk-tag skill list --agent-uuid <agentUuid> --snapshot draft --format json"}},
+			Selection: contract.SelectionSpec{AgentSummary: "查询目标数字员工 tenant 下的 Skill 列表", UseWhen: []string{"需要选择或核对目标数字员工的 Skill 时"}, AvoidWhen: []string{"已知 skillId 需要完整详情时使用 capability skill query"}, Examples: []string{"dws dingtalk-tag capability skill list --agent-uuid <agentUuid> --snapshot draft --format json"}},
 		},
 	})
 }
@@ -509,10 +524,10 @@ func newDeapAgentSkillQueryCommand() *cobra.Command {
 		},
 		Safety: contract.SafetySpec{Effect: "read", Risk: "low", Confirmation: "not_required", Idempotency: "idempotent"},
 		Contract: LeafContract{
-			Identity:    contract.ToolIdentitySpec{ProductID: dingtalkTagProductID, Name: deapAgentSkillQueryIdentity, CanonicalPath: "dingtalk-tag.get_skill_detail", CLIPath: "dingtalk-tag skill query", PrimaryCLIPath: "dingtalk-tag skill query", Group: "skill"},
+			Identity:    contract.ToolIdentitySpec{ProductID: dingtalkTagProductID, Name: deapAgentSkillQueryIdentity, CanonicalPath: "dingtalk-tag.get_skill_detail", CLIPath: "dingtalk-tag capability skill query", PrimaryCLIPath: "dingtalk-tag capability skill query", Group: "capability.skill"},
 			Description: "按 skillId 查询独立 Skill 资源详情和非敏感配置。",
 			DryRun:      deapAgentDryRun, Interface: deapAgentMCPInterface(deapAgentSkillQueryTool),
-			Selection: contract.SelectionSpec{AgentSummary: "查询目标数字员工 tenant 下的一个 Skill", UseWhen: []string{"已知 agentUuid 和 skillId，需要核对解析信息或配置时"}, AvoidWhen: []string{"需要浏览全部 Skill 时使用 skill list"}, Examples: []string{"dws dingtalk-tag skill query --agent-uuid <agentUuid> --skill-id <skillId> --format json"}},
+			Selection: contract.SelectionSpec{AgentSummary: "查询目标数字员工 tenant 下的一个 Skill", UseWhen: []string{"已知 agentUuid 和 skillId，需要核对解析信息或配置时"}, AvoidWhen: []string{"需要浏览全部 Skill 时使用 capability skill list"}, Examples: []string{"dws dingtalk-tag capability skill query --agent-uuid <agentUuid> --skill-id <skillId> --format json"}},
 		},
 	})
 }
@@ -526,10 +541,10 @@ func newDeapAgentMCPCreateCommand() *cobra.Command {
 		Safety: contract.SafetySpec{Effect: "write", Risk: "high", Confirmation: "user_required", Idempotency: "unknown"},
 		Call:   deapAgentCallMCPCreateFromFile,
 		Contract: LeafContract{
-			Identity:    contract.ToolIdentitySpec{ProductID: dingtalkTagProductID, Name: deapAgentMCPCreateTool, CanonicalPath: "dingtalk-tag.create_mcp", CLIPath: "dingtalk-tag mcp create", PrimaryCLIPath: "dingtalk-tag mcp create", Group: "mcp"},
+			Identity:    contract.ToolIdentitySpec{ProductID: dingtalkTagProductID, Name: deapAgentMCPCreateTool, CanonicalPath: "dingtalk-tag.create_mcp", CLIPath: "dingtalk-tag capability mcp create", PrimaryCLIPath: "dingtalk-tag capability mcp create", Group: "capability.mcp"},
 			Description: "通过本地 JSON 文件安全传入定义和凭据，创建独立 MCP 资源。",
 			DryRun:      deapAgentDryRun, Interface: deapAgentMCPInterface(deapAgentMCPCreateTool),
-			Selection:  contract.SelectionSpec{AgentSummary: "从本地配置文件创建独立 MCP 资源", UseWhen: []string{"需要注册新的 MCP 定义和鉴权配置并取得 mcpId 时"}, AvoidWhen: []string{"只需查询现有 MCP 时使用 mcp list 或 mcp query", "不要把凭据直接拼进命令行"}, Examples: []string{"dws dingtalk-tag mcp create --config-file ./mcp.json --dry-run --format json"}},
+			Selection:  contract.SelectionSpec{AgentSummary: "从本地配置文件创建独立 MCP 资源", UseWhen: []string{"需要注册新的 MCP 定义和鉴权配置并取得 mcpId 时"}, AvoidWhen: []string{"只需查询现有 MCP 时使用 capability mcp list 或 capability mcp query", "不要把凭据直接拼进命令行"}, Examples: []string{"dws dingtalk-tag capability mcp create --config-file ./mcp.json --dry-run --format json"}},
 			Parameters: []contract.ParamDecl{{Name: "config-file", Property: "config", InterfaceType: "object"}},
 		},
 	})
@@ -547,10 +562,10 @@ func newDeapAgentMCPListCommand() *cobra.Command {
 		},
 		Safety: contract.SafetySpec{Effect: "read", Risk: "low", Confirmation: "not_required", Idempotency: "idempotent"},
 		Contract: LeafContract{
-			Identity:    contract.ToolIdentitySpec{ProductID: dingtalkTagProductID, Name: deapAgentMCPListTool, CanonicalPath: "dingtalk-tag.list_mcps", CLIPath: "dingtalk-tag mcp list", PrimaryCLIPath: "dingtalk-tag mcp list", Group: "mcp"},
+			Identity:    contract.ToolIdentitySpec{ProductID: dingtalkTagProductID, Name: deapAgentMCPListTool, CanonicalPath: "dingtalk-tag.list_mcps", CLIPath: "dingtalk-tag capability mcp list", PrimaryCLIPath: "dingtalk-tag capability mcp list", Group: "capability.mcp"},
 			Description: "查询独立 MCP 资源列表和服务端脱敏配置。",
 			DryRun:      deapAgentDryRun, Interface: deapAgentMCPInterface(deapAgentMCPListTool),
-			Selection: contract.SelectionSpec{AgentSummary: "查询当前企业的 MCP 资源列表", UseWhen: []string{"需要选择可关联到数字员工草稿的 MCP 时"}, AvoidWhen: []string{"已知 mcpId 需要单项详情时使用 mcp query"}, Examples: []string{"dws dingtalk-tag mcp list --keywords 文档 --page 1 --page-size 20 --format json"}},
+			Selection: contract.SelectionSpec{AgentSummary: "查询当前企业的 MCP 资源列表", UseWhen: []string{"需要选择可关联到数字员工草稿的 MCP 时"}, AvoidWhen: []string{"已知 mcpId 需要单项详情时使用 capability mcp query"}, Examples: []string{"dws dingtalk-tag capability mcp list --keywords 文档 --page 1 --page-size 20 --format json"}},
 		},
 	})
 }
@@ -565,10 +580,10 @@ func newDeapAgentMCPQueryCommand() *cobra.Command {
 		},
 		Safety: contract.SafetySpec{Effect: "read", Risk: "low", Confirmation: "not_required", Idempotency: "idempotent"},
 		Contract: LeafContract{
-			Identity:    contract.ToolIdentitySpec{ProductID: dingtalkTagProductID, Name: deapAgentMCPQueryIdentity, CanonicalPath: "dingtalk-tag.get_mcp_detail", CLIPath: "dingtalk-tag mcp query", PrimaryCLIPath: "dingtalk-tag mcp query", Group: "mcp"},
+			Identity:    contract.ToolIdentitySpec{ProductID: dingtalkTagProductID, Name: deapAgentMCPQueryIdentity, CanonicalPath: "dingtalk-tag.get_mcp_detail", CLIPath: "dingtalk-tag capability mcp query", PrimaryCLIPath: "dingtalk-tag capability mcp query", Group: "capability.mcp"},
 			Description: "按 mcpId 查询独立 MCP 资源定义、工具列表和脱敏配置。",
 			DryRun:      deapAgentDryRun, Interface: deapAgentMCPInterface(deapAgentMCPQueryTool),
-			Selection: contract.SelectionSpec{AgentSummary: "查询一个独立 MCP 资源的脱敏详情", UseWhen: []string{"已知 mcpId，需要核对定义或工具解析结果时"}, AvoidWhen: []string{"需要取得明文凭据时不要使用，系统不提供明文回显"}, Examples: []string{"dws dingtalk-tag mcp query --mcp-id <mcpId> --format json"}},
+			Selection: contract.SelectionSpec{AgentSummary: "查询一个独立 MCP 资源的脱敏详情", UseWhen: []string{"已知 mcpId，需要核对定义或工具解析结果时"}, AvoidWhen: []string{"需要取得明文凭据时不要使用，系统不提供明文回显"}, Examples: []string{"dws dingtalk-tag capability mcp query --mcp-id <mcpId> --format json"}},
 		},
 	})
 }

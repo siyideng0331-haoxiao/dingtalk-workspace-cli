@@ -30,14 +30,14 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 		},
 		"dingtalk-tag.get_digital_employee_detail": {
 			"dingtalk-tag manage detail", "get_digital_employee_detail", "read", "low", "not_required",
-			map[string]string{"assistant-id": "assistantId", "type": "type"},
+			map[string]string{"agent-uuid": "agentUuid", "type": "type"},
 		},
 		"dingtalk-tag.list_digital_employees": {
 			"dingtalk-tag manage list", "list_digital_employees", "read", "low", "not_required",
 			map[string]string{"keyword": "keyword", "page": "page", "page-size": "pageSize"},
 		},
-		"dingtalk-tag.get_dws_auth_token": {
-			"dingtalk-tag manage get-dws-auth-token", "get_dws_auth_token", "read", "high", "not_required",
+		"dingtalk-tag.get_dws_auth_code": {
+			"dingtalk-tag manage get-dws-auth-code", "get_dws_auth_code", "read", "high", "not_required",
 			map[string]string{"agent-uuid": "agentUuid", "client-id": "clientId"},
 		},
 		"dingtalk-tag.update_digital_employee_draft": {
@@ -61,12 +61,12 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 			map[string]string{"agent-uuid": "agentUuid"},
 		},
 		"dingtalk-tag.query_de_run_status": {
-			"dingtalk-tag observe run-status", "query_de_run_status", "read", "low", "not_required",
-			map[string]string{"source-id": "sourceId", "source-type": "sourceType", "assistant-id": "assistantId"},
+			"dingtalk-tag run run-status", "query_de_run_status", "read", "low", "not_required",
+			map[string]string{"source-id": "sourceId", "source-type": "sourceType", "agent-uuid": "agentUuid"},
 		},
 		"dingtalk-tag.query_de_trace": {
-			"dingtalk-tag observe trace", "query_de_trace", "read", "high", "not_required",
-			map[string]string{"source-id": "sourceId", "source-type": "sourceType", "assistant-id": "assistantId"},
+			"dingtalk-tag run trace", "query_de_trace", "read", "high", "not_required",
+			map[string]string{"source-id": "sourceId", "source-type": "sourceType", "agent-uuid": "agentUuid"},
 		},
 	}
 	canonicals := make([]string, 0, len(wants))
@@ -131,27 +131,27 @@ func TestDeapAgentSkillMCPLeavesReachFinalSchema(t *testing.T) {
 		parameters   map[string]string
 	}{
 		"dingtalk-tag.create_skill_from_file": {
-			"dingtalk-tag skill create", "", "available",
+			"dingtalk-tag capability skill create", "", "available",
 			map[string]string{"agent-uuid": "agentUuid", "file": "file"},
 		},
 		"dingtalk-tag.list_skills": {
-			"dingtalk-tag skill list", "list_skills", "available",
+			"dingtalk-tag capability skill list", "list_skills", "available",
 			map[string]string{"agent-uuid": "agentUuid", "snapshot": "snapshot"},
 		},
 		"dingtalk-tag.get_skill_detail": {
-			"dingtalk-tag skill query", "query_skill", "available",
+			"dingtalk-tag capability skill query", "query_skill", "available",
 			map[string]string{"agent-uuid": "agentUuid", "skill-id": "skillId", "snapshot": "snapshot"},
 		},
 		"dingtalk-tag.create_mcp": {
-			"dingtalk-tag mcp create", "create_mcp", "available",
+			"dingtalk-tag capability mcp create", "create_mcp", "available",
 			map[string]string{"config-file": "config"},
 		},
 		"dingtalk-tag.list_mcps": {
-			"dingtalk-tag mcp list", "list_mcps", "available",
+			"dingtalk-tag capability mcp list", "list_mcps", "available",
 			map[string]string{"keywords": "keywords", "page": "page", "page-size": "pageSize"},
 		},
 		"dingtalk-tag.get_mcp_detail": {
-			"dingtalk-tag mcp query", "query_mcp", "available",
+			"dingtalk-tag capability mcp query", "query_mcp", "available",
 			map[string]string{"mcp-id": "mcpId"},
 		},
 	}

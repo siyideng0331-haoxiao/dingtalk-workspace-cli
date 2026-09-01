@@ -73,7 +73,7 @@ func TestDevDeapAgentSkillCreateUsesUploadFacadeAndSafeOutput(t *testing.T) {
 	testseam.Swap(t, &deapAgentSkillUploader, deapAgentSkillPackageUploader(uploader))
 	caller.resultText = `{"success":true,"data":{"skillId":"skill-1","skill":{"skillId":"skill-1","name":"weather","displayName":"天气","description":"查询天气"}}}`
 	deap := deapHandler{}.Command(&captureRunner{})
-	create, rest, err := deap.Find([]string{"skill", "create"})
+	create, rest, err := deap.Find([]string{"capability", "skill", "create"})
 	if err != nil || len(rest) != 0 {
 		t.Fatalf("find skill create: command=%v rest=%v err=%v", create, rest, err)
 	}
@@ -131,7 +131,7 @@ func TestDevDeapAgentSkillCreateLabelsStagesAndRedactsURLs(t *testing.T) {
 	}
 
 	deap := deapHandler{}.Command(&captureRunner{})
-	invalid, _, err := deap.Find([]string{"skill", "create"})
+	invalid, _, err := deap.Find([]string{"capability", "skill", "create"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestDevDeapAgentSkillCreateLabelsStagesAndRedactsURLs(t *testing.T) {
 		uploader := &deapAgentSkillUploaderStub{err: errors.New("request https://oss.example.test/object?token=secret failed")}
 		testseam.Swap(t, &deapAgentSkillUploader, deapAgentSkillPackageUploader(uploader))
 		command := deapHandler{}.Command(&captureRunner{})
-		create, _, findErr := command.Find([]string{"skill", "create"})
+		create, _, findErr := command.Find([]string{"capability", "skill", "create"})
 		if findErr != nil {
 			t.Fatal(findErr)
 		}
@@ -189,7 +189,7 @@ func TestDevDeapAgentSkillCreateLabelsStagesAndRedactsURLs(t *testing.T) {
 			caller.err = fmt.Errorf("skill create failed at %s stage: https://oss.example.test/object?token=secret", stage)
 			t.Cleanup(func() { caller.err = nil })
 			command := deapHandler{}.Command(&captureRunner{})
-			create, _, findErr := command.Find([]string{"skill", "create"})
+			create, _, findErr := command.Find([]string{"capability", "skill", "create"})
 			if findErr != nil {
 				t.Fatal(findErr)
 			}
@@ -475,12 +475,12 @@ func TestDevDeapAgentSkillAndMCPCommandsRouteFrozenContracts(t *testing.T) {
 		wantArgs  map[string]any
 		confirmed bool
 	}{
-		{path: []string{"skill", "list"}, tool: "list_skills", flags: map[string]string{"agent-uuid": "agent-1"}, wantArgs: map[string]any{"agentUuid": "agent-1", "snapshot": "draft"}},
-		{path: []string{"skill", "query"}, tool: "query_skill", flags: map[string]string{"agent-uuid": "agent-1", "skill-id": "skill-1", "snapshot": "published"}, wantArgs: map[string]any{"agentUuid": "agent-1", "skillId": "skill-1", "snapshot": "published"}},
-		{path: []string{"mcp", "create"}, tool: "create_mcp", flags: map[string]string{"config-file": "./mcp.json"}, wantArgs: map[string]any{"config": map[string]any{"name": "weather", "description": "查询天气", "detailIntro": "天气 MCP", "userQuestionTips": []any{"请输入城市"}, "configType": "JSON", "configString": `{"url":"https://mcp.example.test","token":"secret"}`, "envs": map[string]any{"API_TOKEN": "env-secret"}, "toolsDisabled": map[string]any{"search": false}}}, confirmed: true},
-		{path: []string{"mcp", "list"}, tool: "list_mcps", flags: map[string]string{}, wantArgs: map[string]any{"keywords": "", "page": 1, "pageSize": 20}},
-		{path: []string{"mcp", "query"}, tool: "query_mcp", flags: map[string]string{"mcp-id": "mcp-1"}, wantArgs: map[string]any{"mcpId": "mcp-1"}},
-		{path: []string{"manage", "detail"}, tool: "get_digital_employee_detail", flags: map[string]string{"assistant-id": "agent-1", "type": "published"}, wantArgs: map[string]any{"assistantId": "agent-1", "type": "published"}},
+		{path: []string{"capability", "skill", "list"}, tool: "list_skills", flags: map[string]string{"agent-uuid": "agent-1"}, wantArgs: map[string]any{"agentUuid": "agent-1", "snapshot": "draft"}},
+		{path: []string{"capability", "skill", "query"}, tool: "query_skill", flags: map[string]string{"agent-uuid": "agent-1", "skill-id": "skill-1", "snapshot": "published"}, wantArgs: map[string]any{"agentUuid": "agent-1", "skillId": "skill-1", "snapshot": "published"}},
+		{path: []string{"capability", "mcp", "create"}, tool: "create_mcp", flags: map[string]string{"config-file": "./mcp.json"}, wantArgs: map[string]any{"config": map[string]any{"name": "weather", "description": "查询天气", "detailIntro": "天气 MCP", "userQuestionTips": []any{"请输入城市"}, "configType": "JSON", "configString": `{"url":"https://mcp.example.test","token":"secret"}`, "envs": map[string]any{"API_TOKEN": "env-secret"}, "toolsDisabled": map[string]any{"search": false}}}, confirmed: true},
+		{path: []string{"capability", "mcp", "list"}, tool: "list_mcps", flags: map[string]string{}, wantArgs: map[string]any{"keywords": "", "page": 1, "pageSize": 20}},
+		{path: []string{"capability", "mcp", "query"}, tool: "query_mcp", flags: map[string]string{"mcp-id": "mcp-1"}, wantArgs: map[string]any{"mcpId": "mcp-1"}},
+		{path: []string{"manage", "detail"}, tool: "get_digital_employee_detail", flags: map[string]string{"agent-uuid": "agent-1", "type": "published"}, wantArgs: map[string]any{"agentUuid": "agent-1", "type": "published"}},
 		{path: []string{"manage", "save-draft"}, tool: "update_digital_employee_draft", flags: map[string]string{"agent-uuid": "agent-1", "skills-file": "./skills.json", "mcps-file": "./mcps.json"}, wantArgs: map[string]any{"agentUuid": "agent-1", "skills": []any{map[string]any{"skillId": "skill-1", "enabled": true, "attributes": map[string]any{"configDefinitions": map[string]any{"city": "hangzhou"}}}}, "mcps": []any{map[string]any{"mcpId": "mcp-1", "enabled": true, "config": map[string]any{"credentialRef": "cred-1"}}}}, confirmed: true},
 	}
 
@@ -562,7 +562,7 @@ func TestDevDeapAgentConfigFilesStayRedactedInDryRun(t *testing.T) {
 		return output.String()
 	}
 
-	mcpOutput := run([]string{"mcp", "create"}, map[string]string{"config-file": "./mcp.json"})
+	mcpOutput := run([]string{"capability", "mcp", "create"}, map[string]string{"config-file": "./mcp.json"})
 	draftOutput := run([]string{"manage", "save-draft"}, map[string]string{"agent-uuid": "agent-1", "skills-file": "./skills.json", "mcps-file": "./mcps.json"})
 	for label, got := range map[string]string{"mcp create": mcpOutput, "save-draft": draftOutput} {
 		for _, secret := range []string{"mcp-secret", "env-secret", "skill-secret", "draft-secret"} {
@@ -667,37 +667,37 @@ func newDeapAgentTestTree(t *testing.T, dryRun bool) (*deapAgentCaller, *bytes.B
 	return caller, out
 }
 
-// deapFindLeaf 在 `dingtalk-tag manage` / `dingtalk-tag observe` 两个子组里找叶子。
+// deapFindLeaf 在 `dingtalk-tag manage` / `dingtalk-tag run` 两个子组里找叶子。
 //
 // 为何不让用例自己写子组名：绝大多数用例关心的是“这个叶子的行为”而不是“它挂在哪个
 // 子组”；把子组名写进每个用例会让以后调整归类（如新增子组、或把某命令从管理态
-// 移到观测态）逐处改。归类本身由 TreeSplitsManageAndObserve 单独钉住。
+// 移到执行态）逐处改。归类本身由 TestDeapCommandTreeUsesManageRunAndCapability 单独钉住。
 func deapFindLeaf(t *testing.T, root *cobra.Command, leaf string) *cobra.Command {
 	t.Helper()
-	for _, group := range []string{"manage", "observe"} {
+	for _, group := range []string{"manage", "run"} {
 		cmd, remaining, err := root.Find([]string{group, leaf})
 		if err == nil && len(remaining) == 0 && cmd.Name() == leaf {
 			return cmd
 		}
 	}
-	t.Fatalf("dingtalk-tag leaf %q not found under manage/observe", leaf)
+	t.Fatalf("dingtalk-tag leaf %q not found under manage/run", leaf)
 	return nil
 }
 
-// TestDeapCommandTreeSplitsManageAndObserve 钉住顶级 `dws dingtalk-tag` 的两子组归类。
+// TestDeapCommandTreeUsesManageRunAndCapability 钉住顶级 `dws dingtalk-tag` 的三子组归类。
 //
 // 为何钉归类而不只钉叶子集合：管理态含不可逆写操作，观测态全是只读；两者混放会
 // 让调用方（含 Agent）失去“这一类命令安全属性相同”这个判断依据。
-func TestDeapCommandTreeSplitsManageAndObserve(t *testing.T) {
+func TestDeapCommandTreeUsesManageRunAndCapability(t *testing.T) {
 	newDeapAgentTestTree(t, false)
 	root := deapHandler{}.Command(&captureRunner{})
 
 	wantGroups := map[string][]string{
-		"manage":  {"create", "detail", "list", "get-dws-auth-token", "save-draft", "publish", "delete"},
-		"observe": {"run-status", "trace"},
+		"manage": {"create", "detail", "list", "get-dws-auth-code", "save-draft", "publish", "delete"},
+		"run":    {"run-status", "trace"},
 	}
-	if got := len(root.Commands()); got != len(wantGroups)+2 {
-		t.Fatalf("dingtalk-tag direct child count = %d, want %d", got, len(wantGroups)+2)
+	if got := len(root.Commands()); got != len(wantGroups)+1 {
+		t.Fatalf("dingtalk-tag direct child count = %d, want %d", got, len(wantGroups)+1)
 	}
 	for groupName, wantLeaves := range wantGroups {
 		group, remaining, err := root.Find([]string{groupName})
@@ -727,10 +727,14 @@ func TestDeapCommandTreeSplitsManageAndObserve(t *testing.T) {
 			}
 		}
 	}
+	capability, rest, findErr := root.Find([]string{"capability"})
+	if findErr != nil || len(rest) != 0 || capability == root {
+		t.Fatalf("find capability: command=%v rest=%v err=%v", capability, rest, findErr)
+	}
 	for _, name := range []string{"skill", "mcp"} {
-		subgroup, rest, findErr := root.Find([]string{name})
-		if findErr != nil || len(rest) != 0 || subgroup == root {
-			t.Fatalf("find subgroup %q: command=%v rest=%v err=%v", name, subgroup, rest, findErr)
+		subgroup, remaining, subgroupErr := capability.Find([]string{name})
+		if subgroupErr != nil || len(remaining) != 0 || subgroup == capability {
+			t.Fatalf("find capability subgroup %q: command=%v rest=%v err=%v", name, subgroup, remaining, subgroupErr)
 		}
 		if !subgroup.HasSubCommands() {
 			t.Errorf("dingtalk-tag %s must be a command group", name)
@@ -794,8 +798,8 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 		},
 		{
 			leaf: "detail", tool: "get_digital_employee_detail",
-			flags:    map[string]string{"assistant-id": "assistant-1", "type": "published"},
-			wantArgs: map[string]any{"assistantId": "assistant-1", "type": "published"},
+			flags:    map[string]string{"agent-uuid": "agent-1", "type": "published"},
+			wantArgs: map[string]any{"agentUuid": "agent-1", "type": "published"},
 		},
 		{
 			leaf: "list", tool: "list_digital_employees",
@@ -803,12 +807,12 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 			wantArgs: map[string]any{"keyword": "值班", "page": 2, "pageSize": 101},
 		},
 		{
-			leaf: "get-dws-auth-token", tool: "get_dws_auth_token",
+			leaf: "get-dws-auth-code", tool: "get_dws_auth_code",
 			flags:    map[string]string{"agent-uuid": "agent-1"},
 			wantArgs: map[string]any{"agentUuid": "agent-1"},
 		},
 		{
-			leaf: "get-dws-auth-token", tool: "get_dws_auth_token",
+			leaf: "get-dws-auth-code", tool: "get_dws_auth_code",
 			flags:    map[string]string{"agent-uuid": "agent-1", "client-id": "client-1"},
 			wantArgs: map[string]any{"agentUuid": "agent-1", "clientId": "client-1"},
 		},
@@ -838,13 +842,13 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 		},
 		{
 			leaf: "run-status", tool: "query_de_run_status",
-			flags:    map[string]string{"assistant-id": "agent-1", "source-id": "open-message-1", "source-type": "im_message"},
-			wantArgs: map[string]any{"assistantId": "agent-1", "sourceId": "open-message-1", "sourceType": "im_message"},
+			flags:    map[string]string{"agent-uuid": "agent-1", "source-id": "open-message-1", "source-type": "im_message"},
+			wantArgs: map[string]any{"agentUuid": "agent-1", "sourceId": "open-message-1", "sourceType": "im_message"},
 		},
 		{
 			leaf: "trace", tool: "query_de_trace",
-			flags:    map[string]string{"assistant-id": "agent-1", "source-id": "open-message-1", "source-type": "trigger_rule"},
-			wantArgs: map[string]any{"assistantId": "agent-1", "sourceId": "open-message-1", "sourceType": "trigger_rule"},
+			flags:    map[string]string{"agent-uuid": "agent-1", "source-id": "open-message-1", "source-type": "trigger_rule"},
+			wantArgs: map[string]any{"agentUuid": "agent-1", "sourceId": "open-message-1", "sourceType": "trigger_rule"},
 		},
 	}
 	for _, tc := range cases {
@@ -887,7 +891,7 @@ func TestDeapDetailDefaultsToDraft(t *testing.T) {
 	caller, _ := newDeapAgentTestTree(t, false)
 	root := deapHandler{}.Command(&captureRunner{})
 	detail := deapFindLeaf(t, root, "detail")
-	if err := detail.Flags().Set("assistant-id", "assistant-1"); err != nil {
+	if err := detail.Flags().Set("agent-uuid", "agent-1"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -895,7 +899,7 @@ func TestDeapDetailDefaultsToDraft(t *testing.T) {
 		t.Fatalf("RunE() error = %v", err)
 	}
 
-	want := map[string]any{"assistantId": "assistant-1", "type": "draft"}
+	want := map[string]any{"agentUuid": "agent-1", "type": "draft"}
 	if len(caller.calls) != 1 || !reflect.DeepEqual(caller.calls[0].args, want) {
 		t.Fatalf("detail call = %#v, want args %#v", caller.calls, want)
 	}
@@ -945,16 +949,16 @@ func TestDevDeapAgentConstraintsFailBeforeMCP(t *testing.T) {
 		flags   map[string]string
 		wantErr string
 	}{
-		{leaf: "run-status", flags: map[string]string{"source-id": "src-1", "source-type": "im_message"}, wantErr: "assistant-id"},
-		{leaf: "run-status", flags: map[string]string{"assistant-id": "agent-1"}, wantErr: "source-id"},
-		{leaf: "run-status", flags: map[string]string{"assistant-id": "agent-1", "source-id": "src-1"}, wantErr: "source-type"},
-		{leaf: "trace", flags: map[string]string{"source-id": "src-1", "source-type": "im_message"}, wantErr: "assistant-id"},
-		{leaf: "trace", flags: map[string]string{"assistant-id": "agent-1"}, wantErr: "source-id"},
-		{leaf: "trace", flags: map[string]string{"assistant-id": "agent-1", "source-id": "src-1"}, wantErr: "source-type"},
+		{leaf: "run-status", flags: map[string]string{"source-id": "src-1", "source-type": "im_message"}, wantErr: "agent-uuid"},
+		{leaf: "run-status", flags: map[string]string{"agent-uuid": "agent-1"}, wantErr: "source-id"},
+		{leaf: "run-status", flags: map[string]string{"agent-uuid": "agent-1", "source-id": "src-1"}, wantErr: "source-type"},
+		{leaf: "trace", flags: map[string]string{"source-id": "src-1", "source-type": "im_message"}, wantErr: "agent-uuid"},
+		{leaf: "trace", flags: map[string]string{"agent-uuid": "agent-1"}, wantErr: "source-id"},
+		{leaf: "trace", flags: map[string]string{"agent-uuid": "agent-1", "source-id": "src-1"}, wantErr: "source-type"},
 		{leaf: "list", flags: map[string]string{"page": "0"}, wantErr: "--page 不能小于 1"},
 		{leaf: "list", flags: map[string]string{"page-size": "0"}, wantErr: "--page-size 不能小于 1"},
-		{leaf: "detail", flags: map[string]string{"assistant-id": "agent-1", "type": "merged"}, wantErr: "--type"},
-		{leaf: "get-dws-auth-token", flags: map[string]string{}, wantErr: "agent-uuid"},
+		{leaf: "detail", flags: map[string]string{"agent-uuid": "agent-1", "type": "merged"}, wantErr: "--type"},
+		{leaf: "get-dws-auth-code", flags: map[string]string{}, wantErr: "agent-uuid"},
 		{leaf: "create", flags: map[string]string{
 			"name": "值班助手", "description": "处理值班问题", "dept-id": "dept-1", "dept-name": "值班组",
 			"profile-json": `{"tag":"forbidden"}`,
@@ -1021,7 +1025,7 @@ func TestDevDeapAgentRemovesRetiredFlagsAndKeepsIdentityHidden(t *testing.T) {
 	}
 	// send-message 已下线：不能用 deapFindLeaf（它找不到就 Fatal，语义刚好反了），
 	// 直接断言两个子组里都没有它。
-	for _, group := range []string{"manage", "observe"} {
+	for _, group := range []string{"manage", "run"} {
 		if cmd, _, findErr := root.Find([]string{group, "send-message"}); findErr == nil &&
 			cmd != nil && cmd.Name() == "send-message" {
 			t.Fatalf("retired send-message command is exposed under %s; 推送能力已从观测接口移除", group)
@@ -1080,10 +1084,10 @@ func TestDevDeapAgentRemovesRetiredFlagsAndKeepsIdentityHidden(t *testing.T) {
 func TestDevDeapAgentHelpMatchesCurrentMCPInputs(t *testing.T) {
 	newDeapAgentTestTree(t, false)
 	root := deapHandler{}.Command(&captureRunner{})
-	authToken := deapFindLeaf(t, root, "get-dws-auth-token")
+	authCode := deapFindLeaf(t, root, "get-dws-auth-code")
 	for _, field := range []string{"dwsClientId", "uid", "dwsAuthCode", "staffId", "orgId"} {
-		if !strings.Contains(authToken.Long, field) {
-			t.Fatalf("get-dws-auth-token help is missing response field %s: %q", field, authToken.Long)
+		if !strings.Contains(authCode.Long, field) {
+			t.Fatalf("get-dws-auth-code help is missing response field %s: %q", field, authCode.Long)
 		}
 	}
 
@@ -1101,8 +1105,8 @@ func TestDevDeapAgentHelpMatchesCurrentMCPInputs(t *testing.T) {
 
 	for _, name := range []string{"run-status", "trace"} {
 		command := deapFindLeaf(t, root, name)
-		if flag := command.Flags().Lookup("assistant-id"); flag == nil {
-			t.Fatalf("%s is missing MCP input --assistant-id", name)
+		if flag := command.Flags().Lookup("agent-uuid"); flag == nil {
+			t.Fatalf("%s is missing MCP input --agent-uuid", name)
 		}
 		for _, flagName := range []string{"source-id", "source-type"} {
 			if flag := command.Flags().Lookup(flagName); flag == nil {

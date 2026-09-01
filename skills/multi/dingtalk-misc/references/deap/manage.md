@@ -30,26 +30,26 @@ Example:
 
 ```
 Usage:
-  dws dingtalk-tag manage detail --assistant-id <assistantId>
+  dws dingtalk-tag manage detail --agent-uuid <agentUuid>
   dws dingtalk-tag manage list [--keyword <关键词>] [--page 1] [--page-size 20]
 Example:
-  dws dingtalk-tag manage detail --assistant-id <assistantId> --format json
+  dws dingtalk-tag manage detail --agent-uuid <agentUuid> --format json
   dws dingtalk-tag manage list --keyword "周报" --format json
 ```
 
 `--keyword` 按名称、岗位或工号模糊匹配。`--page` / `--page-size` 均不得小于 1。
 
-## get-dws-auth-token — 获取临时 DWS token
+## get-dws-auth-code — 获取临时 DWS 授权码
 
 ```
 Usage:
-  dws dingtalk-tag manage get-dws-auth-token --agent-uuid <agentUuid> [--client-id <appId>]
+  dws dingtalk-tag manage get-dws-auth-code --agent-uuid <agentUuid> [--client-id <appId>]
 Flags:
   --agent-uuid   必填，数字员工 ID
   --client-id    可选，用于授权的应用 ID；不传时由服务端选择默认应用
 ```
 
-固定调用 MCP 工具 `get_dws_auth_token`。服务端响应结构为：
+固定调用 MCP 工具 `get_dws_auth_code`。服务端响应结构为：
 
 ```json
 {
@@ -123,4 +123,4 @@ Usage:
 ## 跨产品协作
 
 - 查上级或成员的 `uid` / `userId`：切换独立 skill [`dingtalk-contact`](../../../dingtalk-contact/SKILL.md)，或用 `dws aisearch person --query "姓名"`。
-- 发布后要看执行情况：见 [`observe.md`](./observe.md)。
+- 发布后要看执行情况：见 [`run.md`](./run.md)。

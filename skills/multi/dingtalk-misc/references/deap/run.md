@@ -1,19 +1,19 @@
-# dingtalk-tag observe — 数字员工执行观测
+# dingtalk-tag run — 数字员工执行查询
 
-命令前缀 `dws dingtalk-tag observe`。全部只读。
+命令前缀 `dws dingtalk-tag run`。全部只读。
 
 ## 两个命令，入参完全一致
 
 ```
 Usage:
-  dws dingtalk-tag observe run-status --assistant-id <id> --source-id <来源ID> --source-type <类型>
-  dws dingtalk-tag observe trace      --assistant-id <id> --source-id <来源ID> --source-type <类型>
+  dws dingtalk-tag run run-status --agent-uuid <id> --source-id <来源ID> --source-type <类型>
+  dws dingtalk-tag run trace      --agent-uuid <id> --source-id <来源ID> --source-type <类型>
 Flags（三者均必填）:
-  --assistant-id   数字员工唯一标识
+  --agent-uuid     数字员工唯一标识
   --source-id      来源侧原始 ID（取法见下）
   --source-type    im_message | trigger_rule
 Example:
-  dws dingtalk-tag observe run-status --assistant-id <id> --source-id <openMessageId> --source-type im_message --format json
+  dws dingtalk-tag run run-status --agent-uuid <id> --source-id <openMessageId> --source-type im_message --format json
 ```
 
 - `run-status` 返回 `result`（1 成功 / -1 失败 / 0 运行中 / 2 中止）、`execStatus`、`runId`、`messageId`
@@ -59,7 +59,7 @@ dws chat message query-send-status --open-task-id "<openTaskId>" --format json
 #      "sendStatus": "SUCCESS" }
 
 # 3. 查执行状态
-dws dingtalk-tag observe run-status --assistant-id <assistantId> \
+dws dingtalk-tag run run-status --agent-uuid <agentUuid> \
   --source-id "msgeOkiAslxLfjM/fuYRe7C0A==" --source-type im_message --format json
 ```
 

@@ -26,7 +26,7 @@ const (
 	deapAgentCreateTool    = "create_digital_employee"
 	deapAgentDetailTool    = "get_digital_employee_detail"
 	deapAgentListTool      = "list_digital_employees"
-	deapAgentAuthTokenTool = "get_dws_auth_token"
+	deapAgentAuthCodeTool  = "get_dws_auth_code"
 	deapAgentSaveDraftTool = "update_digital_employee_draft"
 	deapAgentPublishTool   = "publish_digital_employee"
 	deapAgentDeleteTool    = "delete_digital_employee"
@@ -63,10 +63,9 @@ func init() {
 
 // deapHandler 挂载顶级命令 `dws dingtalk-tag`：
 //
-//	dingtalk-tag manage    数字员工管理（创建 / 详情 / 列表 / 临时 token / 草稿 / 发布 / 删除）
-//	dingtalk-tag observe   执行观测（执行状态 / 执行 trace）
-//	dingtalk-tag skill     Skill 资源创建与查询
-//	dingtalk-tag mcp       MCP 资源创建与查询
+//	dingtalk-tag manage       数字员工管理（创建 / 详情 / 列表 / 临时授权码 / 草稿 / 发布 / 删除）
+//	dingtalk-tag run          执行观测（执行状态 / 执行 trace）
+//	dingtalk-tag capability   数字员工能力资源（Skill / MCP）
 //
 // 各子组的资源边界和安全属性不同，均平级挂在 DEAP 产品下。
 type deapHandler struct{}
@@ -79,7 +78,7 @@ func (deapHandler) Command(executor.Runner) *cobra.Command {
 	contract.RegisterProductDecl(contract.ProductDecl{
 		ID: dingtalkTagProductID,
 		Selection: contract.ProductSelectionDecl{
-			AgentSummary: "管理 DEAP 数字员工及其 Skill/MCP 资源，并查询执行状态",
+			AgentSummary: "管理 DEAP 数字员工及其 Skill/MCP 能力资源，并查询执行状态",
 			UseWhen: []string{
 				"创建、修改、发布或删除 DEAP 数字员工",
 				"查数字员工某次执行的状态或完整模型链路",
@@ -93,7 +92,7 @@ func (deapHandler) Command(executor.Runner) *cobra.Command {
 	root := &cobra.Command{
 		Use:               "dingtalk-tag",
 		Short:             "DEAP 平台",
-		Long:              "钉钉数字员工命令组：manage 负责数字员工生命周期和临时 DWS token，observe 负责执行状态与 trace，skill/mcp 负责对应资源的创建与查询。固定调用 MCP product/server deap-dev；identity.corpId/userId 由可信登录态注入且不对 CLI 暴露。端点跟随当前 MCP 环境自动选择规范网关；DINGTALK_DEAP_DEV_MCP_URL 仅用于本地调试覆盖。",
+		Long:              "钉钉数字员工命令组：manage 负责数字员工生命周期和临时 DWS 授权码，run 负责执行状态与 trace，capability 负责 Skill/MCP 能力资源的创建与查询。固定调用 MCP product/server deap-dev；identity.corpId/userId 由可信登录态注入且不对 CLI 暴露。端点跟随当前 MCP 环境自动选择规范网关；DINGTALK_DEAP_DEV_MCP_URL 仅用于本地调试覆盖。",
 		Args:              cobra.NoArgs,
 		TraverseChildren:  true,
 		DisableAutoGenTag: true,
@@ -102,9 +101,8 @@ func (deapHandler) Command(executor.Runner) *cobra.Command {
 	cmdutil.MarkGroup(root)
 	root.AddCommand(
 		newDeapManageCommand(),
-		newDeapObserveCommand(),
-		newDeapAgentSkillCommand(),
-		newDeapAgentMCPCommand(),
+		newDeapRunCommand(),
+		newDeapCapabilityCommand(),
 	)
 	return root
 }
@@ -114,7 +112,7 @@ func newDeapManageCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "manage",
 		Short:             "数字员工生命周期管理",
-		Long:              "钉钉数字员工管理：创建草稿、查询详情与列表、获取临时 DWS token、全量覆写草稿、发布与删除。token 属于高敏感凭证；save-draft / publish / delete 均为高影响写操作，先 --dry-run 确认再加 --yes。",
+		Long:              "钉钉数字员工管理：创建草稿、查询详情与列表、获取临时 DWS 授权码、全量覆写草稿、发布与删除。授权码属于高敏感凭证；save-draft / publish / delete 均为高影响写操作，先 --dry-run 确认再加 --yes。",
 		Args:              cobra.NoArgs,
 		TraverseChildren:  true,
 		DisableAutoGenTag: true,
@@ -125,7 +123,7 @@ func newDeapManageCommand() *cobra.Command {
 		newDeapAgentCreateCommand(),
 		newDeapAgentDetailCommand(),
 		newDeapAgentListCommand(),
-		newDeapAgentAuthTokenCommand(),
+		newDeapAgentAuthCodeCommand(),
 		newDeapAgentSaveDraftCommand(),
 		newDeapAgentPublishCommand(),
 		newDeapAgentDeleteCommand(),
@@ -133,14 +131,14 @@ func newDeapManageCommand() *cobra.Command {
 	return cmd
 }
 
-// newDeapAgentAuthTokenCommand 获取指定数字员工的短期 DWS 授权信息。
+// newDeapAgentAuthCodeCommand 获取指定数字员工的短期 DWS 授权信息。
 // dwsAuthCode 等字段由服务端在 data 中返回，CLI 不解析、不缓存，也不改变响应 envelope。
-func newDeapAgentAuthTokenCommand() *cobra.Command {
+func newDeapAgentAuthCodeCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
-		Use:       "get-dws-auth-token",
-		Short:     "获取数字员工的临时 DWS token",
+		Use:       "get-dws-auth-code",
+		Short:     "获取数字员工的临时 DWS 授权码",
 		Long:      "按 agentUuid 获取数字员工的临时 DWS 授权信息。clientId 是可选的授权应用 ID；不传时由服务端选择默认应用。服务端响应中的 success、errorCode、errorMsg 和 data 会原样输出；data 包含 dwsClientId、uid、dwsAuthCode、staffId、orgId。dwsAuthCode 是高敏感短期凭证，不得写入文档、日志、命令历史、缓存或代码库。",
-		Tool:      deapAgentAuthTokenTool,
+		Tool:      deapAgentAuthCodeTool,
 		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
@@ -153,19 +151,19 @@ func newDeapAgentAuthTokenCommand() *cobra.Command {
 		},
 		Contract: LeafContract{
 			Identity: contract.ToolIdentitySpec{
-				ProductID: dingtalkTagProductID, Name: deapAgentAuthTokenTool,
-				CanonicalPath: "dingtalk-tag.get_dws_auth_token",
-				CLIPath:       "dingtalk-tag manage get-dws-auth-token", PrimaryCLIPath: "dingtalk-tag manage get-dws-auth-token",
+				ProductID: dingtalkTagProductID, Name: deapAgentAuthCodeTool,
+				CanonicalPath: "dingtalk-tag.get_dws_auth_code",
+				CLIPath:       "dingtalk-tag manage get-dws-auth-code", PrimaryCLIPath: "dingtalk-tag manage get-dws-auth-code",
 				Group: "manage",
 			},
 			Description: "按 agentUuid 获取数字员工的临时 DWS 授权信息；clientId 可选。服务端返回 success、errorCode、errorMsg，以及包含 dwsClientId、uid、dwsAuthCode、staffId、orgId 的 data。",
 			DryRun:      deapAgentDryRun,
-			Interface:   deapAgentMCPInterface(deapAgentAuthTokenTool),
+			Interface:   deapAgentMCPInterface(deapAgentAuthCodeTool),
 			Selection: contract.SelectionSpec{
-				AgentSummary: "获取指定数字员工的临时 DWS token",
+				AgentSummary: "获取指定数字员工的临时 DWS 授权码",
 				UseWhen:      []string{"已知 agentUuid，需要以该数字员工身份短期调用 DWS 时"},
-				AvoidWhen:    []string{"普通用户 DWS 登录使用 auth login；只管理数字员工配置时不需要获取 token"},
-				Examples:     []string{"dws dingtalk-tag manage get-dws-auth-token --agent-uuid <agentUuid> --format json"},
+				AvoidWhen:    []string{"普通用户 DWS 登录使用 auth login；只管理数字员工配置时不需要获取授权码"},
+				Examples:     []string{"dws dingtalk-tag manage get-dws-auth-code --agent-uuid <agentUuid> --format json"},
 			},
 			Parameters: []contract.ParamDecl{
 				{Name: "agent-uuid", Property: "agentUuid"},
@@ -175,10 +173,10 @@ func newDeapAgentAuthTokenCommand() *cobra.Command {
 	})
 }
 
-// newDeapObserveCommand 观测态：全部是只读，且均只按来源定位（不接 runId）。
-func newDeapObserveCommand() *cobra.Command {
+// newDeapRunCommand 执行态：全部是只读，且均只按来源定位（不接 runId）。
+func newDeapRunCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "observe",
+		Use:               "run",
 		Short:             "数字员工执行观测",
 		Long:              "DEAP 数字员工的执行观测：按来源反查执行状态（run-status）与完整模型链路（trace）。两个命令均只按 --source-id + --source-type 定位，不接 runId（调用方拿不到，runId 是出参）。",
 		Args:              cobra.NoArgs,
@@ -198,7 +196,7 @@ func newDeapAgentCreateCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use:       "create",
 		Short:     "创建草稿态数字员工",
-		Long:      "创建草稿态 DEAP 数字员工并返回生成的 assistantId。创建不会自动发布；创建成功后应补齐头像、岗位、响应模式和人设提示词，再调用发布工具。name 和 description 必填，identity 由 MCP 可信注入；员工档案可用独立 flag 或 profile-json 提供，同时提供时独立 flag 覆盖 JSON 同名字段。",
+		Long:      "创建草稿态 DEAP 数字员工并返回生成的 agentUuid。创建不会自动发布；创建成功后应补齐头像、岗位、响应模式和人设提示词，再调用发布工具。name 和 description 必填，identity 由 MCP 可信注入；员工档案可用独立 flag 或 profile-json 提供，同时提供时独立 flag 覆盖 JSON 同名字段。",
 		Tool:      deapAgentCreateTool,
 		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
@@ -238,12 +236,12 @@ func newDeapAgentCreateCommand() *cobra.Command {
 				CLIPath:       "dingtalk-tag manage create", PrimaryCLIPath: "dingtalk-tag manage create",
 				Group: "manage",
 			},
-			Description: "创建草稿态 DEAP 数字员工并返回生成的 assistantId。创建不会自动发布；创建成功后应补齐头像、岗位、响应模式和人设提示词，再调用发布工具。",
+			Description: "创建草稿态 DEAP 数字员工并返回生成的 agentUuid。创建不会自动发布；创建成功后应补齐头像、岗位、响应模式和人设提示词，再调用发布工具。",
 			DryRun:      deapAgentDryRun,
 			Interface:   deapAgentMCPInterface(deapAgentCreateTool),
 			Selection: contract.SelectionSpec{
 				AgentSummary: "创建新的草稿态 DEAP 数字员工",
-				UseWhen:      []string{"需要从零创建数字员工并获得 assistantId 时"},
+				UseWhen:      []string{"需要从零创建数字员工并获得 agentUuid 时"},
 				AvoidWhen:    []string{"已有 agentUuid 只需修改草稿时使用 save-draft", "创建普通开放平台应用时使用 dev app create"},
 				Examples:     []string{`dws dingtalk-tag manage create --name "值班助手" --description "处理值班问题" --dept-id dept-1 --dept-name "值班组" --position-name "值班员" --response-mode mention_only --dry-run --format json`},
 			},
@@ -262,12 +260,12 @@ func newDeapAgentDetailCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use:       "detail",
 		Short:     "查询数字员工管理态详情",
-		Long:      "按 assistantId 查询 DEAP 数字员工详情。--type draft 返回未发布草稿及其 Skill/MCP 引用配置，published 返回线上已发布配置，默认 draft；返回 status 中 online 表示已发布，dev/offline 表示未发布。仅有该数字员工管理权限的调用人可读；ID 不存在或不是数字员工时返回 NOT_FOUND。保存草稿前应先查询 draft；iconUrl 可能是带签名的临时地址，长期保存应使用 icon。",
+		Long:      "按 agentUuid 查询 DEAP 数字员工详情。--type draft 返回未发布草稿及其 Skill/MCP 引用配置，published 返回线上已发布配置，默认 draft；返回 status 中 online 表示已发布，dev/offline 表示未发布。仅有该数字员工管理权限的调用人可读；ID 不存在或不是数字员工时返回 NOT_FOUND。保存草稿前应先查询 draft；iconUrl 可能是带签名的临时地址，长期保存应使用 icon。",
 		Tool:      deapAgentDetailTool,
 		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
-			{Name: "assistant-id", Usage: "数字员工 ID", Bind: "assistantId", Required: true, Trim: true},
+			{Name: "agent-uuid", Usage: "数字员工 ID", Bind: "agentUuid", Required: true, Trim: true},
 			{Name: "type", Usage: "详情来源：draft（未发布草稿）或 published（线上已发布配置）", Bind: "type", Default: "draft", ArgDefault: "draft", Trim: true, Enum: []string{"draft", "published"}},
 		},
 		Safety: contract.SafetySpec{
@@ -281,16 +279,16 @@ func newDeapAgentDetailCommand() *cobra.Command {
 				CLIPath:       "dingtalk-tag manage detail", PrimaryCLIPath: "dingtalk-tag manage detail",
 				Group: "manage",
 			},
-			Description: "按 assistantId 查询数字员工 draft 或 published 详情及其 Skill/MCP 引用配置。type 默认 draft；返回 status 中 online 表示已发布，dev/offline 表示未发布。",
+			Description: "按 agentUuid 查询数字员工 draft 或 published 详情及其 Skill/MCP 引用配置。type 默认 draft；返回 status 中 online 表示已发布，dev/offline 表示未发布。",
 			DryRun:      deapAgentDryRun,
 			Interface:   deapAgentMCPInterface(deapAgentDetailTool),
 			Selection: contract.SelectionSpec{
-				AgentSummary: "按 assistantId 查询数字员工草稿或已发布详情",
+				AgentSummary: "按 agentUuid 查询数字员工草稿或已发布详情",
 				UseWhen:      []string{"需要读取数字员工完整配置、发布前检查或保存草稿前回读时"},
 				AvoidWhen:    []string{"需要分页查找多个数字员工时使用 list", "只查一次运行状态时使用 run-status"},
 				Examples: []string{
-					"dws dingtalk-tag manage detail --assistant-id <assistantId> --type draft --format json",
-					"dws dingtalk-tag manage detail --assistant-id <assistantId> --type published --format json",
+					"dws dingtalk-tag manage detail --agent-uuid <agentUuid> --type draft --format json",
+					"dws dingtalk-tag manage detail --agent-uuid <agentUuid> --type published --format json",
 				},
 			},
 			Parameters: []contract.ParamDecl{
@@ -499,12 +497,12 @@ func newDeapAgentRunStatusCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use:       "run-status",
 		Short:     "查询数字员工执行状态",
-		Long:      "查询指定数字员工的执行状态。--assistant-id、--source-id、--source-type 均必填，按来源反查本次执行。返回 result（1 成功 / -1 失败 / 0 运行中 / 2 中止）、runId 与 messageId。trigger_rule 的来源 ID 可能对应多次执行，只返回最新一次。",
+		Long:      "查询指定数字员工的执行状态。--agent-uuid、--source-id、--source-type 均必填，按来源反查本次执行。返回 result（1 成功 / -1 失败 / 0 运行中 / 2 中止）、runId 与 messageId。trigger_rule 的来源 ID 可能对应多次执行，只返回最新一次。",
 		Tool:      deapAgentRunStatusTool,
 		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
-			{Name: "assistant-id", Usage: "数字员工唯一标识", Bind: "assistantId", Required: true, Trim: true},
+			{Name: "agent-uuid", Usage: "数字员工唯一标识", Bind: "agentUuid", Required: true, Trim: true},
 			{Name: "source-id", Usage: "来源侧原始 ID；im_message 传钉钉开放态 openMessageId（不是 DWS openTaskId），trigger_rule 传群感知规则 ID", Bind: "sourceId", Required: true, Trim: true},
 			{Name: "source-type", Usage: "来源类型", Bind: "sourceType", Required: true, Trim: true, Enum: deapAgentSourceTypes},
 		},
@@ -516,10 +514,10 @@ func newDeapAgentRunStatusCommand() *cobra.Command {
 			Identity: contract.ToolIdentitySpec{
 				ProductID: dingtalkTagProductID, Name: "query_de_run_status",
 				CanonicalPath: "dingtalk-tag.query_de_run_status",
-				CLIPath:       "dingtalk-tag observe run-status", PrimaryCLIPath: "dingtalk-tag observe run-status",
-				Group: "observe",
+				CLIPath:       "dingtalk-tag run run-status", PrimaryCLIPath: "dingtalk-tag run run-status",
+				Group: "run",
 			},
-			Description: "数字员工执行状态查询。assistantId、sourceId、sourceType 均必填，按来源反查本次执行。",
+			Description: "数字员工执行状态查询。agentUuid、sourceId、sourceType 均必填，按来源反查本次执行。",
 			DryRun:      deapAgentDryRun,
 			Interface:   deapAgentMCPInterface(deapAgentRunStatusTool),
 			Selection: contract.SelectionSpec{
@@ -530,8 +528,8 @@ func newDeapAgentRunStatusCommand() *cobra.Command {
 					"手上只有 DWS openTaskId 时先查发送状态换成 openMessageId",
 				},
 				Examples: []string{
-					"dws dingtalk-tag observe run-status --assistant-id <assistantId> --source-id <openMessageId> --source-type im_message --format json",
-					"dws dingtalk-tag observe run-status --assistant-id <assistantId> --source-id <perceptionRuleId> --source-type trigger_rule --format json",
+					"dws dingtalk-tag run run-status --agent-uuid <agentUuid> --source-id <openMessageId> --source-type im_message --format json",
+					"dws dingtalk-tag run run-status --agent-uuid <agentUuid> --source-id <perceptionRuleId> --source-type trigger_rule --format json",
 				},
 			},
 		},
@@ -544,12 +542,12 @@ func newDeapAgentTraceCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use:       "trace",
 		Short:     "查询数字员工执行 Trace",
-		Long:      "查询指定数字员工的执行 Trace。--assistant-id、--source-id、--source-type 均必填（与 run-status 一致）。返回内容可能包含完整对话和模型输入输出；服务端会先执行管理者/触发人两级授权，无权时返回 NO_PERMISSION。",
+		Long:      "查询指定数字员工的执行 Trace。--agent-uuid、--source-id、--source-type 均必填（与 run-status 一致）。返回内容可能包含完整对话和模型输入输出；服务端会先执行管理者/触发人两级授权，无权时返回 NO_PERMISSION。",
 		Tool:      deapAgentTraceTool,
 		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
-			{Name: "assistant-id", Usage: "数字员工唯一标识", Bind: "assistantId", Required: true, Trim: true},
+			{Name: "agent-uuid", Usage: "数字员工唯一标识", Bind: "agentUuid", Required: true, Trim: true},
 			{Name: "source-id", Usage: "来源侧原始 ID；im_message 传钉钉开放态 openMessageId（不是 DWS openTaskId），trigger_rule 传群感知规则 ID", Bind: "sourceId", Required: true, Trim: true},
 			{Name: "source-type", Usage: "来源类型", Bind: "sourceType", Required: true, Trim: true, Enum: deapAgentSourceTypes},
 		},
@@ -561,10 +559,10 @@ func newDeapAgentTraceCommand() *cobra.Command {
 			Identity: contract.ToolIdentitySpec{
 				ProductID: dingtalkTagProductID, Name: "query_de_trace",
 				CanonicalPath: "dingtalk-tag.query_de_trace",
-				CLIPath:       "dingtalk-tag observe trace", PrimaryCLIPath: "dingtalk-tag observe trace",
-				Group: "observe",
+				CLIPath:       "dingtalk-tag run trace", PrimaryCLIPath: "dingtalk-tag run trace",
+				Group: "run",
 			},
-			Description: "数字员工执行 Trace 查询。assistantId、sourceId、sourceType 均必填，服务端先执行管理者/触发人两级授权。",
+			Description: "数字员工执行 Trace 查询。agentUuid、sourceId、sourceType 均必填，服务端先执行管理者/触发人两级授权。",
 			DryRun:      deapAgentDryRun,
 			Interface:   deapAgentMCPInterface(deapAgentTraceTool),
 			Selection: contract.SelectionSpec{
@@ -574,7 +572,7 @@ func newDeapAgentTraceCommand() *cobra.Command {
 					"只需执行成败结果时使用 run-status（本命令返回完整对话内容，敏感度更高）",
 				},
 				Examples: []string{
-					"dws dingtalk-tag observe trace --assistant-id <assistantId> --source-id <openMessageId> --source-type im_message --format json",
+					"dws dingtalk-tag run trace --agent-uuid <agentUuid> --source-id <openMessageId> --source-type im_message --format json",
 				},
 			},
 		},

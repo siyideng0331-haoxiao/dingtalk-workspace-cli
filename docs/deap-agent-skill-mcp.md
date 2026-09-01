@@ -7,7 +7,7 @@
 从本地 ZIP 创建：
 
 ```bash
-dws dingtalk-tag skill create \
+dws dingtalk-tag capability skill create \
   --agent-uuid <agentUuid> \
   --file ./my-skill.zip \
   --format json
@@ -18,8 +18,8 @@ CLI 在本地检查 ZIP 扩展名、压缩包完整性、路径安全、50 MiB �
 查询命令：
 
 ```bash
-dws dingtalk-tag skill list --agent-uuid <agentUuid> --snapshot draft --format json
-dws dingtalk-tag skill query --agent-uuid <agentUuid> --skill-id <skillId> --snapshot draft --format json
+dws dingtalk-tag capability skill list --agent-uuid <agentUuid> --snapshot draft --format json
+dws dingtalk-tag capability skill query --agent-uuid <agentUuid> --skill-id <skillId> --snapshot draft --format json
 ```
 
 ## MCP
@@ -27,9 +27,9 @@ dws dingtalk-tag skill query --agent-uuid <agentUuid> --skill-id <skillId> --sna
 敏感配置必须放在本地 JSON 文件中，不要直接拼进命令行：
 
 ```bash
-dws dingtalk-tag mcp create --config-file ./mcp.json --format json
-dws dingtalk-tag mcp list --keywords 文档 --page 1 --page-size 20 --format json
-dws dingtalk-tag mcp query --mcp-id <mcpId> --format json
+dws dingtalk-tag capability mcp create --config-file ./mcp.json --format json
+dws dingtalk-tag capability mcp list --keywords 文档 --page 1 --page-size 20 --format json
+dws dingtalk-tag capability mcp query --mcp-id <mcpId> --format json
 ```
 
 CLI 对配置文件和输出执行递归敏感字段保护；服务端 detail 只应返回脱敏元数据和工具列表。
@@ -49,6 +49,7 @@ dws dingtalk-tag manage save-draft \
 
 ## 变更历史
 
+- 2026-09-01：Skill/MCP 资源命令统一下沉到 `dws dingtalk-tag capability skill|mcp`，与数字员工本体管理和执行查询分层。
 - 2026-08-31：顶级命令从 `dws deap` 重命名为 `dws dingtalk-tag`。
 - 2026-08-18：新增 Skill/MCP create/list/query、save-draft Skill/MCP 文件参数和 detail snapshot 参数；Skill create 接入 OpenAPI 流式 multipart 一步创建。原因：复用后台权威链路，同时避免在 MCP JSON、日志和用户输出中传递 ZIP 或临时签名 URL。
 - 2026-08-18：当时的命令路径随 DEAP 基线调整为 `dws deap skill|mcp` 与 `dws deap manage save-draft|detail`。原因：保持新增能力与当时的顶级 DEAP 产品命令树一致，避免恢复已撤销的 `dev deap-agent` 旧入口。
