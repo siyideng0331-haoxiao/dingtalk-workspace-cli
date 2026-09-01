@@ -88,6 +88,13 @@ coverage:
     multi_skill: dingtalk-misc
     multi_refs:
       - references/ding.md
+  - mono: dingtalk-tag
+    multi_skill: dingtalk-misc
+    multi_refs:
+      - references/dingtalk-tag/dingtalk-tag-index.md
+      - references/dingtalk-tag/manage.md
+      - references/dingtalk-tag/run.md
+      - references/dingtalk-tag/capability.md
   - mono: devdoc
     multi_skill: dingtalk-misc
     multi_refs:
@@ -162,6 +169,9 @@ paired_files:
 paired_trees:
   - mono: references/products/sheet
     multi: dingtalk-misc/references/sheet
+    mode: identical
+  - mono: references/products/dingtalk-tag
+    multi: dingtalk-misc/references/dingtalk-tag
     mode: identical
 
 # Scripts under skills/multi/*/scripts not referenced by any .md in that skill tree.

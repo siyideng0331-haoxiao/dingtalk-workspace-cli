@@ -1,6 +1,6 @@
-# DEAP 数字员工索引
+# DingTalk Tag 数字员工索引
 
-DEAP 平台数字员工的管理、执行查询和能力资源命令，命令前缀 `dws dingtalk-tag`。
+DingTalk Tag 数字员工的管理、执行查询和能力资源命令，命令前缀 `dws dingtalk-tag`。
 
 | 主题 | 命令前缀 | 安全属性 | 详见 |
 |---|---|---|---|
@@ -28,4 +28,4 @@ DEAP 平台数字员工的管理、执行查询和能力资源命令，命令前
 - identity（corpId / userId）由可信登录态注入，不对 CLI 暴露；不要尝试传 `--org-id` / `--user-id`。
 - 固定调用 MCP product/server `deap-dev`，端点跟随当前 MCP 环境自动选择；`DINGTALK_DEAP_DEV_MCP_URL` 仅用于本地调试覆盖。
 - 临时 DWS 授权码只在当前受控调用链内使用，不写入文档、日志、命令历史、缓存或代码库。
-- 所有写操作先 `--dry-run` 核对参数，经用户确认后再加 `--yes`。
+- 以 leaf Schema 的 `confirmation` 为准：当前 `manage save-draft/publish/delete` 与 `capability skill/mcp create` 需要先 `--dry-run`、获得确认后再加 `--yes`；`manage create` 当前为 `confirmation=not_required`，但它非幂等，失败时不要盲目重复创建。

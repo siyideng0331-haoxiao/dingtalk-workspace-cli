@@ -822,13 +822,15 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 			leaf: "save-draft", tool: "update_digital_employee_draft", confirmed: true,
 			flags: map[string]string{
 				"agent-uuid": "agent-1", "name": "新名称", "prompt": "你是值班助手",
-				"profile-json":  `{"employeeNo":"E001","positionName":"旧岗位","mainProgramType":"deap_cloud","responseMode":"mention_only,targeted_proactive"}`,
-				"position-name": "值班员", "response-mode": "targeted_proactive",
+				"profile-json":      `{"employeeNo":"E001","positionName":"旧岗位","mainProgramType":"deap_cloud","responseMode":"mention_only,targeted_proactive"}`,
+				"position-name":     "值班员",
+				"main-program-type": "local_agent",
+				"response-mode":     "targeted_proactive",
 			},
 			wantArgs: map[string]any{
 				"agentUuid": "agent-1", "name": "新名称", "prompt": "你是值班助手",
 				"digitalTagEmployeeProfile": map[string]any{
-					"employeeNo": "E001", "positionName": "值班员", "mainProgramType": "deap_cloud",
+					"employeeNo": "E001", "positionName": "值班员", "mainProgramType": "local_agent",
 					"responseMode": "targeted_proactive",
 				},
 			},

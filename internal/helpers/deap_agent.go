@@ -598,6 +598,7 @@ func deapAgentCallWithProfile(_ *cobra.Command, tool string, args map[string]any
 		{"digitalTagEmployeeProfile.employeeNo", "employeeNo"},
 		{"digitalTagEmployeeProfile.positionName", "positionName"},
 		{"digitalTagEmployeeProfile.directSupervisorUid", "directSupervisorUid"},
+		{"digitalTagEmployeeProfile.mainProgramType", "mainProgramType"},
 		{"digitalTagEmployeeProfile.responseMode", "responseMode"},
 	} {
 		if value, ok := args[field.argument]; ok {

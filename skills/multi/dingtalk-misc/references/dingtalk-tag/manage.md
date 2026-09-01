@@ -1,0 +1,145 @@
+# dingtalk-tag manage — 数字员工生命周期管理
+
+命令前缀 `dws dingtalk-tag manage`。全部针对数字员工配置本体，含高影响写与不可逆删除。
+
+## create — 创建草稿态数字员工
+
+```
+Usage:
+  dws dingtalk-tag manage create --name <名称> --description <职责描述> [flags]
+Flags:
+  --name             必填，同组织内唯一（≤30 Unicode 码点）
+  --description      必填，职责描述（≤300 码点）
+  --dept-id          归属部门 ID
+  --dept-name        归属部门名称
+  --icon             头像地址或 OSS objectPath
+  --employee-no      工号（≤64 码点）
+  --position-name    岗位名称（≤128 码点，发布前必填）
+  --supervisor-uid   直属上级钉钉 uid
+  --main-program-type 主程序类型：open_code | a2a | local_agent
+  --response-mode    mention_only | targeted_proactive | mention_only,targeted_proactive（发布前必填）
+  --profile-json     档案 JSON 对象；独立档案 flag 覆盖其同名字段
+Example:
+  dws dingtalk-tag manage create --name "周报助手" --description "汇总并推送团队周报" --main-program-type local_agent --dry-run --format json
+```
+
+只建草稿，不会上线。`--position-name` 与 `--response-mode` 是发布的前置条件，可在此处给或后续用 `save-draft` 补。
+
+`create` 当前为 `confirmation=not_required`：先用 `--dry-run` 核对，确认参数无误后移除 `--dry-run` 执行即可，不要额外猜测或重复创建。
+
+`--profile-json` 只接收 `employeeNo`、`positionName`、`directSupervisorUid`、`mainProgramType`、`responseMode` 五个字段。`mainProgramType` 当前已知支持 `open_code`、`a2a`、`local_agent`；CLI 只校验为非空字符串并透传，由服务端最终校验。`responseMode` 支持单值，也支持用英文逗号分隔的双值组合，CLI 会规范化为 `mention_only,targeted_proactive`。独立档案 flag 会覆盖 `profile-json` 的同名字段，包括独立的 `--main-program-type` 覆盖 `profile-json.mainProgramType`。
+
+## detail / list — 查询
+
+```
+Usage:
+  dws dingtalk-tag manage detail --agent-uuid <agentUuid> [--type draft|published]
+  dws dingtalk-tag manage list [--keyword <关键词>] [--page 1] [--page-size 20]
+Example:
+  dws dingtalk-tag manage detail --agent-uuid <agentUuid> --format json
+  dws dingtalk-tag manage list --keyword "周报" --format json
+```
+
+`--keyword` 按名称、岗位或工号模糊匹配。`--page` / `--page-size` 均不得小于 1。
+
+`detail` 的 `--type` 默认为 `draft`；需要核对已发布配置时显式传 `--type published`。所有数字员工 ID 统一使用 `agentUuid` / `--agent-uuid`，不要混用其它旧 ID 命名。
+
+## get-dws-auth-code — 获取临时 DWS 授权码
+
+```
+Usage:
+  dws dingtalk-tag manage get-dws-auth-code --agent-uuid <agentUuid> [--client-id <appId>]
+Flags:
+  --agent-uuid   必填，数字员工 ID
+  --client-id    可选，用于授权的应用 ID；不传时由服务端选择默认应用
+```
+
+固定调用 MCP 工具 `get_dws_auth_code`。服务端响应结构为：
+
+```json
+{
+  "data": {
+    "dwsClientId": "<clientId>",
+    "uid": 123456789,
+    "dwsAuthCode": "<sensitive-short-lived-auth-code>",
+    "staffId": "<staffId>",
+    "orgId": 123456789
+  },
+  "success": true,
+  "errorCode": null,
+  "errorMsg": null
+}
+```
+
+`data.dwsAuthCode` 是数字员工的临时 DWS 授权码，`dwsClientId` 是配套应用 ID，`uid`、`staffId`、`orgId` 是授权身份上下文。CLI 原样输出服务端 envelope，不解析、不缓存这些字段。`dwsAuthCode` 是高敏感短期凭证，只在当前受控调用链内使用；不得写入文档、日志、命令历史、缓存或代码库，调用时不要设置会输出原始 MCP 响应的 `DWS_DUMP_RAW`。
+
+## save-draft — 全量覆写草稿
+
+```
+Usage:
+  dws dingtalk-tag manage save-draft --agent-uuid <agentUuid> [flags]
+Flags:
+  --agent-uuid       必填
+  --prompt           人设 / System Prompt（≤5000 码点）
+  其余基础与档案字段同 create（name / description / icon / dept-* / employee-no /
+  position-name / supervisor-uid / main-program-type / response-mode / profile-json）
+  --skills-file      Skill 草稿配置 JSON 数组；不传保持原关联，显式 [] 才清空
+  --mcps-file        MCP 草稿配置 JSON 数组；不传保持原关联，显式 [] 才清空
+```
+
+**基础字段和档案字段是全量覆写，不是增量 patch：未传字段会被清空。Skill/MCP 关联是例外：对应文件不传时保持原配置，只有显式传入空数组文件才清空。**
+
+正确的增量修改姿势：
+
+1. 先 `dws dingtalk-tag manage detail` 查出当前完整配置
+2. 把**全部仍需保留的基础与档案字段**（包括详情返回的 `mainProgramType`）连同要改的字段一并带上；需要变更 Skill/MCP 时再提供对应文件
+3. 整体提交
+
+只传要改的那一个字段会把其它字段全部清空，且这个后果在 `--dry-run` 的参数预览里看不出来（预览只显示你传了什么，不显示"没传的会被清掉"）。
+
+特别注意 `--icon`：不要把 `detail` 返回的临时 `iconUrl` 直接回填持久化——那是带时效的临时地址。
+
+写操作，需用户确认：先 `--dry-run`，确认后加 `--yes`。
+
+关联文件格式示例：
+
+```json
+[{"skillId":"<skillId>","enabled":true,"attributes":{}}]
+```
+
+```json
+[{"mcpId":"<mcpId>","enabled":true,"config":{}}]
+```
+
+MCP 凭据只允许通过服务端支持的安全引用传入，不要把明文密钥写进关联文件或提交到代码库。
+
+## publish — 发布
+
+```
+Usage:
+  dws dingtalk-tag manage publish --agent-uuid <agentUuid> [--allow-join-group]
+```
+
+**不携带任何配置**，只发布当前已保存的草稿。名称、头像、描述、组织、岗位、响应模式、人设任一缺失都会返回 `INVALID_PARAM`——先 `detail` 确认齐全再发。
+
+`--allow-join-group` 是可选布尔，控制是否允许加入群聊。
+
+## delete — 删除
+
+```
+Usage:
+  dws dingtalk-tag manage delete --agent-uuid <agentUuid>
+```
+
+**不可逆，且可能有跨系统副作用。** 失败时不要盲目重试，先 `detail` 确认该数字员工是否仍存在——重试可能作用在已被部分删除的状态上。
+
+## 硬约束
+
+- `save-draft` 对基础与档案字段是全量覆写；不先 `detail` 就提交会静默清空未传字段。`skills-file` / `mcps-file` 不传则保持原关联，显式 `[]` 才清空。
+- `save-draft` / `publish` / `delete` 必须 `--dry-run` + 用户确认后再 `--yes`。
+- 不要传 `--org-id` / `--user-id`：identity 由可信登录态注入，不对 CLI 暴露。
+
+## 跨产品协作
+
+- 查上级或成员的 `uid` / `userId`：切换通讯录 / AI 搜问能力，或用 `dws aisearch person --query "姓名"`。
+- 发布后要看执行情况：见 [`run.md`](./run.md)。

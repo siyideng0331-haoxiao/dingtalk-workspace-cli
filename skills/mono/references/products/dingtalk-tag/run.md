@@ -39,8 +39,6 @@ Example:
 | `openTaskId` | `hADDJMrCIo5KbRvvj3/JDq/GHbTZUkV6P72//NGIQgw=` | 钉钉发送接口 | 发送请求返回时（消息还没落地） |
 | `openMessageId` | `msgeOkiAslxLfjM/fuYRe7C0A==` | 钉钉 IM 投递后 | 消息真正落地后 |
 
-区分靠前缀：`openMessageId` 以 `msg` 开头，`openTaskId` 无前缀。
-
 **只有 `openMessageId` 在来源映射里有记录**，拿 `openTaskId` 查必然得到 `NOT_FOUND`。
 
 ### 取法一：自己用 dws 发的消息（需要两跳）
@@ -89,7 +87,7 @@ dws chat message list --group <openConversationId> --time "<起始时间>" --lim
 
 `NOT_FOUND / source mapping not found` 的可能原因，按概率排：
 
-1. **传的是 openTaskId 而不是 openMessageId** —— 看有没有 `msg` 前缀
+1. **传的是 openTaskId 而不是 openMessageId** —— 回看产生该值的命令和 JSON 字段名，不要仅凭字符串形态判断
 2. **source-type 与 source-id 不匹配** —— 拿规则 ID 配了 `im_message`，或反之
 3. **该来源确实没有映射** —— 非本平台链路触发，或该来源不属当前组织
 4. **执行刚发生，映射还没写入** —— 稍等重试
@@ -99,10 +97,11 @@ dws chat message list --group <openConversationId> --time "<起始时间>" --lim
 ## 硬约束
 
 - 三个 flag 全必填，且不接 `--run-id`。
+- 同一个 `openMessageId` 可能触发多个数字员工；必须分别传各自的 `agentUuid` 查询，返回的 run / trace 也可能不同。
 - `trace` 返回完整对话内容，属敏感读：服务端已做两级授权，但不要把 trace 原文转发到非授权场域或粘贴到公共渠道。
 - 不要传 `--org-id` / `--user-id`：identity 由可信登录态注入，不对 CLI 暴露。
 
 ## 跨产品协作
 
-- 发消息、查会话消息、取 `openMessageId` / `openConversationId`：切换独立 skill [`dingtalk-chat`](../../../dingtalk-chat/SKILL.md)。
+- 发消息、查会话消息、取 `openMessageId` / `openConversationId`：切换群聊与机器人能力，使用 `dws chat ...`。
 - 数字员工本身的配置与发布：见 [`manage.md`](./manage.md)。
