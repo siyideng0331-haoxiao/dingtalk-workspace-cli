@@ -22,10 +22,11 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 			map[string]string{
 				"name": "name", "description": "description", "dept-id": "deptId", "dept-name": "deptName",
 				"icon": "icon", "profile-json": "digitalTagEmployeeProfile",
-				"employee-no":    "digitalTagEmployeeProfile.employeeNo",
-				"position-name":  "digitalTagEmployeeProfile.positionName",
-				"supervisor-uid": "digitalTagEmployeeProfile.directSupervisorUid",
-				"response-mode":  "digitalTagEmployeeProfile.responseMode",
+				"employee-no":       "digitalTagEmployeeProfile.employeeNo",
+				"position-name":     "digitalTagEmployeeProfile.positionName",
+				"supervisor-uid":    "digitalTagEmployeeProfile.directSupervisorUid",
+				"main-program-type": "digitalTagEmployeeProfile.mainProgramType",
+				"response-mode":     "digitalTagEmployeeProfile.responseMode",
 			},
 		},
 		"dingtalk-tag.get_digital_employee_detail": {
@@ -45,11 +46,12 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 			map[string]string{
 				"agent-uuid": "agentUuid", "name": "name", "description": "description", "dept-id": "deptId",
 				"dept-name": "deptName", "icon": "icon", "prompt": "prompt", "profile-json": "digitalTagEmployeeProfile",
-				"employee-no":    "digitalTagEmployeeProfile.employeeNo",
-				"position-name":  "digitalTagEmployeeProfile.positionName",
-				"supervisor-uid": "digitalTagEmployeeProfile.directSupervisorUid",
-				"response-mode":  "digitalTagEmployeeProfile.responseMode",
-				"skills-file":    "skills", "mcps-file": "mcps",
+				"employee-no":       "digitalTagEmployeeProfile.employeeNo",
+				"position-name":     "digitalTagEmployeeProfile.positionName",
+				"supervisor-uid":    "digitalTagEmployeeProfile.directSupervisorUid",
+				"main-program-type": "digitalTagEmployeeProfile.mainProgramType",
+				"response-mode":     "digitalTagEmployeeProfile.responseMode",
+				"skills-file":       "skills", "mcps-file": "mcps",
 			},
 		},
 		"dingtalk-tag.publish_digital_employee": {

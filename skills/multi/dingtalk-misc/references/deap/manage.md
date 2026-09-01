@@ -16,6 +16,7 @@ Flags:
   --employee-no      工号（≤64 码点）
   --position-name    岗位名称（≤128 码点，发布前必填）
   --supervisor-uid   直属上级钉钉 uid
+  --main-program-type 主程序类型（服务端支持的非空字符串）
   --response-mode    mention_only | targeted_proactive | mention_only,targeted_proactive（发布前必填）
   --profile-json     档案 JSON 对象；独立档案 flag 覆盖其同名字段
 Example:
@@ -24,7 +25,7 @@ Example:
 
 只建草稿，不会上线。`--position-name` 与 `--response-mode` 是发布的前置条件，可在此处给或后续用 `save-draft` 补。
 
-`--profile-json` 只接收 `employeeNo`、`positionName`、`directSupervisorUid`、`responseMode` 四个字段。`responseMode` 支持单值，也支持用英文逗号分隔的双值组合；CLI 会规范化为 `mention_only,targeted_proactive`。
+`--profile-json` 只接收 `employeeNo`、`positionName`、`directSupervisorUid`、`mainProgramType`、`responseMode` 五个字段。`mainProgramType` 由服务端判断是否支持，CLI 仅校验并透传非空字符串；`responseMode` 支持单值，也支持用英文逗号分隔的双值组合，CLI 会规范化为 `mention_only,targeted_proactive`。独立的 `--main-program-type` 会覆盖 `profile-json.mainProgramType`。
 
 ## detail / list — 查询
 
@@ -77,7 +78,7 @@ Flags:
   --agent-uuid       必填
   --prompt           人设 / System Prompt（≤5000 码点）
   其余基础与档案字段同 create（name / description / icon / dept-* / employee-no /
-  position-name / supervisor-uid / response-mode / profile-json）
+  position-name / supervisor-uid / main-program-type / response-mode / profile-json）
 ```
 
 **这是全量覆写，不是增量 patch：未传字段会被清空。**
@@ -85,7 +86,7 @@ Flags:
 正确的增量修改姿势：
 
 1. 先 `dws dingtalk-tag manage detail` 查出当前完整配置
-2. 把**全部仍需保留的字段**连同要改的字段一并带上
+2. 把**全部仍需保留的字段**（包括详情返回的 `mainProgramType`）连同要改的字段一并带上
 3. 整体提交
 
 只传要改的那一个字段会把其它字段全部清空，且这个后果在 `--dry-run` 的参数预览里看不出来（预览只显示你传了什么，不显示"没传的会被清掉"）。

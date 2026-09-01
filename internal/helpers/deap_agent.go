@@ -196,7 +196,7 @@ func newDeapAgentCreateCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use:       "create",
 		Short:     "创建草稿态数字员工",
-		Long:      "创建草稿态 DEAP 数字员工并返回生成的 agentUuid。创建不会自动发布；创建成功后应补齐头像、岗位、响应模式和人设提示词，再调用发布工具。name 和 description 必填，identity 由 MCP 可信注入；员工档案可用独立 flag 或 profile-json 提供，同时提供时独立 flag 覆盖 JSON 同名字段。",
+		Long:      "创建草稿态 DEAP 数字员工并返回生成的 agentUuid。创建不会自动发布；创建成功后应补齐头像、岗位、响应模式和人设提示词，再调用发布工具。name 和 description 必填，identity 由 MCP 可信注入；员工档案可用独立 flag 或 profile-json 提供，同时提供时独立 flag 覆盖 JSON 同名字段。mainProgramType 的支持值由服务端决定，CLI 仅透传非空字符串。",
 		Tool:      deapAgentCreateTool,
 		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
@@ -206,10 +206,11 @@ func newDeapAgentCreateCommand() *cobra.Command {
 			{Name: "dept-id", Usage: "归属部门 ID", Bind: "deptId", Trim: true, OmitEmpty: true},
 			{Name: "dept-name", Usage: "归属部门名称", Bind: "deptName", Trim: true, OmitEmpty: true},
 			{Name: "icon", Usage: "头像地址或 OSS objectPath", Bind: "icon", Trim: true, OmitEmpty: true},
-			{Name: "profile-json", Usage: "digitalTagEmployeeProfile JSON 对象；responseMode 支持单值或英文逗号分隔的双值组合；独立档案 flag 会覆盖同名字段", Bind: "digitalTagEmployeeProfile", Trim: true, OmitEmpty: true, Format: "json", Transform: deapAgentProfileJSON, SchemaDescription: "数字员工档案 JSON；仅接收 employeeNo、positionName、directSupervisorUid、responseMode；responseMode 支持 mention_only、targeted_proactive 或二者组合；独立档案参数优先"},
+			{Name: "profile-json", Usage: "digitalTagEmployeeProfile JSON 对象；responseMode 支持单值或英文逗号分隔的双值组合；独立档案 flag 会覆盖同名字段", Bind: "digitalTagEmployeeProfile", Trim: true, OmitEmpty: true, Format: "json", Transform: deapAgentProfileJSON, SchemaDescription: "数字员工档案 JSON；仅接收 employeeNo、positionName、directSupervisorUid、mainProgramType、responseMode；mainProgramType 为服务端支持的非空字符串；responseMode 支持 mention_only、targeted_proactive 或二者组合；独立档案参数优先"},
 			{Name: "employee-no", Usage: "数字员工工号（最多 64 个 Unicode 码点）", Bind: "digitalTagEmployeeProfile.employeeNo", Trim: true, OmitEmpty: true},
 			{Name: "position-name", Usage: "岗位名称（最多 128 个 Unicode 码点，发布前必填）", Bind: "digitalTagEmployeeProfile.positionName", Trim: true, OmitEmpty: true},
 			{Name: "supervisor-uid", Usage: "直属上级钉钉 uid", Bind: "digitalTagEmployeeProfile.directSupervisorUid", Trim: true, OmitEmpty: true},
+			{Name: "main-program-type", Usage: "主程序类型；支持值由服务端决定，CLI 透传非空字符串", Bind: "digitalTagEmployeeProfile.mainProgramType", Trim: true, OmitEmpty: true},
 			{Name: "response-mode", Usage: "响应模式：mention_only、targeted_proactive，或英文逗号分隔的组合 mention_only,targeted_proactive（发布前必填）", Bind: "digitalTagEmployeeProfile.responseMode", Trim: true, OmitEmpty: true, Transform: deapAgentResponseMode},
 		},
 		Safety: contract.SafetySpec{
@@ -250,6 +251,7 @@ func newDeapAgentCreateCommand() *cobra.Command {
 				{Name: "employee-no", Property: "digitalTagEmployeeProfile.employeeNo"},
 				{Name: "position-name", Property: "digitalTagEmployeeProfile.positionName"},
 				{Name: "supervisor-uid", Property: "digitalTagEmployeeProfile.directSupervisorUid"},
+				{Name: "main-program-type", Property: "digitalTagEmployeeProfile.mainProgramType", Description: "主程序类型；支持值由服务端决定，CLI 透传非空字符串"},
 				{Name: "response-mode", Property: "digitalTagEmployeeProfile.responseMode", Enum: deapAgentResponseModeValues, Description: "响应模式；支持 mention_only、targeted_proactive，或英文逗号分隔的双值组合 mention_only,targeted_proactive"},
 			},
 		},
@@ -350,7 +352,7 @@ func newDeapAgentSaveDraftCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use:       "save-draft",
 		Short:     "全量覆写数字员工草稿",
-		Long:      "全量覆写指定数字员工的基础草稿但不发布。既有基础字段未传会被清空；新增 Skill/MCP 文件参数不传时保持原配置，只有显式提供空数组文件才清空。档案字段可用独立 flag 或 profile-json 提供，同时提供时独立 flag 覆盖 JSON 同名字段。增量修改前必须先查询 detail、保留全部仍需配置的字段，再整体提交。请先 --dry-run 检查参数，再经用户确认加 --yes。",
+		Long:      "全量覆写指定数字员工的基础草稿但不发布。既有基础字段未传会被清空；新增 Skill/MCP 文件参数不传时保持原配置，只有显式提供空数组文件才清空。档案字段可用独立 flag 或 profile-json 提供，同时提供时独立 flag 覆盖 JSON 同名字段。mainProgramType 的支持值由服务端决定，CLI 仅透传非空字符串。增量修改前必须先查询 detail、保留全部仍需配置的字段（包括 mainProgramType），再整体提交。请先 --dry-run 检查参数，再经用户确认加 --yes。",
 		Tool:      deapAgentSaveDraftTool,
 		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
@@ -366,6 +368,7 @@ func newDeapAgentSaveDraftCommand() *cobra.Command {
 			{Name: "employee-no", Usage: "数字员工工号（最多 64 个 Unicode 码点）", Bind: "digitalTagEmployeeProfile.employeeNo", Trim: true, OmitEmpty: true},
 			{Name: "position-name", Usage: "岗位名称（最多 128 个 Unicode 码点，发布前必填）", Bind: "digitalTagEmployeeProfile.positionName", Trim: true, OmitEmpty: true},
 			{Name: "supervisor-uid", Usage: "直属上级钉钉 uid", Bind: "digitalTagEmployeeProfile.directSupervisorUid", Trim: true, OmitEmpty: true},
+			{Name: "main-program-type", Usage: "主程序类型；支持值由服务端决定，CLI 透传非空字符串", Bind: "digitalTagEmployeeProfile.mainProgramType", Trim: true, OmitEmpty: true},
 			{Name: "response-mode", Usage: "响应模式：mention_only、targeted_proactive，或英文逗号分隔的组合 mention_only,targeted_proactive（发布前必填）", Bind: "digitalTagEmployeeProfile.responseMode", Trim: true, OmitEmpty: true, Transform: deapAgentResponseMode},
 			{Name: "skills-file", Usage: "Skill 草稿配置 JSON 数组文件，元素为 skillId/enabled/attributes；不传保持原配置，显式空数组才清空", Bind: "skillsFile", Trim: true, OmitEmpty: true},
 			{Name: "mcps-file", Usage: "MCP 草稿配置 JSON 数组文件，元素为 mcpId/enabled/config；不传保持原配置，显式空数组才清空，凭据只允许使用安全引用", Bind: "mcpsFile", Trim: true, OmitEmpty: true},
@@ -411,6 +414,7 @@ func newDeapAgentSaveDraftCommand() *cobra.Command {
 				{Name: "employee-no", Property: "digitalTagEmployeeProfile.employeeNo"},
 				{Name: "position-name", Property: "digitalTagEmployeeProfile.positionName"},
 				{Name: "supervisor-uid", Property: "digitalTagEmployeeProfile.directSupervisorUid"},
+				{Name: "main-program-type", Property: "digitalTagEmployeeProfile.mainProgramType", Description: "主程序类型；支持值由服务端决定，CLI 透传非空字符串"},
 				{Name: "response-mode", Property: "digitalTagEmployeeProfile.responseMode", Enum: deapAgentResponseModeValues, Description: "响应模式；支持 mention_only、targeted_proactive，或英文逗号分隔的双值组合 mention_only,targeted_proactive"},
 				{Name: "skills-file", Property: "skills", InterfaceType: "array"},
 				{Name: "mcps-file", Property: "mcps", InterfaceType: "array"},
@@ -700,7 +704,7 @@ func deapAgentProfileJSON(raw string) (any, error) {
 	profile := value.(map[string]any)
 	allowed := map[string]bool{
 		"employeeNo": true, "positionName": true,
-		"directSupervisorUid": true, "responseMode": true,
+		"directSupervisorUid": true, "mainProgramType": true, "responseMode": true,
 	}
 	for key := range profile {
 		if !allowed[key] {
@@ -712,6 +716,17 @@ func deapAgentProfileJSON(raw string) (any, error) {
 	}
 	if position, ok := profile["positionName"].(string); ok && utf8.RuneCountInString(position) > 128 {
 		return nil, apperrors.NewValidation("profile.positionName 最多允许 128 个 Unicode 码点")
+	}
+	if rawProgramType, exists := profile["mainProgramType"]; exists {
+		programType, ok := rawProgramType.(string)
+		if !ok {
+			return nil, apperrors.NewValidation("profile.mainProgramType 必须是字符串")
+		}
+		programType = strings.TrimSpace(programType)
+		if programType == "" {
+			return nil, apperrors.NewValidation("profile.mainProgramType 不能为空")
+		}
+		profile["mainProgramType"] = programType
 	}
 	if rawMode, exists := profile["responseMode"]; exists {
 		mode, ok := rawMode.(string)
