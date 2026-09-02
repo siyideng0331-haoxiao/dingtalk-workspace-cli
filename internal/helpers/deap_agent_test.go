@@ -806,8 +806,12 @@ func TestDevDeapAgentAvailableLeavesRouteExactMCPTools(t *testing.T) {
 		},
 		{
 			leaf: "list", tool: "list_digital_employees",
-			flags:    map[string]string{"keyword": "值班", "page": "2", "page-size": "101"},
-			wantArgs: map[string]any{"keyword": "值班", "page": 2, "pageSize": 101},
+			flags: map[string]string{
+				"keyword": "值班", "main-program-type": "local_agent", "page": "2", "page-size": "101",
+			},
+			wantArgs: map[string]any{
+				"keyword": "值班", "mainProgramType": "local_agent", "page": 2, "pageSize": 101,
+			},
 		},
 		{
 			leaf: "get-dws-auth-code", tool: "get_dws_auth_code",
@@ -963,6 +967,7 @@ func TestDevDeapAgentConstraintsFailBeforeMCP(t *testing.T) {
 		{leaf: "trace", flags: map[string]string{"agent-uuid": "agent-1", "source-id": "src-1"}, wantErr: "source-type"},
 		{leaf: "list", flags: map[string]string{"page": "0"}, wantErr: "--page 不能小于 1"},
 		{leaf: "list", flags: map[string]string{"page-size": "0"}, wantErr: "--page-size 不能小于 1"},
+		{leaf: "list", flags: map[string]string{"main-program-type": "a2a"}, wantErr: "--main-program-type"},
 		{leaf: "detail", flags: map[string]string{"agent-uuid": "agent-1", "type": "merged"}, wantErr: "--type"},
 		{leaf: "get-dws-auth-code", flags: map[string]string{}, wantErr: "agent-uuid"},
 		{leaf: "create", flags: map[string]string{
@@ -1117,11 +1122,14 @@ func TestDevDeapAgentHelpMatchesCurrentMCPInputs(t *testing.T) {
 	if flag := publish.Flags().Lookup("allow-join-group"); flag == nil || flag.DefValue != "false" {
 		t.Fatalf("allow-join-group default = %v, current MCP declares an optional boolean without a default", flag)
 	}
-	for _, leafName := range []string{"create", "save-draft"} {
+	for _, leafName := range []string{"create", "list", "save-draft"} {
 		command := deapFindLeaf(t, root, leafName)
 		if flag := command.Flags().Lookup("main-program-type"); flag == nil {
 			t.Fatalf("%s is missing --main-program-type", leafName)
 		}
+	}
+	for _, leafName := range []string{"create", "save-draft"} {
+		command := deapFindLeaf(t, root, leafName)
 		flag := command.Flags().Lookup("response-mode")
 		if flag == nil || !strings.Contains(flag.Usage, "mention_only,targeted_proactive") {
 			t.Fatalf("%s response-mode help does not describe the combined value: %v", leafName, flag)

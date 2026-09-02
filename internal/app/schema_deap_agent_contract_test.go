@@ -35,7 +35,10 @@ func TestDeapAgentLeavesReachFinalSchema(t *testing.T) {
 		},
 		"dingtalk-tag.list_digital_employees": {
 			"dingtalk-tag manage list", "list_digital_employees", "read", "low", "not_required",
-			map[string]string{"keyword": "keyword", "page": "page", "page-size": "pageSize"},
+			map[string]string{
+				"keyword": "keyword", "main-program-type": "mainProgramType",
+				"page": "page", "page-size": "pageSize",
+			},
 		},
 		"dingtalk-tag.get_dws_auth_code": {
 			"dingtalk-tag manage get-dws-auth-code", "get_dws_auth_code", "read", "high", "not_required",

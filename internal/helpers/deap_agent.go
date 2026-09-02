@@ -314,12 +314,13 @@ func newDeapAgentListCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use:       "list",
 		Short:     "分页查询数字员工",
-		Long:      "分页查询当前身份有权查看的数字员工。管理员可看本组织全部，非管理员只返回本人参与的数字员工；支持按名称、岗位或工号模糊搜索。page 和 page-size 必须大于等于 1。",
+		Long:      "分页查询当前身份有权查看的数字员工。管理员可看本组织全部，非管理员只返回本人参与的数字员工；支持按名称、岗位或工号模糊搜索，也可按 mainProgramType 筛选。mainProgramType 仅支持 open_code、local_agent；不传表示不过滤。page 和 page-size 必须大于等于 1。",
 		Tool:      deapAgentListTool,
 		Server:    deapAgentServerID,
 		PostMount: deapAgentNoArgs,
 		Flags: []LeafFlag{
 			{Name: "keyword", Usage: "按名称、岗位或工号模糊匹配", Bind: "keyword", Trim: true, OmitEmpty: true},
+			{Name: "main-program-type", Usage: "按主程序类型筛选：open_code 或 local_agent；不传表示不过滤", Bind: "mainProgramType", Trim: true, OmitEmpty: true, Enum: deapAgentMainProgramTypeValues},
 			{Name: "page", Usage: "页码", Bind: "page", Kind: LeafInt, Default: "1", ArgDefault: "1"},
 			{Name: "page-size", Usage: "每页数量", Bind: "pageSize", Kind: LeafInt, Default: "20", ArgDefault: "20"},
 		},
@@ -345,14 +346,14 @@ func newDeapAgentListCommand() *cobra.Command {
 				CLIPath:       "dingtalk-tag manage list", PrimaryCLIPath: "dingtalk-tag manage list",
 				Group: "manage",
 			},
-			Description: "分页查询当前身份有权查看的 DEAP 数字员工。管理员可查看本组织全部，非管理员只返回自己参与的数字员工；支持按名称、岗位或工号模糊搜索。",
+			Description: "分页查询当前身份有权查看的 DEAP 数字员工。管理员可查看本组织全部，非管理员只返回自己参与的数字员工；支持按名称、岗位或工号模糊搜索，也可按 open_code、local_agent 主程序类型筛选。",
 			DryRun:      deapAgentDryRun,
 			Interface:   deapAgentMCPInterface(deapAgentListTool),
 			Selection: contract.SelectionSpec{
 				AgentSummary: "分页查找当前用户可管理或参与的数字员工",
 				UseWhen:      []string{"需要按名称、岗位或工号查找数字员工，或尚不知道 agentUuid 时"},
 				AvoidWhen:    []string{"已知 agentUuid 需要完整配置时使用 detail", "需要查询运行记录时使用 run-status"},
-				Examples:     []string{`dws dingtalk-tag manage list --keyword "值班" --page 1 --page-size 20 --format json`},
+				Examples:     []string{`dws dingtalk-tag manage list --keyword "值班" --main-program-type local_agent --page 1 --page-size 20 --format json`},
 			},
 		},
 	})

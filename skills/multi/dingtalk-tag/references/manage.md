@@ -34,13 +34,13 @@ Example:
 ```
 Usage:
   dws dingtalk-tag manage detail --agent-uuid <agentUuid> [--type draft|published]
-  dws dingtalk-tag manage list [--keyword <关键词>] [--page 1] [--page-size 20]
+  dws dingtalk-tag manage list [--keyword <关键词>] [--main-program-type open_code|local_agent] [--page 1] [--page-size 20]
 Example:
   dws dingtalk-tag manage detail --agent-uuid <agentUuid> --format json
-  dws dingtalk-tag manage list --keyword "周报" --format json
+  dws dingtalk-tag manage list --keyword "周报" --main-program-type local_agent --format json
 ```
 
-`--keyword` 按名称、岗位或工号模糊匹配。`--page` / `--page-size` 均不得小于 1。
+`--keyword` 按名称、岗位或工号模糊匹配。`--main-program-type` 仅支持 `open_code`、`local_agent`，不传表示不过滤。`--page` / `--page-size` 均不得小于 1。
 
 `detail` 的 `--type` 默认为 `draft`；需要核对已发布配置时显式传 `--type published`。所有数字员工 ID 统一使用 `agentUuid` / `--agent-uuid`，不要混用其它旧 ID 命名。
 
