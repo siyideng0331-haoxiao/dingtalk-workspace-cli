@@ -145,6 +145,7 @@ func runDeapConnect(cmd *cobra.Command, _ []string) error {
 	}
 	token, err := deapConnectManagedExchange(cmd.Context(), configDir, auth.ManagedExchangeRequest{
 		ClientID: dwsClientID, AuthCode: dwsAuthCode, UID: uid, ExpectedOrgID: orgID, PreserveProfile: supervisorSelector,
+		ResolveIdentity: resolveDigitalEmployeeManagedIdentity,
 	})
 	// 尽早清空本地变量，后续所有错误和输出都不再接触授权码。
 	dwsAuthCode = ""

@@ -18,7 +18,21 @@ type ManagedExchangeRequest struct {
 	UID             string
 	ExpectedOrgID   string
 	PreserveProfile string
+	ResolveIdentity ManagedIdentityResolver
 }
+
+// ManagedIdentity 是使用刚换取的 Access Token 查询到的当前用户身份。
+// Managed Exchange 只信任该在线结果，不使用本地历史 Profile 补全身份。
+type ManagedIdentity struct {
+	CorpID   string
+	CorpName string
+	UserID   string
+	UserName string
+}
+
+// ManagedIdentityResolver 使用尚未落盘的 Access Token 查询当前用户身份。
+// expectedOrgID 用于调用方在多组织响应中做精确选择。
+type ManagedIdentityResolver func(ctx context.Context, accessToken, expectedOrgID string) (ManagedIdentity, error)
 
 var (
 	managedExchangePreparePersistence = prepareLoginPersistence
@@ -34,8 +48,8 @@ func ExchangeManagedAuthCode(ctx context.Context, configDir string, request Mana
 	uid := strings.TrimSpace(request.UID)
 	expectedOrgID := strings.TrimSpace(request.ExpectedOrgID)
 	preserveProfile := strings.TrimSpace(request.PreserveProfile)
-	if clientID == "" || authCode == "" || uid == "" || expectedOrgID == "" || preserveProfile == "" {
-		return nil, fmt.Errorf("managed exchange requires clientId, authCode, uid, expected orgId and supervisor profile")
+	if clientID == "" || authCode == "" || uid == "" || expectedOrgID == "" || preserveProfile == "" || request.ResolveIdentity == nil {
+		return nil, fmt.Errorf("managed exchange requires clientId, authCode, uid, expected orgId, supervisor profile and identity resolver")
 	}
 	if err := managedExchangePreparePersistence(configDir); err != nil {
 		return nil, fmt.Errorf("local login state cannot be safely updated: %w", err)
@@ -55,13 +69,29 @@ func ExchangeManagedAuthCode(ctx context.Context, configDir string, request Mana
 	if data == nil {
 		return nil, fmt.Errorf("managed token exchange returned no token data")
 	}
-	returnedUID := strings.TrimSpace(data.UserID)
-	if returnedUID == "" || returnedUID != uid {
-		return nil, fmt.Errorf("managed token identity does not match the authorized digital employee")
-	}
 	returnedOrgID := strings.TrimSpace(data.CorpID)
 	if returnedOrgID == "" || returnedOrgID != expectedOrgID {
 		return nil, fmt.Errorf("managed token organization does not match the authorization response")
+	}
+	identity, err := request.ResolveIdentity(ctx, data.AccessToken, expectedOrgID)
+	if err != nil {
+		return nil, fmt.Errorf("managed token identity lookup failed")
+	}
+	resolvedUID := strings.TrimSpace(identity.UserID)
+	if resolvedUID == "" || resolvedUID != uid {
+		return nil, fmt.Errorf("managed token identity does not match the authorized digital employee")
+	}
+	resolvedOrgID := strings.TrimSpace(identity.CorpID)
+	if resolvedOrgID == "" || resolvedOrgID != expectedOrgID || resolvedOrgID != returnedOrgID {
+		return nil, fmt.Errorf("managed identity organization does not match the authorization response")
+	}
+	if tokenUID := strings.TrimSpace(data.UserID); tokenUID != "" && tokenUID != resolvedUID {
+		return nil, fmt.Errorf("managed token identity does not match the resolved current user")
+	}
+	data.UserID = resolvedUID
+	data.UserName = strings.TrimSpace(identity.UserName)
+	if corpName := strings.TrimSpace(identity.CorpName); corpName != "" {
+		data.CorpName = corpName
 	}
 	data.ClientID = clientID
 	data.Source = "mcp"
