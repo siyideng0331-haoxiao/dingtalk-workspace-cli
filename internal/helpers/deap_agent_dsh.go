@@ -15,7 +15,9 @@ import (
 )
 
 func resolveExactOperatorOpenDingTalkID(ctx context.Context, userID string) (string, error) {
-	response, err := callPrivateMCPJSON(ctx, "contact", "get_user_info_by_user_ids", map[string]any{"user_id_list": []string{userID}})
+	// get_user_info_by_user_ids 的真实响应只包含组织资料，不提供 openDingTalkId。
+	// 使用精确 userId 作为通讯录搜索词，并在本地再次按 userId 过滤；不按姓名猜测。
+	response, err := callPrivateMCPJSON(ctx, "contact", "search_contact_by_key_word", map[string]any{"keyword": userID})
 	if err != nil {
 		return "", fmt.Errorf("resolve supervisor operator identity: %w", err)
 	}

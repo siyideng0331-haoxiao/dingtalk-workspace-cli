@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -325,6 +326,14 @@ func TestDingTalkTagConnectRejectsInvalidPrerequisitesBeforeExchange(t *testing.
 			},
 			want: "尚未发布",
 		},
+		{
+			name: "published profile missing corp id",
+			responses: []string{
+				`{"success":true,"data":{"digitalTagEmployeeProfile":{"mainProgramType":"local_agent"}}}`,
+				`{"success":true,"data":{"status":"online"}}`,
+			},
+			want: "缺少 profile.corpId",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -390,7 +399,7 @@ func TestDingTalkTagConnectFailureBoundaries(t *testing.T) {
 			if request.ResolveIdentity == nil {
 				return nil, errors.New("managed identity resolver is missing")
 			}
-			_, err := request.ResolveIdentity(ctx, "managed-access-secret", request.ExpectedOrgID)
+			_, err := request.ResolveIdentity(ctx, "managed-access-secret", request.ExpectedCorpID)
 			return nil, err
 		})
 		leaf := newConnectTestCommand(t, false)
@@ -410,6 +419,17 @@ func TestDingTalkTagConnectFailureBoundaries(t *testing.T) {
 		leaf := newConnectTestCommand(t, false)
 		if err := leaf.RunE(leaf, nil); err == nil || !strings.Contains(err.Error(), "唯一 operatorOpenDingTalkId") {
 			t.Fatalf("operator resolution error = %v", err)
+		}
+	})
+
+	t.Run("operator search result must match exact supervisor user id", func(t *testing.T) {
+		caller := newSuccessfulConnectCaller(successfulAuthResponse(),
+			`{"result":[{"userId":"different-user","openDingTalkId":"operator-open"}]}`)
+		InitDepsForTest(t, caller)
+		setupSuccessfulConnectSeams(t)
+		leaf := newConnectTestCommand(t, false)
+		if err := leaf.RunE(leaf, nil); err == nil || !strings.Contains(err.Error(), "唯一 operatorOpenDingTalkId") {
+			t.Fatalf("operator exact-match error = %v", err)
 		}
 	})
 
@@ -437,19 +457,58 @@ func TestDingTalkTagConnectFailureBoundaries(t *testing.T) {
 	})
 }
 
+func TestDingTalkTagConnectRejectsAuthorizationIdentityMismatchBeforeExchange(t *testing.T) {
+	tests := []struct {
+		name          string
+		authorization string
+		want          string
+	}{
+		{
+			name:          "robot uid mismatch",
+			authorization: `{"success":true,"data":{"dwsClientId":"returned-client","uid":"other-robot","staffId":"employee-user","dwsAuthCode":"one-time-secret","orgId":"439446171"}}`,
+			want:          "uid 与发布详情 profile.robotUid 不一致",
+		},
+		{
+			name:          "staff id mismatch",
+			authorization: `{"success":true,"data":{"dwsClientId":"returned-client","uid":"robot-uid","staffId":"other-user","dwsAuthCode":"one-time-secret","orgId":"439446171"}}`,
+			want:          "staffId 与发布详情 profile.staffId 不一致",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			caller := newSuccessfulConnectCaller(tc.authorization,
+				`{"result":[{"userId":"supervisor-user","openDingTalkId":"operator-open"}]}`)
+			InitDepsForTest(t, caller)
+			setupConnectSupervisorSeams(t)
+			exchanged := false
+			testseam.Swap(t, &deapConnectManagedExchange, func(context.Context, string, auth.ManagedExchangeRequest) (*auth.TokenData, error) {
+				exchanged = true
+				return nil, errors.New("unexpected exchange")
+			})
+			leaf := newConnectTestCommand(t, false)
+			if err := leaf.RunE(leaf, nil); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("connect error = %v, want %q", err, tc.want)
+			}
+			if exchanged {
+				t.Fatal("authorization identity mismatch reached managed exchange")
+			}
+		})
+	}
+}
+
 func newSuccessfulConnectCaller(authResponse, contactResponse string) *digitalEmployeeProtocolCaller {
 	return &digitalEmployeeProtocolCaller{responses: map[string][]string{
 		"deap-dev/get_digital_employee_detail": {
 			`{"success":true,"data":{"name":"本地员工","digitalTagEmployeeProfile":{"mainProgramType":"local_agent"}}}`,
-			`{"success":true,"data":{"status":"online"}}`,
+			`{"success":true,"data":{"status":"online","profile":{"corpId":"employee-corp","robotUid":"robot-uid","staffId":"employee-user"}}}`,
 		},
-		"deap-dev/get_dws_auth_code":        {authResponse},
-		"contact/get_user_info_by_user_ids": {contactResponse},
+		"deap-dev/get_dws_auth_code":         {authResponse},
+		"contact/search_contact_by_key_word": {contactResponse},
 	}}
 }
 
 func successfulAuthResponse() string {
-	return `{"success":true,"data":{"dwsClientId":"returned-client","uid":"employee-user","dwsAuthCode":"one-time-secret","orgId":"employee-corp"}}`
+	return `{"success":true,"data":{"dwsClientId":"returned-client","uid":"robot-uid","staffId":"employee-user","dwsAuthCode":"one-time-secret","orgId":"439446171"}}`
 }
 
 func setupConnectSupervisorSeams(t *testing.T) {
@@ -469,7 +528,7 @@ func setupSuccessfulConnectSeams(t *testing.T) {
 	t.Helper()
 	setupConnectSupervisorSeams(t)
 	testseam.Swap(t, &deapConnectManagedExchange, func(_ context.Context, _ string, request auth.ManagedExchangeRequest) (*auth.TokenData, error) {
-		return &auth.TokenData{CorpID: request.ExpectedOrgID, UserID: request.UID, ClientID: request.ClientID, Source: "mcp"}, nil
+		return &auth.TokenData{CorpID: request.ExpectedCorpID, UserID: request.ExpectedUserID, ClientID: request.ClientID, Source: "mcp"}, nil
 	})
 	testseam.Swap(t, &deapConnectSaveBinding, func(string, digitalEmployeeBinding) error { return nil })
 	testseam.Swap(t, &deapConnectRegisterDSH, func(context.Context, map[string]any) (string, error) { return "created", nil })
@@ -505,11 +564,11 @@ func TestDingTalkTagConnectKeepsSupervisorCurrentAndUsesReturnedClientID(t *test
 	caller := &digitalEmployeeProtocolCaller{responses: map[string][]string{
 		"deap-dev/get_digital_employee_detail": {
 			`{"success":true,"data":{"name":"本地员工","digitalTagEmployeeProfile":{"mainProgramType":"local_agent"}}}`,
-			`{"success":true,"data":{"status":"online"}}`,
+			`{"success":true,"data":{"status":"online","profile":{"corpId":"employee-corp","robotUid":"robot-uid","staffId":"employee-user"}}}`,
 		},
-		"deap-dev/get_dws_auth_code":        {`{"success":true,"data":{"dwsClientId":"returned-client","uid":"employee-user","dwsAuthCode":"one-time-secret","orgId":"employee-corp"}}`},
-		"contact/get_current_user_profile":  {`{"result":[{"orgEmployeeModel":{"corpId":"employee-corp","orgName":"员工企业","userId":"employee-user","orgUserName":"本地员工"}}]}`},
-		"contact/get_user_info_by_user_ids": {`{"result":[{"userId":"supervisor-user","openDingTalkId":"operator-open"}]}`},
+		"deap-dev/get_dws_auth_code":         {`{"success":true,"data":{"dwsClientId":"returned-client","uid":"robot-uid","staffId":"employee-user","dwsAuthCode":"one-time-secret","orgId":"439446171"}}`},
+		"contact/get_current_user_profile":   {`{"result":[{"orgEmployeeModel":{"corpId":"employee-corp","orgName":"员工企业","userId":"employee-user","orgUserName":"本地员工"}}]}`},
+		"contact/search_contact_by_key_word": {`{"result":[{"userId":"supervisor-user","openDingTalkId":"operator-open"}]}`},
 	}}
 	InitDepsForTest(t, caller)
 	t.Setenv("DWS_DUMP_RAW", "1")
@@ -528,10 +587,16 @@ func TestDingTalkTagConnectKeepsSupervisorCurrentAndUsesReturnedClientID(t *test
 	var exchange auth.ManagedExchangeRequest
 	testseam.Swap(t, &deapConnectManagedExchange, func(ctx context.Context, _ string, request auth.ManagedExchangeRequest) (*auth.TokenData, error) {
 		exchange = request
+		if request.ExpectedCorpID != "employee-corp" {
+			return nil, fmt.Errorf("managed exchange expected organization = %q, want published corpId", request.ExpectedCorpID)
+		}
+		if request.ExpectedUserID != "employee-user" {
+			return nil, fmt.Errorf("managed exchange expected user = %q, want authorization staffId", request.ExpectedUserID)
+		}
 		if request.ResolveIdentity == nil {
 			return nil, errors.New("managed identity resolver is missing")
 		}
-		identity, err := request.ResolveIdentity(ctx, "managed-access-secret", request.ExpectedOrgID)
+		identity, err := request.ResolveIdentity(ctx, "managed-access-secret", request.ExpectedCorpID)
 		if err != nil {
 			return nil, err
 		}
@@ -582,6 +647,11 @@ func TestDingTalkTagConnectKeepsSupervisorCurrentAndUsesReturnedClientID(t *test
 	if len(caller.tokenCalls) != 1 || len(caller.tokens) != 1 || caller.tokens[0] != "managed-access-secret" ||
 		caller.tokenCalls[0].productID != "contact" || caller.tokenCalls[0].toolName != "get_current_user_profile" {
 		t.Fatalf("managed identity lookup calls=%#v tokens=%#v", caller.tokenCalls, caller.tokens)
+	}
+	operatorLookup := caller.calls[len(caller.calls)-1]
+	if operatorLookup.productID != "contact" || operatorLookup.toolName != "search_contact_by_key_word" ||
+		operatorLookup.args["keyword"] != "supervisor-user" {
+		t.Fatalf("operator lookup = %#v, want exact supervisor userId search", operatorLookup)
 	}
 	if auth.RuntimeProfile() != "" {
 		t.Fatalf("connect changed runtime profile to %q", auth.RuntimeProfile())

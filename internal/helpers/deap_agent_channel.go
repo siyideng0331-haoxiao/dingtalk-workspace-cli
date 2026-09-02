@@ -34,6 +34,12 @@ type digitalEmployeeConnectResult struct {
 	RestartRequired        bool   `json:"restartRequired"`
 }
 
+type digitalEmployeePublishedIdentity struct {
+	CorpID   string
+	RobotUID string
+	StaffID  string
+}
+
 var (
 	deapConnectConfigDir       = config.DefaultConfigDir
 	deapConnectLoadProfiles    = auth.LoadProfiles
@@ -126,6 +132,10 @@ func runDeapConnect(cmd *cobra.Command, _ []string) error {
 	if err != nil || !hasBusinessData(published) {
 		return apperrors.NewValidation("数字员工尚未发布；请先发布当前草稿后再 connect")
 	}
+	publishedIdentity, ok := publishedDigitalEmployeeIdentity(published)
+	if !ok {
+		return apperrors.NewInternal("数字员工发布详情缺少 profile.corpId、profile.robotUid 或 profile.staffId，无法校验身份")
+	}
 
 	authArgs := map[string]any{"agentUuid": agentUUID}
 	if requestedClientID != "" {
@@ -137,14 +147,21 @@ func runDeapConnect(cmd *cobra.Command, _ []string) error {
 	}
 	authData := businessDataMap(authorization)
 	dwsClientID := requiredJSONScalar(authData, "dwsClientId")
-	uid := requiredJSONScalar(authData, "uid")
+	authorizedRobotUID := requiredJSONScalar(authData, "uid")
+	authorizedStaffID := requiredJSONScalar(authData, "staffId")
 	dwsAuthCode := requiredJSONScalar(authData, "dwsAuthCode")
-	orgID := requiredJSONScalar(authData, "orgId")
-	if dwsClientID == "" || uid == "" || dwsAuthCode == "" || orgID == "" {
-		return apperrors.NewInternal("数字员工授权响应缺少 dwsClientId、uid、dwsAuthCode 或 orgId")
+	authorizationOrgID := requiredJSONScalar(authData, "orgId")
+	if dwsClientID == "" || authorizedRobotUID == "" || authorizedStaffID == "" || dwsAuthCode == "" || authorizationOrgID == "" {
+		return apperrors.NewInternal("数字员工授权响应缺少 dwsClientId、uid、staffId、dwsAuthCode 或 orgId")
+	}
+	if authorizedRobotUID != publishedIdentity.RobotUID {
+		return apperrors.NewInternal("数字员工授权响应 uid 与发布详情 profile.robotUid 不一致")
+	}
+	if authorizedStaffID != publishedIdentity.StaffID {
+		return apperrors.NewInternal("数字员工授权响应 staffId 与发布详情 profile.staffId 不一致")
 	}
 	token, err := deapConnectManagedExchange(cmd.Context(), configDir, auth.ManagedExchangeRequest{
-		ClientID: dwsClientID, AuthCode: dwsAuthCode, UID: uid, ExpectedOrgID: orgID, PreserveProfile: supervisorSelector,
+		ClientID: dwsClientID, AuthCode: dwsAuthCode, ExpectedUserID: authorizedStaffID, ExpectedCorpID: publishedIdentity.CorpID, PreserveProfile: supervisorSelector,
 		ResolveIdentity: resolveDigitalEmployeeManagedIdentity,
 	})
 	// 尽早清空本地变量，后续所有错误和输出都不再接触授权码。
@@ -153,7 +170,7 @@ func runDeapConnect(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	digitalProfile := auth.ProfileSelector(auth.Profile{CorpID: token.CorpID, UserID: token.UserID})
-	if digitalProfile == "" || token.UserID != uid || token.CorpID != orgID {
+	if digitalProfile == "" || token.UserID != authorizedStaffID || token.CorpID != publishedIdentity.CorpID {
 		return apperrors.NewInternal("数字员工 Profile 身份校验失败")
 	}
 	operatorID, err := resolveExactOperatorOpenDingTalkID(cmd.Context(), supervisor.UserID)
@@ -468,6 +485,20 @@ func businessDataMap(value map[string]any) map[string]any {
 		}
 	}
 	return value
+}
+
+func publishedDigitalEmployeeIdentity(value map[string]any) (digitalEmployeePublishedIdentity, bool) {
+	data := businessDataMap(value)
+	profile, ok := data["profile"].(map[string]any)
+	if !ok {
+		return digitalEmployeePublishedIdentity{}, false
+	}
+	identity := digitalEmployeePublishedIdentity{
+		CorpID:   jsonScalar(profile["corpId"]),
+		RobotUID: jsonScalar(profile["robotUid"]),
+		StaffID:  jsonScalar(profile["staffId"]),
+	}
+	return identity, identity.CorpID != "" && identity.RobotUID != "" && identity.StaffID != ""
 }
 
 func hasBusinessData(value map[string]any) bool {
