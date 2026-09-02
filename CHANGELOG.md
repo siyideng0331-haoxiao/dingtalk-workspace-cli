@@ -17,7 +17,7 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/) and th
 
 ### Fixed
 
-- **数字员工 Managed Exchange 身份补全** — `/oauth2/getToken` 无需返回 `userId`；`dws dingtalk-tag connect` 现在使用新 Access Token 调用当前用户信息接口，并在 Token 组织、当前用户 `corpId/userId` 与授权响应 `orgId/uid` 全部一致后才落盘数字员工 Profile。身份查询失败、缺失、歧义或不匹配时保持 fail-closed，且不会输出授权码或 Token。
+- **数字员工 Managed Exchange 身份绑定** — `/oauth2/getToken` 无需返回 `userId`。修复 `dws dingtalk-tag connect` 混用 DEAP 数字型 `orgId`、机器人 `uid` 与钉钉 Profile `corpId/userId`，导致换票成功后仍拒绝落盘的问题：授权 `uid` 必须对应 published `profile.robotUid`，授权 `staffId` 必须对应 published `profile.staffId` 和新 Token 查询到的当前用户 `userId`，Token 与当前用户组织则必须对应 published `profile.corpId`；DEAP `orgId` 作为独立授权字段保留并校验非空。主管 operator 改用精确 `userId` 搜索并再次按 `userId` 过滤，不按姓名猜测。身份查询失败、缺失、歧义或不匹配时保持 fail-closed，且不会输出授权码或 Token。
 - **Machine-readable export and download receipts** — `dws doc export`,
   `dws drive download`, and `dws drive download --version` now keep progress
   logs on stderr under `--format json` and emit one JSON result on stdout after
