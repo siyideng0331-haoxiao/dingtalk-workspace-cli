@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/auth"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/corecmd/contractfinal"
@@ -259,6 +260,76 @@ func TestDingTalkTagChannelReplyReadsBoundedStrictStdinAndNormalizesEnvelope(t *
 	}
 	if len(caller.calls) != 2 {
 		t.Fatalf("oversized stdin made MCP call: %#v", caller.calls)
+	}
+}
+
+func TestDingTalkTagChannelReplyResolvesAsyncSendReceipt(t *testing.T) {
+	caller := &digitalEmployeeProtocolCaller{responses: map[string][]string{
+		"im/list_messages_by_ids":    {`{"result":[{"openMessageId":"message-1","senderOpenDingTalkId":"operator-open"}]}`},
+		"chat/send_personal_message": {`{"result":{"openTaskId":"task-1"}}`},
+		"im/query_message_send_status": {
+			`{"result":{"openTaskId":"task-1","status":"PROCESSING"}}`,
+			`{"result":{"openTaskId":"task-1","openMessageId":"reply-1","openConversationId":"conversation-1","status":"SUCCESS"}}`,
+		},
+	}}
+	InitDepsForTest(t, caller)
+	testseam.Swap(t, &deapChannelReceiptWait, func(context.Context, time.Duration) error { return nil })
+	root := deapHandler{}.Command(&captureRunner{})
+	leaf, _, err := root.Find([]string{"channel", "reply"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"channel": "dsh", "stdin": "true"} {
+		if err := leaf.Flags().Set(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	leaf.SetIn(strings.NewReader(`{"schemaVersion":1,"protocolVersion":1,"agentUuid":"agent-1","eventId":"event-1","sessionId":"session-1","conversationId":"conversation-1","referenceMessageId":"message-1","text":"异步回执正文","idempotencyKey":"idem-1"}`))
+	var output bytes.Buffer
+	leaf.SetOut(&output)
+	if err := leaf.RunE(leaf, nil); err != nil {
+		t.Fatalf("reply RunE() error = %v", err)
+	}
+	if len(caller.calls) != 4 || caller.calls[3].productID != "im" || caller.calls[3].toolName != "query_message_send_status" || caller.calls[3].args["openTaskId"] != "task-1" {
+		t.Fatalf("async receipt calls = %#v", caller.calls)
+	}
+	var envelope struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			OpenMessageID  string `json:"openMessageId"`
+			ConversationID string `json:"conversationId"`
+			DeliveryStatus string `json:"deliveryStatus"`
+			IdempotencyKey string `json:"idempotencyKey"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if !envelope.OK || envelope.Data.OpenMessageID != "reply-1" || envelope.Data.ConversationID != "conversation-1" ||
+		envelope.Data.DeliveryStatus != "delivered" || envelope.Data.IdempotencyKey != "idem-1" {
+		t.Fatalf("async reply envelope = %#v", envelope)
+	}
+}
+
+func TestDigitalEmployeeDeliveryRejectsMissingMessageIDAfterBoundedPolling(t *testing.T) {
+	statuses := make([]string, digitalEmployeeReceiptAttempts)
+	for i := range statuses {
+		statuses[i] = `{"result":{"openTaskId":"task-1","status":"PROCESSING"}}`
+	}
+	caller := &digitalEmployeeProtocolCaller{responses: map[string][]string{
+		"im/query_message_send_status": statuses,
+	}}
+	InitDepsForTest(t, caller)
+	testseam.Swap(t, &deapChannelReceiptWait, func(context.Context, time.Duration) error { return nil })
+
+	_, err := resolveDigitalEmployeeDelivery(context.Background(), map[string]any{
+		"result": map[string]any{"openTaskId": "task-1"},
+	}, "conversation-1", "idem-1")
+	if err == nil || !strings.Contains(err.Error(), "openMessageId") {
+		t.Fatalf("missing message id error = %v", err)
+	}
+	if len(caller.calls) != digitalEmployeeReceiptAttempts {
+		t.Fatalf("status query count = %d, want %d", len(caller.calls), digitalEmployeeReceiptAttempts)
 	}
 }
 

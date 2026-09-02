@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/auth"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/corecmd/contract"
@@ -48,6 +49,12 @@ var (
 	deapConnectRegisterDSH     = runDigitalEmployeeDSHRegister
 	deapConnectSaveBinding     = saveDigitalEmployeeBinding
 	deapChannelLoadBinding     = loadDigitalEmployeeBinding
+	deapChannelReceiptWait     = waitForDigitalEmployeeReceipt
+)
+
+const (
+	digitalEmployeeReceiptAttempts = 8
+	digitalEmployeeReceiptInterval = 250 * time.Millisecond
 )
 
 type digitalEmployeeBinding struct {
@@ -351,7 +358,11 @@ func runDeapChannelReply(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("send digital employee reply: %w", err)
 	}
-	return writeDWSMachineEnvelope(cmd, digitalEmployeeDeliveryResult(result, input.ConversationID, input.IdempotencyKey))
+	delivery, err := resolveDigitalEmployeeDelivery(cmd.Context(), result, input.ConversationID, input.IdempotencyKey)
+	if err != nil {
+		return fmt.Errorf("resolve digital employee reply receipt: %w", err)
+	}
+	return writeDWSMachineEnvelope(cmd, delivery)
 }
 
 func runDeapChannelOperatorPrivate(cmd *cobra.Command, _ []string) error {
@@ -378,7 +389,11 @@ func runDeapChannelOperatorPrivate(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("send digital employee operator message: %w", err)
 	}
-	return writeDWSMachineEnvelope(cmd, digitalEmployeeDeliveryResult(result, findJSONScalar(result, "openConvThreadId"), input.IdempotencyKey))
+	delivery, err := resolveDigitalEmployeeDelivery(cmd.Context(), result, findJSONScalar(result, "openConvThreadId"), input.IdempotencyKey)
+	if err != nil {
+		return fmt.Errorf("resolve digital employee operator message receipt: %w", err)
+	}
+	return writeDWSMachineEnvelope(cmd, delivery)
 }
 
 func decodeBoundedDigitalEmployeeStdin(cmd *cobra.Command, target any) error {
@@ -420,6 +435,44 @@ func digitalEmployeeDeliveryResult(result map[string]any, conversationID, idempo
 	return map[string]any{
 		"openMessageId": openMessageID, "conversationId": conversationID,
 		"deliveryStatus": delivery, "idempotencyKey": idempotencyKey,
+	}
+}
+
+func resolveDigitalEmployeeDelivery(ctx context.Context, sendResult map[string]any, conversationID, idempotencyKey string) (map[string]any, error) {
+	delivery := digitalEmployeeDeliveryResult(sendResult, conversationID, idempotencyKey)
+	if strings.TrimSpace(jsonScalar(delivery["openMessageId"])) != "" {
+		return delivery, nil
+	}
+	taskID := firstJSONScalar(sendResult, "openTaskId", "taskId")
+	if taskID == "" {
+		return nil, apperrors.NewInternal("数字员工发送响应缺少 openMessageId 和 openTaskId，无法确认投递结果")
+	}
+	for attempt := 0; attempt < digitalEmployeeReceiptAttempts; attempt++ {
+		if attempt > 0 {
+			if err := deapChannelReceiptWait(ctx, digitalEmployeeReceiptInterval); err != nil {
+				return nil, err
+			}
+		}
+		status, err := callMachineMCPJSON(ctx, "im", "query_message_send_status", map[string]any{"openTaskId": taskID})
+		if err != nil {
+			return nil, fmt.Errorf("query digital employee message status: %w", err)
+		}
+		delivery = digitalEmployeeDeliveryResult(status, conversationID, idempotencyKey)
+		if strings.TrimSpace(jsonScalar(delivery["openMessageId"])) != "" {
+			return delivery, nil
+		}
+	}
+	return nil, apperrors.NewInternal("数字员工发送任务未在有限等待时间内返回 openMessageId，无法确认投递结果")
+}
+
+func waitForDigitalEmployeeReceipt(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
