@@ -16,8 +16,10 @@ import (
 )
 
 type digitalEmployeeProtocolCaller struct {
-	responses map[string][]string
-	calls     []deapAgentCall
+	responses  map[string][]string
+	calls      []deapAgentCall
+	tokenCalls []deapAgentCall
+	tokens     []string
 }
 
 func (c *digitalEmployeeProtocolCaller) CallTool(_ context.Context, productID, toolName string, args map[string]any) (*edition.ToolResult, error) {
@@ -35,6 +37,81 @@ func (*digitalEmployeeProtocolCaller) Format() string { return "json" }
 func (*digitalEmployeeProtocolCaller) DryRun() bool   { return false }
 func (*digitalEmployeeProtocolCaller) Fields() string { return "" }
 func (*digitalEmployeeProtocolCaller) JQ() string     { return "" }
+
+func (c *digitalEmployeeProtocolCaller) CallToolWithToken(_ context.Context, token, productID, toolName string, args map[string]any) (*edition.ToolResult, error) {
+	c.tokenCalls = append(c.tokenCalls, deapAgentCall{productID: productID, toolName: toolName, args: args})
+	c.tokens = append(c.tokens, token)
+	key := productID + "/" + toolName
+	queue := c.responses[key]
+	if len(queue) == 0 {
+		return nil, errors.New("unexpected token-scoped MCP call")
+	}
+	c.responses[key] = queue[1:]
+	return &edition.ToolResult{Content: []edition.ContentBlock{{Type: "text", Text: queue[0]}}}, nil
+}
+
+type digitalEmployeeIdentityBlocksCaller struct {
+	blocks []edition.ContentBlock
+}
+
+func (*digitalEmployeeIdentityBlocksCaller) CallTool(context.Context, string, string, map[string]any) (*edition.ToolResult, error) {
+	return nil, errors.New("unexpected ordinary MCP call")
+}
+func (c *digitalEmployeeIdentityBlocksCaller) CallToolWithToken(context.Context, string, string, string, map[string]any) (*edition.ToolResult, error) {
+	return &edition.ToolResult{Content: c.blocks}, nil
+}
+func (*digitalEmployeeIdentityBlocksCaller) Format() string { return "json" }
+func (*digitalEmployeeIdentityBlocksCaller) DryRun() bool   { return false }
+func (*digitalEmployeeIdentityBlocksCaller) Fields() string { return "" }
+func (*digitalEmployeeIdentityBlocksCaller) JQ() string     { return "" }
+
+func TestDigitalEmployeeManagedIdentityRequiresOneExactUserIDAcrossAllBlocks(t *testing.T) {
+	t.Run("orgUserId is not a userId proof", func(t *testing.T) {
+		InitDepsForTest(t, &digitalEmployeeIdentityBlocksCaller{blocks: []edition.ContentBlock{{
+			Type: "text", Text: `{"result":[{"orgEmployeeModel":{"corpId":"employee-corp","orgUserId":"employee-user"}}]}`,
+		}}})
+		if _, err := resolveDigitalEmployeeManagedIdentity(context.Background(), "access-secret", "employee-corp"); err == nil {
+			t.Fatal("orgUserId-only identity was accepted")
+		}
+	})
+
+	t.Run("different identities in separate blocks are ambiguous", func(t *testing.T) {
+		InitDepsForTest(t, &digitalEmployeeIdentityBlocksCaller{blocks: []edition.ContentBlock{
+			{Type: "text", Text: `{"result":[{"orgEmployeeModel":{"corpId":"employee-corp","userId":"employee-one"}}]}`},
+			{Type: "text", Text: `{"result":[{"orgEmployeeModel":{"corpId":"employee-corp","userId":"employee-two"}}]}`},
+		}})
+		if _, err := resolveDigitalEmployeeManagedIdentity(context.Background(), "access-secret", "employee-corp"); err == nil {
+			t.Fatal("multiple text-block identities were accepted")
+		}
+	})
+
+	t.Run("multiple identities in the same organization are ambiguous", func(t *testing.T) {
+		InitDepsForTest(t, &digitalEmployeeIdentityBlocksCaller{blocks: []edition.ContentBlock{{
+			Type: "text", Text: `{"result":[{"orgEmployeeModel":{"corpId":"employee-corp","userId":"employee-one"}},{"orgEmployeeModel":{"corpId":"employee-corp","userId":"employee-two"}}]}`,
+		}}})
+		if _, err := resolveDigitalEmployeeManagedIdentity(context.Background(), "access-secret", "employee-corp"); err == nil {
+			t.Fatal("multiple same-organization identities were accepted")
+		}
+	})
+
+	t.Run("missing UID record does not disappear from ambiguity check", func(t *testing.T) {
+		InitDepsForTest(t, &digitalEmployeeIdentityBlocksCaller{blocks: []edition.ContentBlock{{
+			Type: "text", Text: `{"result":[{"orgEmployeeModel":{"corpId":"employee-corp","userId":"employee-one"}},{"orgEmployeeModel":{"corpId":"employee-corp"}}]}`,
+		}}})
+		if _, err := resolveDigitalEmployeeManagedIdentity(context.Background(), "access-secret", "employee-corp"); err == nil {
+			t.Fatal("same-organization record without UID was ignored")
+		}
+	})
+
+	t.Run("conflicting userId aliases are ambiguous", func(t *testing.T) {
+		InitDepsForTest(t, &digitalEmployeeIdentityBlocksCaller{blocks: []edition.ContentBlock{{
+			Type: "text", Text: `{"result":[{"orgEmployeeModel":{"corpId":"employee-corp","userId":"employee-one","userid":"employee-two"}}]}`,
+		}}})
+		if _, err := resolveDigitalEmployeeManagedIdentity(context.Background(), "access-secret", "employee-corp"); err == nil {
+			t.Fatal("conflicting userId aliases were accepted")
+		}
+	})
+}
 
 func TestDingTalkTagExposesIndependentConnectAndChannelProtocols(t *testing.T) {
 	newDeapAgentTestTree(t, false)
@@ -301,6 +378,30 @@ func TestDingTalkTagConnectFailureBoundaries(t *testing.T) {
 		}
 	})
 
+	t.Run("managed identity lookup failure", func(t *testing.T) {
+		caller := newSuccessfulConnectCaller(successfulAuthResponse(),
+			`{"result":[{"userId":"supervisor-user","openDingTalkId":"operator-open"}]}`)
+		caller.responses["contact/get_current_user_profile"] = []string{
+			`{"result":[{"orgEmployeeModel":{"corpId":"other-corp","userId":"employee-user"}}]}`,
+		}
+		InitDepsForTest(t, caller)
+		setupConnectSupervisorSeams(t)
+		testseam.Swap(t, &deapConnectManagedExchange, func(ctx context.Context, _ string, request auth.ManagedExchangeRequest) (*auth.TokenData, error) {
+			if request.ResolveIdentity == nil {
+				return nil, errors.New("managed identity resolver is missing")
+			}
+			_, err := request.ResolveIdentity(ctx, "managed-access-secret", request.ExpectedOrgID)
+			return nil, err
+		})
+		leaf := newConnectTestCommand(t, false)
+		if err := leaf.RunE(leaf, nil); err == nil || !strings.Contains(err.Error(), "identity") {
+			t.Fatalf("identity lookup error = %v", err)
+		}
+		if len(caller.tokenCalls) != 1 || caller.tokenCalls[0].productID != "contact" || caller.tokenCalls[0].toolName != "get_current_user_profile" {
+			t.Fatalf("identity lookup calls = %#v", caller.tokenCalls)
+		}
+	})
+
 	t.Run("operator cannot be resolved uniquely", func(t *testing.T) {
 		caller := newSuccessfulConnectCaller(successfulAuthResponse(),
 			`{"result":[{"userId":"supervisor-user","openDingTalkId":"operator-one"},{"userId":"supervisor-user","openDingTalkId":"operator-two"}]}`)
@@ -407,6 +508,7 @@ func TestDingTalkTagConnectKeepsSupervisorCurrentAndUsesReturnedClientID(t *test
 			`{"success":true,"data":{"status":"online"}}`,
 		},
 		"deap-dev/get_dws_auth_code":        {`{"success":true,"data":{"dwsClientId":"returned-client","uid":"employee-user","dwsAuthCode":"one-time-secret","orgId":"employee-corp"}}`},
+		"contact/get_current_user_profile":  {`{"result":[{"orgEmployeeModel":{"corpId":"employee-corp","orgName":"员工企业","userId":"employee-user","orgUserName":"本地员工"}}]}`},
 		"contact/get_user_info_by_user_ids": {`{"result":[{"userId":"supervisor-user","openDingTalkId":"operator-open"}]}`},
 	}}
 	InitDepsForTest(t, caller)
@@ -424,9 +526,20 @@ func TestDingTalkTagConnectKeepsSupervisorCurrentAndUsesReturnedClientID(t *test
 		return &auth.TokenData{CorpID: "supervisor-corp", UserID: "supervisor-user"}, nil
 	})
 	var exchange auth.ManagedExchangeRequest
-	testseam.Swap(t, &deapConnectManagedExchange, func(_ context.Context, _ string, request auth.ManagedExchangeRequest) (*auth.TokenData, error) {
+	testseam.Swap(t, &deapConnectManagedExchange, func(ctx context.Context, _ string, request auth.ManagedExchangeRequest) (*auth.TokenData, error) {
 		exchange = request
-		return &auth.TokenData{CorpID: "employee-corp", UserID: "employee-user", ClientID: request.ClientID, Source: "mcp"}, nil
+		if request.ResolveIdentity == nil {
+			return nil, errors.New("managed identity resolver is missing")
+		}
+		identity, err := request.ResolveIdentity(ctx, "managed-access-secret", request.ExpectedOrgID)
+		if err != nil {
+			return nil, err
+		}
+		return &auth.TokenData{
+			CorpID: identity.CorpID, CorpName: identity.CorpName,
+			UserID: identity.UserID, UserName: identity.UserName,
+			ClientID: request.ClientID, Source: "mcp",
+		}, nil
 	})
 	var registration map[string]any
 	testseam.Swap(t, &deapConnectSaveBinding, func(_ string, binding digitalEmployeeBinding) error {
@@ -466,6 +579,10 @@ func TestDingTalkTagConnectKeepsSupervisorCurrentAndUsesReturnedClientID(t *test
 	if exchange.ClientID != "returned-client" || exchange.AuthCode != "one-time-secret" || exchange.PreserveProfile != "supervisor-corp:supervisor-user" {
 		t.Fatalf("managed exchange = %#v", exchange)
 	}
+	if len(caller.tokenCalls) != 1 || len(caller.tokens) != 1 || caller.tokens[0] != "managed-access-secret" ||
+		caller.tokenCalls[0].productID != "contact" || caller.tokenCalls[0].toolName != "get_current_user_profile" {
+		t.Fatalf("managed identity lookup calls=%#v tokens=%#v", caller.tokenCalls, caller.tokens)
+	}
 	if auth.RuntimeProfile() != "" {
 		t.Fatalf("connect changed runtime profile to %q", auth.RuntimeProfile())
 	}
@@ -473,7 +590,7 @@ func TestDingTalkTagConnectKeepsSupervisorCurrentAndUsesReturnedClientID(t *test
 		t.Fatalf("DSH registration = %#v", registration)
 	}
 	combined := output.String() + stderr.String()
-	for _, secret := range []string{"one-time-secret", "returned-client"} {
+	for _, secret := range []string{"one-time-secret", "returned-client", "managed-access-secret"} {
 		if strings.Contains(combined, secret) {
 			t.Fatalf("connect leaked %q: %s", secret, combined)
 		}

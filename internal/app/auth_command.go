@@ -1327,13 +1327,6 @@ func authLoginHistorySelector(configDir string, profile *authpkg.Profile) string
 	return authpkg.ProfileSelector(*profile)
 }
 
-type contactProfileIdentity struct {
-	CorpID   string
-	CorpName string
-	UserID   string
-	UserName string
-}
-
 type authLoginHistoryHint struct {
 	Selector string
 	Explicit bool
@@ -1422,7 +1415,7 @@ func enrichAuthLoginProfileFromContact(
 		tryHistory()
 		return nil
 	}
-	identity, ok := contactProfileIdentityFromToolResult(result, corpID)
+	identity, ok := authpkg.ContactProfileIdentityFromToolResult(result, corpID)
 	if !ok {
 		logging.AuthDebug("auth.login.identity.lookup.empty", "corp_id", corpID)
 		if strings.TrimSpace(data.UserID) == "" {
@@ -1631,86 +1624,6 @@ func historicalProfileForSelector(corpID, selector string, profiles []*authpkg.P
 		return profiles[0]
 	}
 	return nil
-}
-
-func contactProfileIdentityFromToolResult(result *edition.ToolResult, expectedCorpIDs ...string) (contactProfileIdentity, bool) {
-	if result == nil {
-		return contactProfileIdentity{}, false
-	}
-	for _, block := range result.Content {
-		if strings.TrimSpace(block.Text) == "" {
-			continue
-		}
-		if identity, ok := contactProfileIdentityFromJSON([]byte(block.Text), expectedCorpIDs...); ok {
-			return identity, true
-		}
-	}
-	return contactProfileIdentity{}, false
-}
-
-func contactProfileIdentityFromJSON(data []byte, expectedCorpIDs ...string) (contactProfileIdentity, bool) {
-	var payload struct {
-		Result []struct {
-			OrgEmployeeModel struct {
-				CorpID      string `json:"corpId"`
-				OrgName     string `json:"orgName"`
-				UserID      string `json:"userId"`
-				UserIDLower string `json:"userid"`
-				OrgUserID   string `json:"orgUserId"`
-				OrgUserName string `json:"orgUserName"`
-				Name        string `json:"name"`
-			} `json:"orgEmployeeModel"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return contactProfileIdentity{}, false
-	}
-	if len(payload.Result) == 0 {
-		return contactProfileIdentity{}, false
-	}
-	identities := make([]contactProfileIdentity, 0, len(payload.Result))
-	for i := range payload.Result {
-		org := payload.Result[i].OrgEmployeeModel
-		identity := contactProfileIdentity{
-			CorpID:   strings.TrimSpace(org.CorpID),
-			CorpName: strings.TrimSpace(org.OrgName),
-			UserID:   firstNonEmptyString(org.UserID, org.UserIDLower, org.OrgUserID),
-			UserName: firstNonEmptyString(org.OrgUserName, org.Name),
-		}
-		if identity.CorpID != "" || identity.CorpName != "" || identity.UserID != "" || identity.UserName != "" {
-			identities = append(identities, identity)
-		}
-	}
-	if len(identities) == 0 {
-		return contactProfileIdentity{}, false
-	}
-	expectedCorpID := ""
-	if len(expectedCorpIDs) > 0 {
-		expectedCorpID = strings.TrimSpace(expectedCorpIDs[0])
-	}
-	if expectedCorpID != "" {
-		for _, identity := range identities {
-			if identity.CorpID == expectedCorpID {
-				return identity, true
-			}
-		}
-		// Older contact responses omit corpId. A single result is still
-		// unambiguous; multiple organization records without a target match
-		// must fall back to local history instead of choosing result[0].
-		if len(payload.Result) != 1 {
-			return contactProfileIdentity{}, false
-		}
-	}
-	return identities[0], true
-}
-
-func firstNonEmptyString(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }
 
 func authStatusAuthenticated(data *authpkg.TokenData) bool {

@@ -158,6 +158,39 @@ type runtimeRunner struct {
 	auditSink          audit.Sink
 }
 
+type scopedAuthTokenKeyType struct{}
+
+var scopedAuthTokenKey = scopedAuthTokenKeyType{}
+
+func scopedAuthToken(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	token, ok := ctx.Value(scopedAuthTokenKey).(string)
+	token = strings.TrimSpace(token)
+	return token, ok && token != ""
+}
+
+// RunWithToken executes one helper invocation with an in-memory access token.
+// It deliberately bypasses Run's process-wide Profile selection and clones the
+// transport before applying per-request execution state.
+func (r *runtimeRunner) RunWithToken(ctx context.Context, invocation executor.Invocation, token string) (executor.Result, error) {
+	if r == nil || strings.TrimSpace(token) == "" {
+		return executor.Result{}, fmt.Errorf("request-scoped token runner is not configured")
+	}
+	if invocation.DryRun || (r.globalFlags != nil && r.globalFlags.DryRun) {
+		invocation.DryRun = true
+		return (executor.EchoRunner{}).Run(ctx, invocation)
+	}
+	if r.transport == nil {
+		return executor.Result{}, fmt.Errorf("request-scoped token transport is not configured")
+	}
+	clone := *r
+	clone.transport = r.transport.WithAuth(r.transport.AuthToken, r.transport.ExtraHeaders)
+	ctx = context.WithValue(ctx, scopedAuthTokenKey, strings.TrimSpace(token))
+	return clone.runSingle(ctx, invocation, false)
+}
+
 var (
 	runnerResolveMultiProfileSelections = resolveMultiProfileSelections
 	runnerResolveProfile                = authpkg.ResolveProfile
@@ -547,9 +580,13 @@ func (r *runtimeRunner) executeInvocation(ctx context.Context, endpoint string, 
 	// If so, use the plugin's token instead of the default DingTalk OAuth token.
 	// This allows third-party MCP servers (e.g. Bailian) to use their own API keys.
 	pluginAuth, hasPluginAuth := LookupPluginAuth(invocation.CanonicalProduct)
+	requestToken, hasRequestToken := scopedAuthToken(ctx)
+	nonRefreshableAuth := hasPluginAuth || hasRequestToken
 
 	authToken := ""
-	if hasPluginAuth {
+	if hasRequestToken {
+		authToken = requestToken
+	} else if hasPluginAuth {
 		authToken = pluginAuth.Token
 	} else if !invocation.DryRun && (r.globalFlags == nil || !r.globalFlags.Mock) {
 		var tokenErr error
@@ -615,7 +652,7 @@ func (r *runtimeRunner) executeInvocation(ctx context.Context, endpoint string, 
 	}
 
 	var tc *transport.Client
-	if hasPluginAuth {
+	if hasPluginAuth && !hasRequestToken {
 		// Use plugin-level auth: inject the plugin's token and trust its domains.
 		tc = r.transport.WithAuth(authToken, pluginAuth.ExtraHeaders)
 		tc.TrustedDomains = pluginAuth.TrustedDomains
@@ -633,12 +670,15 @@ func (r *runtimeRunner) executeInvocation(ctx context.Context, endpoint string, 
 
 	if err := runnerPreflightDocDownload(r, callCtx, tc, endpoint, invocation); err != nil {
 		if patCheck := apperrors.AsPatAuthCheckError(err); patCheck != nil {
+			if hasRequestToken {
+				return executor.Result{}, patCheck
+			}
 			if IsPatRetrying(ctx) {
 				return executor.Result{}, patCheck
 			}
 			return runnerHandlePatAuthCheck(ctx, r, invocation, patCheck, defaultConfigDir(), os.Stderr)
 		}
-		if result, retryErr, handled := r.retryAuthRefreshRequired(ctx, endpoint, invocation, authToken, err, hasPluginAuth); handled {
+		if result, retryErr, handled := r.retryAuthRefreshRequired(ctx, endpoint, invocation, authToken, err, nonRefreshableAuth); handled {
 			if retryErr != nil {
 				runnerCaptureRuntimeFailure(invocation, err, retryErr)
 			}
@@ -652,10 +692,10 @@ func (r *runtimeRunner) executeInvocation(ctx context.Context, endpoint string, 
 	callResult, err := runnerCallTool(tc, callCtx, endpoint, invocation.Tool, invocation.Params)
 	RecordTiming(ctx, "mcp_call", time.Since(callStart))
 	if err != nil {
-		if isRefreshableTransportAuthError(err) {
+		if !hasRequestToken && isRefreshableTransportAuthError(err) {
 			if fn := edition.Get().OnAuthError; fn != nil {
 				if overrideErr := fn(defaultConfigDir(), err); overrideErr != nil {
-					if result, retryErr, handled := r.retryAuthRefreshRequired(ctx, endpoint, invocation, authToken, overrideErr, hasPluginAuth); handled {
+					if result, retryErr, handled := r.retryAuthRefreshRequired(ctx, endpoint, invocation, authToken, overrideErr, nonRefreshableAuth); handled {
 						if retryErr != nil {
 							runnerCaptureRuntimeFailure(invocation, err, retryErr)
 						}
@@ -668,6 +708,9 @@ func (r *runtimeRunner) executeInvocation(ctx context.Context, endpoint string, 
 		}
 		// PAT scope error: offer human-readable output and retry after authorization
 		if isPatScopeError(err) {
+			if hasRequestToken {
+				return executor.Result{}, err
+			}
 			scopeErr := extractPatScopeError(err)
 			runnerCaptureRuntimeFailure(invocation, err, err)
 			return runnerRetryWithPatAuthRetry(ctx, r, invocation, scopeErr, defaultConfigDir(), os.Stderr)
@@ -680,12 +723,15 @@ func (r *runtimeRunner) executeInvocation(ctx context.Context, endpoint string, 
 	if fn := edition.Get().ClassifyToolResult; fn != nil {
 		if editionErr := fn(callResult.Content); editionErr != nil {
 			if patCheck := apperrors.AsPatAuthCheckError(editionErr); patCheck != nil {
+				if hasRequestToken {
+					return executor.Result{}, patCheck
+				}
 				if IsPatRetrying(ctx) {
 					return executor.Result{}, patCheck // already retried once, don't loop
 				}
 				return runnerHandlePatAuthCheck(ctx, r, invocation, patCheck, defaultConfigDir(), os.Stderr)
 			}
-			if result, retryErr, handled := r.retryAuthRefreshRequired(ctx, endpoint, invocation, authToken, editionErr, hasPluginAuth); handled {
+			if result, retryErr, handled := r.retryAuthRefreshRequired(ctx, endpoint, invocation, authToken, editionErr, nonRefreshableAuth); handled {
 				if retryErr != nil {
 					runnerCaptureRuntimeFailure(invocation, editionErr, retryErr)
 				}
@@ -697,6 +743,9 @@ func (r *runtimeRunner) executeInvocation(ctx context.Context, endpoint string, 
 
 	// ---- Structured PAT auth check (open-source fallback) ----
 	if patCheck := apperrors.ClassifyPatAuthCheck(callResult.Content); patCheck != nil {
+		if hasRequestToken {
+			return executor.Result{}, patCheck
+		}
 		if IsPatRetrying(ctx) {
 			return executor.Result{}, patCheck // already retried once, don't loop
 		}
@@ -710,7 +759,7 @@ func (r *runtimeRunner) executeInvocation(ctx context.Context, endpoint string, 
 		// patterns (PAT permission, gateway-auth) before generic handling.
 		if classify := edition.Get().ClassifyToolResult; classify != nil {
 			if hookErr := classify(callResult.Content); hookErr != nil {
-				if result, retryErr, handled := r.retryAuthRefreshRequired(ctx, endpoint, invocation, authToken, hookErr, hasPluginAuth); handled {
+				if result, retryErr, handled := r.retryAuthRefreshRequired(ctx, endpoint, invocation, authToken, hookErr, nonRefreshableAuth); handled {
 					if retryErr != nil {
 						runnerCaptureRuntimeFailure(invocation, hookErr, retryErr)
 					}
@@ -731,6 +780,9 @@ func (r *runtimeRunner) executeInvocation(ctx context.Context, endpoint string, 
 		logBusinessError(r.transport.FileLogger, serverFailureReason(mcpErr, "mcp_tool_error"), invocation, callResult.Content, diag)
 		// PAT scope error in business response: offer human-readable output and retry
 		if isPatScopeError(mcpErr) {
+			if hasRequestToken {
+				return executor.Result{}, mcpErr
+			}
 			scopeErr := extractPatScopeError(mcpErr)
 			runnerCaptureRuntimeFailure(invocation, mcpErr, mcpErr)
 			return runnerRetryWithPatAuthRetry(ctx, r, invocation, scopeErr, defaultConfigDir(), os.Stderr)

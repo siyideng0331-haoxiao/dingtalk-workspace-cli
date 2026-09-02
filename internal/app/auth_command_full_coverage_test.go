@@ -409,17 +409,14 @@ func TestCrossPlatformCoverageAuthCoverageContactEnrichment(t *testing.T) {
 	if err := enrichAuthLoginProfileFromContact(ctx, "cfg", multiOrg, multiOrgData); err != nil || multiOrgData.UserID != "target-user" || multiOrgData.CorpName != "Target Corp" {
 		t.Fatalf("multi-org contact selection = %#v, %v", multiOrgData, err)
 	}
-	if _, ok := contactProfileIdentityFromJSON(
+	if _, ok := authpkg.ContactProfileIdentityFromJSON(
 		[]byte(`{"result":[{"orgEmployeeModel":{"corpId":"other-a","userid":"user-a"}},{"orgEmployeeModel":{"corpId":"other-b","userid":"user-b"}}]}`),
 		"ding",
 	); ok {
 		t.Fatal("multiple nonmatching organizations must not select an arbitrary contact identity")
 	}
-	if _, ok := contactProfileIdentityFromToolResult(nil); ok {
+	if _, ok := authpkg.ContactProfileIdentityFromToolResult(nil); ok {
 		t.Fatal("nil result should not parse")
-	}
-	if got := firstNonEmptyString(" ", " value ", "later"); got != "value" {
-		t.Fatalf("first non-empty = %q", got)
 	}
 }
 
