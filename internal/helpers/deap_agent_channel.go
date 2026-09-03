@@ -213,7 +213,7 @@ func runDeapConnect(cmd *cobra.Command, _ []string) error {
 			ProtocolVersion: digitalEmployeeProtocolVersion, RestartRequired: false,
 		})
 	}
-	operatorID, err := resolveExactOperatorOpenDingTalkID(cmd.Context(), supervisor.UserID)
+	operatorID, err := resolveExactOperatorOpenDingTalkID(cmd.Context(), token.AccessToken, supervisor.UserID)
 	if err != nil {
 		return err
 	}
