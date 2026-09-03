@@ -18,10 +18,11 @@ import (
 )
 
 type digitalEmployeeProtocolCaller struct {
-	responses  map[string][]string
-	calls      []deapAgentCall
-	tokenCalls []deapAgentCall
-	tokens     []string
+	responses      map[string][]string
+	tokenResponses map[string][]string
+	calls          []deapAgentCall
+	tokenCalls     []deapAgentCall
+	tokens         []string
 }
 
 func (c *digitalEmployeeProtocolCaller) CallTool(_ context.Context, productID, toolName string, args map[string]any) (*edition.ToolResult, error) {
@@ -44,11 +45,19 @@ func (c *digitalEmployeeProtocolCaller) CallToolWithToken(_ context.Context, tok
 	c.tokenCalls = append(c.tokenCalls, deapAgentCall{productID: productID, toolName: toolName, args: args})
 	c.tokens = append(c.tokens, token)
 	key := productID + "/" + toolName
-	queue := c.responses[key]
+	queue := c.tokenResponses[key]
+	tokenScopedResponse := len(queue) > 0
+	if !tokenScopedResponse {
+		queue = c.responses[key]
+	}
 	if len(queue) == 0 {
 		return nil, errors.New("unexpected token-scoped MCP call")
 	}
-	c.responses[key] = queue[1:]
+	if tokenScopedResponse {
+		c.tokenResponses[key] = queue[1:]
+	} else {
+		c.responses[key] = queue[1:]
+	}
 	return &edition.ToolResult{Content: []edition.ContentBlock{{Type: "text", Text: queue[0]}}}, nil
 }
 
@@ -736,7 +745,7 @@ func setupSuccessfulConnectSeams(t *testing.T) {
 	t.Helper()
 	setupConnectSupervisorSeams(t)
 	testseam.Swap(t, &deapConnectManagedExchange, func(_ context.Context, _ string, request auth.ManagedExchangeRequest) (*auth.TokenData, error) {
-		return &auth.TokenData{CorpID: request.ExpectedCorpID, UserID: request.ExpectedUserID, ClientID: request.ClientID, Source: "mcp"}, nil
+		return &auth.TokenData{AccessToken: "managed-access-secret", CorpID: request.ExpectedCorpID, UserID: request.ExpectedUserID, ClientID: request.ClientID, Source: "mcp"}, nil
 	})
 	testseam.Swap(t, &deapConnectSaveBinding, func(string, digitalEmployeeBinding) error { return nil })
 	testseam.Swap(t, &deapConnectRegisterDSH, func(context.Context, map[string]any) (string, error) { return "created", nil })
@@ -790,8 +799,10 @@ func TestDingTalkTagConnectKeepsSupervisorCurrentAndUsesReturnedClientID(t *test
 			`{"success":true,"data":{"status":"online","profile":{"corpId":"employee-corp","robotUid":"robot-uid","staffId":"employee-user"}}}`,
 		},
 		"deap-dev/get_dws_auth_code":         {`{"success":true,"data":{"dwsClientId":"returned-client","uid":"robot-uid","staffId":"employee-user","dwsAuthCode":"one-time-secret","orgId":"439446171"}}`},
+		"contact/search_contact_by_key_word": {`{"result":[{"userId":"supervisor-user","openDingTalkId":"operator-supervisor-scope"}]}`},
+	}, tokenResponses: map[string][]string{
 		"contact/get_current_user_profile":   {`{"result":[{"orgEmployeeModel":{"corpId":"employee-corp","orgName":"员工企业","userId":"employee-user","orgUserName":"本地员工"}}]}`},
-		"contact/search_contact_by_key_word": {`{"result":[{"userId":"supervisor-user","openDingTalkId":"operator-open"}]}`},
+		"contact/search_contact_by_key_word": {`{"result":[{"userId":"supervisor-user","openDingTalkId":"operator-employee-scope"}]}`},
 	}}
 	InitDepsForTest(t, caller)
 	t.Setenv("DWS_DUMP_RAW", "1")
@@ -824,14 +835,15 @@ func TestDingTalkTagConnectKeepsSupervisorCurrentAndUsesReturnedClientID(t *test
 			return nil, err
 		}
 		return &auth.TokenData{
-			CorpID: identity.CorpID, CorpName: identity.CorpName,
+			AccessToken: "managed-access-secret",
+			CorpID:      identity.CorpID, CorpName: identity.CorpName,
 			UserID: identity.UserID, UserName: identity.UserName,
 			ClientID: request.ClientID, Source: "mcp",
 		}, nil
 	})
 	var registration map[string]any
 	testseam.Swap(t, &deapConnectSaveBinding, func(_ string, binding digitalEmployeeBinding) error {
-		if binding.DWSProfile != "employee-corp:employee-user" || binding.OperatorOpenDingTalkID != "operator-open" {
+		if binding.DWSProfile != "employee-corp:employee-user" || binding.OperatorOpenDingTalkID != "operator-employee-scope" {
 			t.Fatalf("binding = %#v", binding)
 		}
 		return nil
@@ -867,19 +879,22 @@ func TestDingTalkTagConnectKeepsSupervisorCurrentAndUsesReturnedClientID(t *test
 	if exchange.ClientID != "returned-client" || exchange.AuthCode != "one-time-secret" || exchange.PreserveProfile != "supervisor-corp:supervisor-user" {
 		t.Fatalf("managed exchange = %#v", exchange)
 	}
-	if len(caller.tokenCalls) != 1 || len(caller.tokens) != 1 || caller.tokens[0] != "managed-access-secret" ||
-		caller.tokenCalls[0].productID != "contact" || caller.tokenCalls[0].toolName != "get_current_user_profile" {
+	if len(caller.tokenCalls) != 2 || len(caller.tokens) != 2 ||
+		caller.tokens[0] != "managed-access-secret" || caller.tokens[1] != "managed-access-secret" ||
+		caller.tokenCalls[0].productID != "contact" || caller.tokenCalls[0].toolName != "get_current_user_profile" ||
+		caller.tokenCalls[1].productID != "contact" || caller.tokenCalls[1].toolName != "search_contact_by_key_word" ||
+		caller.tokenCalls[1].args["keyword"] != "supervisor-user" {
 		t.Fatalf("managed identity lookup calls=%#v tokens=%#v", caller.tokenCalls, caller.tokens)
 	}
-	operatorLookup := caller.calls[len(caller.calls)-1]
-	if operatorLookup.productID != "contact" || operatorLookup.toolName != "search_contact_by_key_word" ||
-		operatorLookup.args["keyword"] != "supervisor-user" {
-		t.Fatalf("operator lookup = %#v, want exact supervisor userId search", operatorLookup)
+	for _, call := range caller.calls {
+		if call.productID == "contact" && call.toolName == "search_contact_by_key_word" {
+			t.Fatalf("operator lookup used supervisor-profile MCP caller: %#v", call)
+		}
 	}
 	if auth.RuntimeProfile() != "" {
 		t.Fatalf("connect changed runtime profile to %q", auth.RuntimeProfile())
 	}
-	if registration["dwsProfile"] != "employee-corp:employee-user" || registration["operatorOpenDingTalkId"] != "operator-open" {
+	if registration["dwsProfile"] != "employee-corp:employee-user" || registration["operatorOpenDingTalkId"] != "operator-employee-scope" {
 		t.Fatalf("DSH registration = %#v", registration)
 	}
 	combined := output.String() + stderr.String()
