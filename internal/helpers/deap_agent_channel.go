@@ -28,9 +28,10 @@ const (
 type digitalEmployeeConnectResult struct {
 	Status                 string `json:"status"`
 	AgentUUID              string `json:"agentUuid"`
-	Channel                string `json:"channel"`
+	Channel                string `json:"channel,omitempty"`
 	DWSProfile             string `json:"dwsProfile"`
-	OperatorOpenDingTalkID string `json:"operatorOpenDingTalkId"`
+	OperatorOpenDingTalkID string `json:"operatorOpenDingTalkId,omitempty"`
+	ProfileOnly            bool   `json:"profileOnly,omitempty"`
 	ProtocolVersion        int    `json:"protocolVersion"`
 	RestartRequired        bool   `json:"restartRequired"`
 }
@@ -67,17 +68,30 @@ type digitalEmployeeBinding struct {
 func newDeapConnectCommand() *cobra.Command {
 	return NewLeafCommand(LeafSpec{
 		Use:   "connect",
-		Short: "把已发布的本地数字员工接入 DSH",
-		Long:  "校验已发布数字员工的 mainProgramType=local_agent，以当前主管身份获取一次性授权信息，使用响应中的 dwsClientId 换票并保存独立 Profile，再通过 stdin 幂等注册到 DSH。connect 不创建、修改或发布数字员工，也不会切换当前主管 Profile；注册后由用户或宿主重启 DSH。",
+		Short: "为已发布的本地数字员工落盘 Profile 或接入 DSH",
+		Long:  "校验已发布数字员工的 mainProgramType=local_agent，以当前主管身份获取一次性授权信息，并使用响应中的 dwsClientId 换票和保存独立 Profile。指定 --profile-only 时到此结束；指定 --channel dsh 时继续解析 operator、保存本地 binding，并通过 stdin 幂等注册到 DSH。connect 不创建、修改或发布数字员工，也不会切换当前主管 Profile；DSH 注册后由用户或宿主重启 DSH。",
 		Flags: []LeafFlag{
 			{Name: "agent-uuid", Usage: "已存在且已发布的数字员工 ID", Required: true, Trim: true},
-			{Name: "channel", Usage: "本地 Agent 渠道；第一期固定为 dsh", Required: true, Trim: true, Enum: []string{"dsh"}},
+			{Name: "channel", Usage: "本地 Agent 渠道；DSH 接入模式必填，--profile-only 时省略；第一期固定为 dsh", Trim: true, Enum: []string{"dsh"}, RequiredWhen: "未指定 --profile-only 时必填"},
+			{Name: "profile-only", Kind: LeafBool, Usage: "仅完成授权换票与数字员工 Profile 落盘；不解析 operator、不保存 DSH binding、不注册 DSH"},
 			{Name: "client-id", Usage: "传给 DEAP 的选应用提示；最终换票始终使用授权响应中的 dwsClientId", Trim: true, OmitEmpty: true},
 		},
+		Constraints: []LeafConstraint{{
+			Kind: "custom", Flags: []string{"channel", "profile-only"},
+			Description: "必须选择 --channel dsh 或 --profile-only；两种模式不能同时使用",
+		}},
 		Safety: contract.SafetySpec{
 			Effect: "write", Risk: "high", Confirmation: "user_required", Idempotency: "idempotent",
 		},
 		Validate: func(cmd *cobra.Command, _ []string) error {
+			channel := strings.TrimSpace(MustGetStringFlag(cmd, "channel"))
+			profileOnly := commandBoolFlag(cmd, "profile-only")
+			switch {
+			case profileOnly && channel != "":
+				return apperrors.NewValidation("--profile-only 与 --channel 不能同时使用")
+			case !profileOnly && channel == "":
+				return apperrors.NewValidation("必须指定 --channel dsh 或 --profile-only")
+			}
 			if commandDryRun(cmd) {
 				return nil
 			}
@@ -92,18 +106,22 @@ func newDeapConnectCommand() *cobra.Command {
 				ProductID: dingtalkTagProductID, Name: "connect",
 				CanonicalPath: "dingtalk-tag.connect", CLIPath: "dingtalk-tag connect", PrimaryCLIPath: "dingtalk-tag connect",
 			},
-			Description: "把一个已发布的 local_agent 数字员工安全接入 DSH；只编排授权、Profile 落盘和 DSH 注册。",
+			Description: "为一个已发布的 local_agent 数字员工安全保存独立 Profile，并可继续完成 DSH 注册。",
 			DryRun:      deapAgentDryRun,
-			Interface:   &contract.InterfaceSpec{Mode: "composite", Availability: "available", Reason: "DEAP 授权、DWS managed exchange 与本地 DSH 注册的受控编排"},
+			Interface:   &contract.InterfaceSpec{Mode: "composite", Availability: "available", Reason: "DEAP 授权与 DWS managed exchange 的受控编排；可选本地 DSH 注册"},
 			Selection: contract.SelectionSpec{
-				AgentSummary: "把已有且已发布的 local_agent 数字员工接入本地 DSH",
-				UseWhen:      []string{"用户要把已有数字员工接入 DSH，或创建发布后继续完成 DSH 接入"},
+				AgentSummary: "为已有且已发布的 local_agent 数字员工保存本地 Profile，或继续接入 DSH",
+				UseWhen:      []string{"用户只要把数字员工授权转换成本地 Profile，或要把已有数字员工接入 DSH"},
 				AvoidWhen:    []string{"只创建、修改或发布数字员工时使用 manage；connect 本身不会更改数字员工配置"},
-				Examples:     []string{"dws dingtalk-tag connect --agent-uuid <agentUuid> --channel dsh --dry-run --format json"},
+				Examples: []string{
+					"dws dingtalk-tag connect --agent-uuid <agentUuid> --profile-only --dry-run --format json",
+					"dws dingtalk-tag connect --agent-uuid <agentUuid> --channel dsh --dry-run --format json",
+				},
 			},
 			Parameters: []contract.ParamDecl{
 				{Name: "agent-uuid", Property: "agentUuid"},
 				{Name: "channel", Property: "channel", Enum: []string{"dsh"}},
+				{Name: "profile-only", Property: "profileOnly"},
 				{Name: "client-id", Property: "clientId"},
 			},
 		},
@@ -113,13 +131,22 @@ func newDeapConnectCommand() *cobra.Command {
 func runDeapConnect(cmd *cobra.Command, _ []string) error {
 	agentUUID := strings.TrimSpace(MustGetStringFlag(cmd, "agent-uuid"))
 	channel := strings.TrimSpace(MustGetStringFlag(cmd, "channel"))
+	profileOnly := commandBoolFlag(cmd, "profile-only")
 	requestedClientID := strings.TrimSpace(MustGetStringFlag(cmd, "client-id"))
 	if commandDryRun(cmd) {
-		return writeDWSMachineEnvelope(cmd, map[string]any{
-			"status": "planned", "agentUuid": agentUUID, "channel": channel,
-			"protocolVersion": digitalEmployeeProtocolVersion, "restartRequired": true,
-			"steps": []string{"validate_draft", "validate_published", "request_auth_code", "managed_exchange", "persist_profile", "resolve_operator", "register_dsh"},
-		})
+		steps := []string{"validate_draft", "validate_published", "request_auth_code", "managed_exchange", "persist_profile"}
+		if !profileOnly {
+			steps = append(steps, "resolve_operator", "register_dsh")
+		}
+		plan := map[string]any{
+			"status": "planned", "agentUuid": agentUUID, "profileOnly": profileOnly,
+			"protocolVersion": digitalEmployeeProtocolVersion, "restartRequired": !profileOnly,
+			"steps": steps,
+		}
+		if channel != "" {
+			plan["channel"] = channel
+		}
+		return writeDWSMachineEnvelope(cmd, plan)
 	}
 
 	configDir := deapConnectConfigDir()
@@ -179,6 +206,12 @@ func runDeapConnect(cmd *cobra.Command, _ []string) error {
 	digitalProfile := auth.ProfileSelector(auth.Profile{CorpID: token.CorpID, UserID: token.UserID})
 	if digitalProfile == "" || token.UserID != authorizedStaffID || token.CorpID != publishedIdentity.CorpID {
 		return apperrors.NewInternal("数字员工 Profile 身份校验失败")
+	}
+	if profileOnly {
+		return writeDWSMachineEnvelope(cmd, digitalEmployeeConnectResult{
+			Status: "profile_saved", AgentUUID: agentUUID, DWSProfile: digitalProfile, ProfileOnly: true,
+			ProtocolVersion: digitalEmployeeProtocolVersion, RestartRequired: false,
+		})
 	}
 	operatorID, err := resolveExactOperatorOpenDingTalkID(cmd.Context(), supervisor.UserID)
 	if err != nil {
