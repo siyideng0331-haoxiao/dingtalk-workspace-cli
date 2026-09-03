@@ -16,18 +16,18 @@ Flags:
   --employee-no      工号（≤64 码点）
   --position-name    岗位名称（≤128 码点，发布前必填）
   --supervisor-uid   直属上级钉钉 uid
-  --main-program-type 主程序类型：open_code | local_agent（不传时 OpenAPI 按 open_code 处理）
+  --main-program-type 可选：open_code | local_agent；无特殊要求默认不传
   --response-mode    mention_only | targeted_proactive | mention_only,targeted_proactive（发布前必填）
   --profile-json     档案 JSON 对象；独立档案 flag 覆盖其同名字段
 Example:
-  dws dingtalk-tag manage create --name "周报助手" --description "汇总并推送团队周报" --main-program-type local_agent --dry-run --format json
+  dws dingtalk-tag manage create --name "周报助手" --description "汇总并推送团队周报" --dry-run --format json
 ```
 
 只建草稿，不会上线。`--position-name` 与 `--response-mode` 是发布的前置条件，可在此处给或后续用 `save-draft` 补。
 
 `create` 当前为 `confirmation=not_required`：先用 `--dry-run` 核对，确认参数无误后移除 `--dry-run` 执行即可，不要额外猜测或重复创建。
 
-`--profile-json` 只接收 `employeeNo`、`positionName`、`directSupervisorUid`、`mainProgramType`、`responseMode` 五个字段。`mainProgramType` 仅支持 `open_code`、`local_agent`，`a2a` 暂不支持；不传时 CLI 保持省略，由 OpenAPI 按 `open_code` 处理。`responseMode` 支持单值，也支持用英文逗号分隔的双值组合，CLI 会规范化为 `mention_only,targeted_proactive`。独立档案 flag 会覆盖 `profile-json` 的同名字段，包括独立的 `--main-program-type` 覆盖 `profile-json.mainProgramType`。
+`--profile-json` 只接收 `employeeNo`、`positionName`、`directSupervisorUid`、`mainProgramType`、`responseMode` 五个字段。`mainProgramType` 仅支持 `open_code`、`local_agent`，`a2a` 暂不支持：没有特殊要求时默认不传，CLI 保持省略，由 OpenAPI 按 `open_code` 处理；用户明确要求时也可以显式传 `open_code`；只有明确接入本地 Agent/DSH 时才传 `local_agent`。`responseMode` 支持单值，也支持用英文逗号分隔的双值组合，CLI 会规范化为 `mention_only,targeted_proactive`。独立档案 flag 会覆盖 `profile-json` 的同名字段，包括独立的 `--main-program-type` 覆盖 `profile-json.mainProgramType`。
 
 ## detail / list — 查询
 
@@ -92,7 +92,7 @@ Flags:
 正确的增量修改姿势：
 
 1. 先 `dws dingtalk-tag manage detail` 查出当前完整配置
-2. 把**全部仍需保留的基础与档案字段**（包括详情返回的 `mainProgramType`）连同要改的字段一并带上；需要变更 Skill/MCP 时再提供对应文件
+2. 把**其它全部仍需保留的基础与档案字段**连同要改的字段一并带上；`mainProgramType` 没有特殊要求时默认不传，也允许显式传 `open_code`，只有明确保持或切换为本地 Agent/DSH 模式时才传 `local_agent`；需要变更 Skill/MCP 时再提供对应文件
 3. 整体提交
 
 只传要改的那一个字段会把其它字段全部清空，且这个后果在 `--dry-run` 的参数预览里看不出来（预览只显示你传了什么，不显示"没传的会被清掉"）。

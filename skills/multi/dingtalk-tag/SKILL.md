@@ -24,9 +24,9 @@ metadata:
 
 ## 自然语言编排硬约束
 
-- `mainProgramType` 仅支持 `open_code`、`local_agent`，`a2a` 暂不支持；不传时由 OpenAPI 按 `open_code` 处理。创建本地数字员工固定使用 `--main-program-type local_agent`。
+- `mainProgramType` 仅支持 `open_code`、`local_agent`，`a2a` 暂不支持。创建或更新没有特殊要求时默认不传，由 OpenAPI 按 `open_code` 处理；用户明确要求时可以显式传 `open_code`；只有明确接入本地 Agent/DSH 时才传 `--main-program-type local_agent`。
 - 发布前一次性收集名称、描述、头像、部门、岗位、响应模式、Prompt 等缺失信息，避免边执行边追问。
-- `save-draft` 是全量覆写。修改前必须读取完整 draft，并保留未修改的 `mainProgramType`、Skill、MCP 和其它字段。
+- `save-draft` 是全量覆写。修改前必须读取完整 draft，并保留未修改的 Skill、MCP 和其它字段；`mainProgramType` 按上一条规则处理，已有 `local_agent` 需要保持本地模式时显式保留 `local_agent`。
 - 同一自然语言请求里的连续写操作只做一次汇总确认；确认后才加 `--yes`。先用 `--dry-run --format json` 展示计划。
 - 创建成功后若保存或发布失败，必须返回已创建的 `agentUuid` 和恢复命令；重试禁止再次执行 create。
 - “创建并接入 DSH”可顺序执行创建/发布与 connect，但两者是独立事务。connect 绝不创建、修改或发布数字员工。
