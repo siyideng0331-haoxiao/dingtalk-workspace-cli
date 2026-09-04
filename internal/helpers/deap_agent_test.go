@@ -269,6 +269,9 @@ func TestDeapAgentOpenAPISkillUploaderStreamsMultipartAndReturnsFileURL(t *testi
 	uploader := deapAgentOpenAPISkillUploader{
 		baseURL:    server.URL,
 		httpClient: server.Client(),
+		validateTarget: func(string) error {
+			return nil
+		},
 		resolveCredential: func(_ context.Context, agentUUID string) (string, error) {
 			if agentUUID != "agent-1" {
 				t.Fatalf("credential resolver agentUuid = %q", agentUUID)

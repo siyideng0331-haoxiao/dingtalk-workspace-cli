@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/helpers"
@@ -289,12 +290,12 @@ func TestCrossPlatformCoverageMessagesSendRoutesIdentitySpecificTransports(t *te
 	}{
 		{
 			name:    "user",
-			args:    []string{"chat", "+messages-send", "--as", "user", "--chat-id", "cid", "--markdown", "hello @D1", "--at-open-dingtalk-ids", "D1", "--at-all", "--idempotency-key", "u1", "--yes"},
+			args:    []string{"chat", "+messages-send", "--as", "user", "--chat-id", "cid", "--markdown", "hello @" + fixtureCurrentDOpenID, "--at-open-dingtalk-ids", fixtureCurrentDOpenID, "--at-all", "--idempotency-key", "u1", "--yes"},
 			product: "chat",
 			tool:    "send_personal_message",
 			want:    map[string]any{"openConversationId": "cid", "msgType": "markdown", "uuid": "u1"},
 			bodyKey: "content",
-			body:    "<@all> hello <@D1>",
+			body:    "<@all> hello <@" + fixtureCurrentDOpenID + ">",
 		},
 		{
 			name:    "bot",
@@ -337,8 +338,15 @@ func TestCrossPlatformCoverageMessagesSendRoutesIdentitySpecificTransports(t *te
 				}
 			}
 			if tt.bodyKey == "content" {
+				rawContent := call.args[tt.bodyKey].(string)
+				if strings.Contains(rawContent, `\u003c`) || strings.Contains(rawContent, `\u003e`) {
+					t.Errorf("content = %q; current-user mention tokens must remain literal", rawContent)
+				}
+				if !strings.Contains(rawContent, "<@"+fixtureCurrentDOpenID+">") {
+					t.Errorf("content = %q; missing literal current-user mention token", rawContent)
+				}
 				var content map[string]string
-				if err := json.Unmarshal([]byte(call.args[tt.bodyKey].(string)), &content); err != nil {
+				if err := json.Unmarshal([]byte(rawContent), &content); err != nil {
 					t.Fatal(err)
 				}
 				if content["text"] != tt.body {
@@ -471,7 +479,7 @@ func TestCrossPlatformCoverageMessagesReplyPublishesPlainTextBoundary(t *testing
 		"chat", "+messages-reply",
 		"--conversation-id", "cid",
 		"--message-id", "msg",
-		"--ref-sender", "D-sender",
+		"--ref-sender", fixtureCurrentDOpenID,
 		"--text", "收到",
 		"--idempotency-key", "reply-uuid",
 		"--yes",
@@ -494,7 +502,7 @@ func TestCrossPlatformCoverageMessagesReplyPublishesPlainTextBoundary(t *testing
 		t.Fatal(err)
 	}
 	if content["referenceOpenMessageId"] != "msg" ||
-		content["srcMsgSendOpenDingTalkId"] != "D-sender" ||
+		content["srcMsgSendOpenDingTalkId"] != fixtureCurrentDOpenID ||
 		content["replyMsgType"] != "text" ||
 		content["content"] != "收到" {
 		t.Fatalf("reply content = %#v", content)
@@ -525,7 +533,7 @@ func TestCrossPlatformCoverageMessagesReplyDryRunStopsBeforeWrite(t *testing.T) 
 		"chat", "+messages-reply",
 		"--conversation-id", "cid",
 		"--message-id", "msg",
-		"--ref-sender", "D-sender",
+		"--ref-sender", fixtureCurrentDOpenID,
 		"--text", "收到",
 		"--dry-run",
 		"--yes",

@@ -12,7 +12,6 @@ import (
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/corecmd/contract"
 	apperrors "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/errors"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/executor"
-	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/pkg/cmdutil"
 	"github.com/spf13/cobra"
 )
 
@@ -84,6 +83,12 @@ func (deapHandler) Name() string {
 func (deapHandler) Command(executor.Runner) *cobra.Command {
 	contract.RegisterProductDecl(contract.ProductDecl{
 		ID: dingtalkTagProductID,
+		HelpReferences: contract.HelpReferences{
+			RelatedSkills: []string{"dingtalk-tag"},
+			Documentation: []contract.HelpDocumentation{
+				contract.SkillDocumentation("DingTalk Tag 数字员工指南", "dingtalk-tag", "references/dingtalk-tag-index.md"),
+			},
+		},
 		Selection: contract.ProductSelectionDecl{
 			AgentSummary: "创建和管理数字员工、查询执行状态，并把已有本地数字员工接入 DSH",
 			UseWhen: []string{
@@ -106,7 +111,7 @@ func (deapHandler) Command(executor.Runner) *cobra.Command {
 		DisableAutoGenTag: true,
 		RunE:              groupRunE,
 	}
-	cmdutil.MarkGroup(root)
+	newGroupCommand(root)
 	root.AddCommand(
 		newDeapManageCommand(),
 		newDeapRunCommand(),
@@ -128,7 +133,7 @@ func newDeapManageCommand() *cobra.Command {
 		DisableAutoGenTag: true,
 		RunE:              groupRunE,
 	}
-	cmdutil.MarkGroup(cmd)
+	newGroupCommand(cmd)
 	cmd.AddCommand(
 		newDeapAgentCreateCommand(),
 		newDeapAgentDetailCommand(),
@@ -194,7 +199,7 @@ func newDeapRunCommand() *cobra.Command {
 		DisableAutoGenTag: true,
 		RunE:              groupRunE,
 	}
-	cmdutil.MarkGroup(cmd)
+	newGroupCommand(cmd)
 	cmd.AddCommand(
 		newDeapAgentRunStatusCommand(),
 		newDeapAgentTraceCommand(),
