@@ -1,6 +1,6 @@
 ---
 name: dingtalk-tag
-description: 钉钉数字员工的自然语言创建、查询、修改、发布、删除、能力资源、执行状态与 DSH 接入。Use when 用户说创建或管理数字员工、改人设/岗位/响应模式、发布或询问下线能力、查执行状态或 trace、管理数字员工 Skill/MCP，或把已有数字员工接入本地 DSH。命令前缀：dws dingtalk-tag。
+description: 钉钉数字员工的自然语言创建、查询、修改、发布、删除、能力资源、执行状态、本地 Profile 落盘与 DSH 接入。Use when 用户说创建或管理数字员工、改人设/岗位/响应模式、发布或询问下线能力、查执行状态或 trace、管理数字员工 Skill/MCP、把已有数字员工转换为本地 Profile，或接入本地 DSH。命令前缀：dws dingtalk-tag。
 metadata:
   category: product
   requires:
@@ -18,6 +18,7 @@ metadata:
 |---|---|
 | 创建草稿 / 创建并发布 / 查询 / 修改 / 上线 / 删除 | `dws dingtalk-tag manage ...` |
 | 下线 | 当前版本无独立下线命令；明确说明限制，不得用 delete 冒充下线 |
+| 只把已有、已发布的本地数字员工转换为本地 Profile | `dws dingtalk-tag connect --agent-uuid ... --profile-only` |
 | 把已有、已发布的本地数字员工接入 DSH | `dws dingtalk-tag connect --agent-uuid ... --channel dsh` |
 | 创建或查询 Skill / MCP 资源 | `dws dingtalk-tag capability ...` |
 | 查一次执行的状态或完整 trace | `dws dingtalk-tag run ...` |
@@ -29,8 +30,8 @@ metadata:
 - `save-draft` 是全量覆写。修改前必须读取完整 draft，并保留未修改的 Skill、MCP 和其它字段；`mainProgramType` 按上一条规则处理，已有 `local_agent` 需要保持本地模式时显式保留 `local_agent`。
 - 同一自然语言请求里的连续写操作只做一次汇总确认；确认后才加 `--yes`。先用 `--dry-run --format json` 展示计划。
 - 创建成功后若保存或发布失败，必须返回已创建的 `agentUuid` 和恢复命令；重试禁止再次执行 create。
-- “创建并接入 DSH”可顺序执行创建/发布与 connect，但两者是独立事务。connect 绝不创建、修改或发布数字员工。
-- 用户可以只创建/管理数字员工，也可以只把已有员工接入 DSH；两条能力互不依赖。
+- “创建并落盘 Profile”可顺序执行创建/发布与 `connect --profile-only`；“创建并接入 DSH”则使用 `connect --channel dsh`。创建/发布与 connect 是独立事务，connect 绝不创建、修改或发布数字员工。
+- 用户可以只创建/管理数字员工、只把已有员工转换为本地 Profile，或继续接入 DSH；三种操作互不强绑定。
 - 所有 ID 统一使用 `agentUuid` / `--agent-uuid`，不得猜测。
 
 ## 安全
