@@ -57,13 +57,13 @@ func TestExchangeManagedAuthCodeUsesExplicitClientAndPreservesRuntimeState(t *te
 	data, err := ExchangeManagedAuthCode(context.Background(), configDir, ManagedExchangeRequest{
 		ClientID:        "employee-client",
 		AuthCode:        "one-time-secret",
-		UID:             "user-employee",
-		ExpectedOrgID:   "corp-employee",
+		ExpectedUserID:  "user-employee",
+		ExpectedCorpID:  "corp-employee",
 		PreserveProfile: "corp-supervisor:user-supervisor",
-		ResolveIdentity: func(_ context.Context, accessToken, expectedOrgID string) (ManagedIdentity, error) {
+		ResolveIdentity: func(_ context.Context, accessToken, expectedCorpID string) (ManagedIdentity, error) {
 			identityResolved = true
-			if accessToken != "access-secret" || expectedOrgID != "corp-employee" {
-				t.Fatalf("identity resolver input token=%q org=%q", accessToken, expectedOrgID)
+			if accessToken != "access-secret" || expectedCorpID != "corp-employee" {
+				t.Fatalf("identity resolver input token=%q corp=%q", accessToken, expectedCorpID)
 			}
 			return ManagedIdentity{
 				CorpID: "corp-employee", CorpName: "Employee Corp",
@@ -121,8 +121,8 @@ func TestExchangeManagedAuthCodeRejectsIdentityMismatchBeforePersistence(t *test
 	_, err := ExchangeManagedAuthCode(context.Background(), configDir, ManagedExchangeRequest{
 		ClientID:        "employee-client",
 		AuthCode:        "never-print-this-code",
-		UID:             "expected-user",
-		ExpectedOrgID:   "expected-corp",
+		ExpectedUserID:  "expected-user",
+		ExpectedCorpID:  "expected-corp",
 		PreserveProfile: "supervisor-corp:supervisor-user",
 		ResolveIdentity: func(context.Context, string, string) (ManagedIdentity, error) {
 			return ManagedIdentity{CorpID: "expected-corp", UserID: "expected-user"}, nil
@@ -160,8 +160,8 @@ func TestExchangeManagedAuthCodeRejectsMissingTokenIdentityBeforePersistence(t *
 	_, err := ExchangeManagedAuthCode(context.Background(), configDir, ManagedExchangeRequest{
 		ClientID:        "employee-client",
 		AuthCode:        "one-time-secret",
-		UID:             "expected-user",
-		ExpectedOrgID:   "expected-corp",
+		ExpectedUserID:  "expected-user",
+		ExpectedCorpID:  "expected-corp",
 		PreserveProfile: "supervisor-corp:supervisor-user",
 		ResolveIdentity: func(context.Context, string, string) (ManagedIdentity, error) {
 			return ManagedIdentity{CorpID: "expected-corp"}, nil
@@ -196,8 +196,8 @@ func TestExchangeManagedAuthCodeRejectsResolvedIdentityMismatchBeforePersistence
 	_, err := ExchangeManagedAuthCode(context.Background(), configDir, ManagedExchangeRequest{
 		ClientID:        "employee-client",
 		AuthCode:        "one-time-secret",
-		UID:             "expected-user",
-		ExpectedOrgID:   "expected-corp",
+		ExpectedUserID:  "expected-user",
+		ExpectedCorpID:  "expected-corp",
 		PreserveProfile: "supervisor-corp:supervisor-user",
 		ResolveIdentity: func(context.Context, string, string) (ManagedIdentity, error) {
 			return ManagedIdentity{CorpID: "expected-corp", UserID: "other-user"}, nil
@@ -232,8 +232,8 @@ func TestExchangeManagedAuthCodeRejectsResolvedOrganizationMismatchBeforePersist
 	_, err := ExchangeManagedAuthCode(context.Background(), configDir, ManagedExchangeRequest{
 		ClientID:        "employee-client",
 		AuthCode:        "one-time-secret",
-		UID:             "expected-user",
-		ExpectedOrgID:   "expected-corp",
+		ExpectedUserID:  "expected-user",
+		ExpectedCorpID:  "expected-corp",
 		PreserveProfile: "supervisor-corp:supervisor-user",
 		ResolveIdentity: func(context.Context, string, string) (ManagedIdentity, error) {
 			return ManagedIdentity{CorpID: "other-corp", UserID: "expected-user"}, nil
@@ -262,8 +262,8 @@ func TestExchangeManagedAuthCodeSanitizesIdentityLookupFailure(t *testing.T) {
 	_, err := ExchangeManagedAuthCode(context.Background(), configDir, ManagedExchangeRequest{
 		ClientID:        "employee-client",
 		AuthCode:        "one-time-secret",
-		UID:             "expected-user",
-		ExpectedOrgID:   "expected-corp",
+		ExpectedUserID:  "expected-user",
+		ExpectedCorpID:  "expected-corp",
 		PreserveProfile: "supervisor-corp:supervisor-user",
 		ResolveIdentity: func(context.Context, string, string) (ManagedIdentity, error) {
 			return ManagedIdentity{}, errors.New("lookup failed with access-secret")

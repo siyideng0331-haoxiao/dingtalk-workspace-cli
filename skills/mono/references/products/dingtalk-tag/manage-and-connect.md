@@ -32,7 +32,19 @@ dws dingtalk-tag manage delete --agent-uuid <agentUuid> --dry-run --format json
 
 当前版本没有独立下线命令。用户要求下线时应明确说明该限制，不得把不可逆的 `delete` 当作下线，也不要猜测未公开的 DEAP 工具。删除不可逆，先确认目标和影响。
 
-## 接入已有数字员工
+## 只保存已有数字员工的本地 Profile
+
+```bash
+dws dingtalk-tag connect --agent-uuid <agentUuid> --profile-only --dry-run --format json
+# 用户确认后
+dws dingtalk-tag connect --agent-uuid <agentUuid> --profile-only --yes --format json
+```
+
+前置条件：draft 的 `mainProgramType` 必须是 `local_agent`，且 published 详情存在。该模式只获取一次性授权信息、执行受管换票并保存数字员工独立 Profile；它保持主管 Profile 当前激活，不查询 operator、不保存 DSH binding、不调用或重启 DSH。成功结果的 `status` 为 `profile_saved`、`profileOnly` 为 `true`、`restartRequired` 为 `false`。
+
+`--profile-only` 与 `--channel` 不能同时使用。后续需要接入 DSH 时，单独执行下面的 DSH 模式；它会重新获取一次性授权信息并幂等注册。
+
+## 接入已有数字员工到 DSH
 
 ```bash
 dws dingtalk-tag connect --agent-uuid <agentUuid> --channel dsh --dry-run --format json
@@ -40,7 +52,7 @@ dws dingtalk-tag connect --agent-uuid <agentUuid> --channel dsh --dry-run --form
 dws dingtalk-tag connect --agent-uuid <agentUuid> --channel dsh --yes --format json
 ```
 
-前置条件：draft 的 `mainProgramType` 必须是 `local_agent`，且 published 详情存在。connect 会保存数字员工独立 Profile、保持主管 Profile 当前激活，并幂等注册 DSH；它不会修改或发布员工，也不会自动重启 DSH。
+前置条件同上。该模式会保存数字员工独立 Profile、保持主管 Profile 当前激活，并继续解析 operator、保存 DSH binding 和幂等注册 DSH；它不会修改或发布员工，也不会自动重启 DSH。
 
 成功结果在 DWS envelope 的 `data` 中返回 `status`、`agentUuid`、`dwsProfile`、`operatorOpenDingTalkId`、`protocolVersion` 和 `restartRequired`。若 Profile 已落盘但 DSH 注册失败，重新执行同一 connect 获取新授权码并幂等重试，不要重新创建员工。
 
