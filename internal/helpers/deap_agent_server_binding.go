@@ -4,6 +4,7 @@
 package helpers
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -215,10 +216,23 @@ func mutateEmployeeServerBinding(cmd *cobra.Command, b digitalEmployeeBinding, a
 		}
 		op.RuntimeBindingID = b.RuntimeBindingID
 	} else {
-		// 新接口直接返回 runtimeBindingId；兼容旧版 data 字符串。
-		// runtimeId 表示运行实例，不可作为绑定 ID；两个来源冲突时保持未知。
-		if len(response.Data) > 0 && string(response.Data) != "null" {
-			if json.Unmarshal(response.Data, &op.RuntimeBindingID) != nil {
+		// 正式契约从 data 对象读取 runtimeBindingId；兼容旧版 data 字符串
+		// 和顶层映射。只读取明确字段，不递归猜测，也不使用 runtimeId。
+		data := bytes.TrimSpace(response.Data)
+		if len(data) > 0 && !bytes.Equal(data, []byte("null")) {
+			if data[0] == '{' {
+				var binding struct {
+					RuntimeBindingID string `json:"runtimeBindingId"`
+				}
+				if json.Unmarshal(data, &binding) != nil {
+					return "", employeeServerUnknown("绑定未返回有效 ID")
+				}
+				op.RuntimeBindingID = binding.RuntimeBindingID
+			} else if json.Unmarshal(data, &op.RuntimeBindingID) != nil {
+				return "", employeeServerUnknown("绑定未返回有效 ID")
+			}
+			// data 一旦提供就必须有效，不能用顶层兼容字段掩盖损坏结果。
+			if !validMachineString(op.RuntimeBindingID) {
 				return "", employeeServerUnknown("绑定未返回有效 ID")
 			}
 		}
