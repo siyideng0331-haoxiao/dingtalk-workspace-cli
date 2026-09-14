@@ -193,8 +193,8 @@ func TestCrossPlatformCoverageEmployeeServerReceiptReplayAndIdentity(t *testing.
 		t.Fatalf("unexpected calls: %v", caller.tokenCalls)
 	}
 	args := caller.tokenCalls[0].args
-	request, ok := args["RebindLocalAgentRequest"].(map[string]any)
-	if !ok || len(args) != 1 || request["agentUuid"] != b.AgentUUID || request["runtimeBindingId"] != "binding-old" || request["deviceId"] != "device-new" || request["localAgentName"] != "办公室 Agent" || request["extensions"] != "private-extension-value" {
+	request := args
+	if len(request) != 5 || request["agentUuid"] != b.AgentUUID || request["runtimeBindingId"] != "binding-old" || request["deviceId"] != "device-new" || request["localAgentName"] != "办公室 Agent" || request["extensions"] != "private-extension-value" {
 		t.Fatalf("payload: %+v", args)
 	}
 	for _, key := range []string{"identity", "userId", "orgId", "corpId"} {
@@ -278,8 +278,8 @@ func TestCrossPlatformCoverageEmployeeServerUnbindRetriesExactID(t *testing.T) {
 		t.Fatalf("unbind retry %q %v", id, err)
 	}
 	for _, call := range caller.tokenCalls {
-		request := call.args["UnbindLocalAgentRequest"].(map[string]any)
-		if len(request) != 2 || request["runtimeBindingId"] != "binding-old" {
+		request := call.args
+		if len(request) != 2 || request["agentUuid"] != b.AgentUUID || request["runtimeBindingId"] != "binding-old" {
 			t.Fatalf("unsafe unbind: %v", request)
 		}
 	}
@@ -372,8 +372,8 @@ func TestCrossPlatformCoverageEmployeeServerBindMigrationAndDryRun(t *testing.T)
 	if err != nil || current.RuntimeBindingID != "migrated-id" || current.DeviceID == "" || current.BindingRevision != b.BindingRevision {
 		t.Fatalf("migration: %+v %v", current, err)
 	}
-	request := caller.tokenCalls[0].args["BindLocalAgentRequest"].(map[string]any)
-	if len(request) != 2 {
+	request := caller.tokenCalls[0].args
+	if len(request) != 2 || request["agentUuid"] != b.AgentUUID || request["deviceId"] == "" {
 		t.Fatalf("unexpected bind payload: %v", request)
 	}
 }
@@ -436,8 +436,8 @@ func TestCrossPlatformCoverageEmployeeServerNewDeviceRebindUsesOldID(t *testing.
 			t.Fatal("new device used bind instead of atomic rebind")
 		}
 	}
-	request := caller.tokenCalls[len(caller.tokenCalls)-1].args["RebindLocalAgentRequest"].(map[string]any)
-	if request["runtimeBindingId"] != "old-machine-binding" {
+	request := caller.tokenCalls[len(caller.tokenCalls)-1].args
+	if len(request) != 3 || request["agentUuid"] != "agent-1" || request["runtimeBindingId"] != "old-machine-binding" || request["deviceId"] != "new-machine" {
 		t.Fatal("wrong expected binding")
 	}
 }

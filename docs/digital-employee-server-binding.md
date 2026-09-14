@@ -32,13 +32,13 @@
 
 ## MCP 契约
 
-固定使用 `deap-dev`，按平台 Schema 保留请求包装对象：
+固定使用 `deap-dev`，按平台 Schema 将业务字段直接放在 MCP `tools/call.arguments` 顶层，不增加 DTO 名称包装：
 
-| MCP | 包装对象 | 业务字段 | 成功 data |
-|---|---|---|---|
-| `bind_local_agent` | `BindLocalAgentRequest` | agentUuid、deviceId；可选 localAgentName、extensions | 非空绑定 ID 字符串 |
-| `unbind_local_agent` | `UnbindLocalAgentRequest` | agentUuid、runtimeBindingId | true |
-| `rebind_local_agent` | `RebindLocalAgentRequest` | agentUuid、runtimeBindingId、deviceId；可选 localAgentName、extensions | 新绑定 ID 字符串 |
+| MCP | 顶层业务字段 | 成功 data |
+|---|---|---|
+| `bind_local_agent` | agentUuid、deviceId；可选 localAgentName、extensions | 非空绑定 ID 字符串 |
+| `unbind_local_agent` | agentUuid、runtimeBindingId | true |
+| `rebind_local_agent` | agentUuid、runtimeBindingId、deviceId；可选 localAgentName、extensions | 新绑定 ID 字符串 |
 
 `identity` 由网关根据主管登录态注入，CLI 不暴露或传入 userId/orgId/identity。请求使用明确主管 Profile 的进程内 Token，不使用刚换取的员工 Token，不改变当前 Profile。服务端负责权限、旧绑定版本和在途/待恢复任务校验。
 
@@ -65,6 +65,6 @@ pending → 单次 MCP 调用 → confirmed → 本地绑定提交 → consumed
 
 ## 验证边界与回滚
 
-自动化测试使用隔离配置、模拟 MCP 和模拟 DSH 控制，不更改真实绑定。上线前仍需联调三个 MCP 的包装对象、返回值、忙拒绝和身份注入，以及跨设备旧 ID 保护。
+自动化测试使用隔离配置、模拟 MCP 和模拟 DSH 控制，不更改真实绑定。上线前仍需联调三个 MCP 的顶层业务字段、返回值、忙拒绝和身份注入，以及跨设备旧 ID 保护。
 
 本变更不自动迁移存量连接，也不合并依赖 PR 或发布版本。回滚代码不会撤销已经发生的服务端绑定。新增字段可能被旧版严格 JSON 解码器拒绝；不要直接降级或删除回执。应先使用当前版本确认解绑并停止实例，由维护者保留备份后处理旧格式兼容。

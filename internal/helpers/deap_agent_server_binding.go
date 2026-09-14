@@ -114,9 +114,9 @@ func mutateEmployeeServerBinding(cmd *cobra.Command, b digitalEmployeeBinding, a
 		return "", fmt.Errorf("主管身份的 MCP 调用不可用")
 	}
 	request := map[string]any{"agentUuid": b.AgentUUID}
-	wrappers := map[string]string{"bind": "BindLocalAgentRequest", "unbind": "UnbindLocalAgentRequest", "rebind": "RebindLocalAgentRequest"}
-	wrapper, ok := wrappers[action]
-	if !ok {
+	switch action {
+	case "bind", "unbind", "rebind":
+	default:
 		return "", fmt.Errorf("无效绑定操作")
 	}
 	if action != "bind" {
@@ -168,7 +168,7 @@ func mutateEmployeeServerBinding(cmd *cobra.Command, b digitalEmployeeBinding, a
 		return "", err
 	}
 	// identity 由网关根据主管 Token 注入；CLI 不允许覆盖身份，也不 dump 原始响应。
-	result, err := callEmployeeServerBinding(cmd.Context(), caller, configDir, selector, token.AccessToken, action, wrapper, request)
+	result, err := callEmployeeServerBinding(cmd.Context(), caller, configDir, selector, token.AccessToken, action, request)
 	if err != nil {
 		if employeeServerDefinitiveRejection(err) {
 			op.Phase = "rejected"
@@ -231,11 +231,11 @@ func mutateEmployeeServerBinding(cmd *cobra.Command, b digitalEmployeeBinding, a
 func callEmployeeServerBinding(
 	ctx context.Context,
 	caller managedIdentityTokenCaller,
-	configDir, selector, accessToken, action, wrapper string,
+	configDir, selector, accessToken, action string,
 	request map[string]any,
 ) (*edition.ToolResult, error) {
 	call := func(token string) (*edition.ToolResult, error) {
-		return caller.CallToolWithToken(ctx, token, deapAgentServerID, action+"_local_agent", map[string]any{wrapper: request})
+		return caller.CallToolWithToken(ctx, token, deapAgentServerID, action+"_local_agent", request)
 	}
 	result, err := call(accessToken)
 	if !employeeServerAccessTokenRejected(err) {
