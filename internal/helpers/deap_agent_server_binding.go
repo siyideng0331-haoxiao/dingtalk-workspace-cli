@@ -183,8 +183,9 @@ func mutateEmployeeServerBinding(cmd *cobra.Command, b digitalEmployeeBinding, a
 		return "", employeeServerUnknown("服务端请求结果未知；保留旧绑定，不启动新 Agent")
 	}
 	var response struct {
-		Success *bool           `json:"success"`
-		Data    json.RawMessage `json:"data"`
+		Success          *bool           `json:"success"`
+		Data             json.RawMessage `json:"data"`
+		RuntimeBindingID *string         `json:"runtimeBindingId"`
 	}
 	texts := 0
 	for _, block := range result.Content {
@@ -214,7 +215,20 @@ func mutateEmployeeServerBinding(cmd *cobra.Command, b digitalEmployeeBinding, a
 		}
 		op.RuntimeBindingID = b.RuntimeBindingID
 	} else {
-		if json.Unmarshal(response.Data, &op.RuntimeBindingID) != nil || !validMachineString(op.RuntimeBindingID) {
+		// 新接口直接返回 runtimeBindingId；兼容旧版 data 字符串。
+		// runtimeId 表示运行实例，不可作为绑定 ID；两个来源冲突时保持未知。
+		if len(response.Data) > 0 && string(response.Data) != "null" {
+			if json.Unmarshal(response.Data, &op.RuntimeBindingID) != nil {
+				return "", employeeServerUnknown("绑定未返回有效 ID")
+			}
+		}
+		if response.RuntimeBindingID != nil {
+			if op.RuntimeBindingID != "" && op.RuntimeBindingID != *response.RuntimeBindingID {
+				return "", employeeServerUnknown("服务端返回的绑定 ID 冲突")
+			}
+			op.RuntimeBindingID = *response.RuntimeBindingID
+		}
+		if !validMachineString(op.RuntimeBindingID) {
 			return "", employeeServerUnknown("绑定未返回有效 ID")
 		}
 		if action == "rebind" && op.RuntimeBindingID == b.RuntimeBindingID {

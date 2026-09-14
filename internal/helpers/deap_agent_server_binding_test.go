@@ -265,6 +265,51 @@ func TestCrossPlatformCoverageEmployeeServerFailureClassification(t *testing.T) 
 	}
 }
 
+func TestCrossPlatformCoverageEmployeeServerTopLevelBindingResponse(t *testing.T) {
+	for _, action := range []string{"bind", "rebind"} {
+		for _, tc := range []struct {
+			name, response string
+			wantID         string
+		}{
+			{"active", `{"success":true,"status":"ACTIVE","runtimeBindingId":"binding-new","runtimeId":"runtime-other"}`, "binding-new"},
+			{"legacy", `{"success":true,"data":"binding-new"}`, "binding-new"},
+			{"matching_ids", `{"success":true,"runtimeBindingId":"binding-new","data":"binding-new"}`, "binding-new"},
+			{"conflicting_ids", `{"success":true,"runtimeBindingId":"binding-new","data":"binding-other"}`, ""},
+			{"runtime_id_only", `{"success":true,"status":"ACTIVE","runtimeId":"runtime-other"}`, ""},
+			{"invalid_id", `{"success":true,"runtimeBindingId":"\n"}`, ""},
+			{"non_string_id", `{"success":true,"runtimeBindingId":123}`, ""},
+		} {
+			t.Run(action+"/"+tc.name, func(t *testing.T) {
+				_, b := lifecycleFixture(t)
+				caller := &digitalEmployeeProtocolCaller{responses: map[string][]string{
+					"deap-dev/" + action + "_local_agent": {tc.response},
+				}}
+				InitDepsForTest(t, caller)
+				id, err := mutateEmployeeServerBinding(lifecycleCmd(t, action, b.AgentUUID), b, action, "device-new")
+				if tc.wantID == "" {
+					if err == nil || !strings.Contains(err.Error(), "server_binding_unknown") {
+						t.Fatalf("ambiguous response accepted: id=%q err=%v", id, err)
+					}
+				} else if err != nil || id != tc.wantID {
+					t.Fatalf("binding = %q, %v; want %q", id, err, tc.wantID)
+				}
+				var receipt employeeServerOperation
+				raw, readErr := os.ReadFile(employeeServerOperationPath(b.DWSProfile))
+				if readErr != nil || json.Unmarshal(raw, &receipt) != nil {
+					t.Fatalf("receipt unavailable: %v", readErr)
+				}
+				wantPhase := "confirmed"
+				if tc.wantID == "" {
+					wantPhase = "pending"
+				}
+				if receipt.Phase != wantPhase || receipt.RuntimeBindingID != tc.wantID || len(caller.tokenCalls) != 1 {
+					t.Fatalf("receipt=%+v calls=%d", receipt, len(caller.tokenCalls))
+				}
+			})
+		}
+	}
+}
+
 func TestCrossPlatformCoverageEmployeeServerUnbindRetriesExactID(t *testing.T) {
 	_, b := lifecycleFixture(t)
 	caller := &digitalEmployeeProtocolCaller{responses: map[string][]string{}}

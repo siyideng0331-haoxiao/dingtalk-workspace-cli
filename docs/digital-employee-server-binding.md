@@ -34,15 +34,15 @@
 
 固定使用 `deap-dev`，按平台 Schema 将业务字段直接放在 MCP `tools/call.arguments` 顶层，不增加 DTO 名称包装：
 
-| MCP | 顶层业务字段 | 成功 data |
+| MCP | 顶层业务字段 | success=true 时的返回值 |
 |---|---|---|
-| `bind_local_agent` | agentUuid、deviceId；可选 localAgentName、extensions | 非空绑定 ID 字符串 |
+| `bind_local_agent` | agentUuid、deviceId；可选 localAgentName、extensions | 顶层 runtimeBindingId 非空字符串；兼容旧版 data 字符串 |
 | `unbind_local_agent` | agentUuid、runtimeBindingId | true |
-| `rebind_local_agent` | agentUuid、runtimeBindingId、deviceId；可选 localAgentName、extensions | 新绑定 ID 字符串 |
+| `rebind_local_agent` | agentUuid、runtimeBindingId、deviceId；可选 localAgentName、extensions | 顶层 runtimeBindingId 新绑定 ID；兼容旧版 data 字符串 |
 
 `identity` 由网关根据主管登录态注入，CLI 不暴露或传入 userId/orgId/identity。请求使用明确主管 Profile 的进程内 Token，不使用刚换取的员工 Token，不改变当前 Profile。服务端负责权限、旧绑定版本和在途/待恢复任务校验。
 
-`--extensions` 按 Schema 传字符串，不自动展开为对象。回执只保存请求摘要和绑定结果，不保存扩展字符串或 Token；本模块不转储服务端原始响应或错误正文。响应必须有唯一 JSON 文本、明确 `success` 和正确类型的 `data`，不递归猜测 ID。
+`--extensions` 按 Schema 传字符串，不自动展开为对象。回执只保存请求摘要和绑定结果，不保存扩展字符串或 Token；本模块不转储服务端原始响应或错误正文。响应必须有唯一 JSON 文本和明确 `success`。bind/rebind 读取顶层 `runtimeBindingId`，也兼容旧版 `data` 字符串；两者同时存在时必须一致，否则结果未知。`runtimeId` 不能代替绑定 ID，`status=ACTIVE` 也不能代替有效 ID。unbind 要求 `data=true`，不递归猜测结果。
 
 ## 失败与恢复
 
